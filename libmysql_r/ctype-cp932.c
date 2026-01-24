@@ -1,0 +1,1 @@
+../libmysql/ctype-cp932.c

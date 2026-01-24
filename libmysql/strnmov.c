@@ -1,0 +1,1 @@
+../strings/strnmov.c

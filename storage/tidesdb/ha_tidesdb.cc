@@ -42,6 +42,7 @@
 
 #define MYSQL_SERVER 1
 #include "mysql_priv.h"
+
 #include "ha_tidesdb.h"
 #include <mysql/plugin.h>
 
@@ -586,11 +587,11 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg,
   
   if (tidesdb_enable_compression)
   {
-    cf_config.compression_algorithm = LZ4_COMPRESSION;
+    cf_config.compression_algo = LZ4_COMPRESSION;
   }
   else
   {
-    cf_config.compression_algorithm = NO_COMPRESSION;
+    cf_config.compression_algo = NO_COMPRESSION;
   }
   
   /* Create the column family */
@@ -1334,7 +1335,7 @@ int ha_tidesdb::delete_all_rows(void)
   
   if (tidesdb_enable_compression)
   {
-    cf_config.compression_algorithm = LZ4_COMPRESSION;
+    cf_config.compression_algo = LZ4_COMPRESSION;
   }
   
   ret = tidesdb_create_column_family(tidesdb_instance, cf_name, &cf_config);

@@ -43,7 +43,8 @@
 #pragma interface			/* gcc class implementation */
 #endif
 
-#include <tidesdb/tidesdb.h>
+/* Use db.h which has C++-compatible opaque struct definitions */
+#include <tidesdb/db.h>
 
 /** @brief
   TIDESDB_SHARE is a structure that will be shared among all open handlers

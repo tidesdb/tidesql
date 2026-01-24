@@ -1,0 +1,1 @@
+../strings/ctype-cp932.c

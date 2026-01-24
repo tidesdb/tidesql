@@ -1,0 +1,1 @@
+../strings/ctype-sjis.c

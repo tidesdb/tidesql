@@ -9,12 +9,10 @@
 /* Whether features provided by the user community should be included */
 #undef COMMUNITY_SERVER
 
-/* Define to one of `_getb67', `GETB67', `getb67' for Cray-2 and Cray-YMP
-   systems. This function is required for `alloca.c' support on those systems.
-   */
+/* Define to the type of the stack segment end symbol */
 #undef CRAY_STACKSEG_END
 
-/* Define to 1 if using `alloca.c'. */
+/* Define to 1 if using 'alloca.c'. */
 #undef C_ALLOCA
 
 /* Don't use libdbug */
@@ -48,6 +46,15 @@
 /* Do we have FIONREAD */
 #undef FIONREAD_IN_SYS_IOCTL
 
+/* Define to enable perftools support */
+#undef GOOGLE_PROFILE
+
+/* Define to enable perftools stacktrace stuff */
+#undef GOOGLE_STACKTRACE
+
+/* Define to enable perftools tcmalloc support */
+#undef GOOGLE_TCMALLOC
+
 /* READLINE: your system defines TIOCGWINSZ in sys/ioctl.h. */
 #undef GWINSZ_IN_SYS_IOCTL
 
@@ -60,11 +67,10 @@
 /* Define to 1 if you have the `alarm' function. */
 #undef HAVE_ALARM
 
-/* Define to 1 if you have `alloca', as a function or macro. */
+/* Define to 1 if you have 'alloca', as a function or macro. */
 #undef HAVE_ALLOCA
 
-/* Define to 1 if you have <alloca.h> and it should be used (not on Ultrix).
-   */
+/* Define to 1 if <alloca.h> works. */
 #undef HAVE_ALLOCA_H
 
 /* Define to 1 if you have the <arpa/inet.h> header file. */
@@ -622,6 +628,9 @@
 /* Define to 1 if you have the `poll' function. */
 #undef HAVE_POLL
 
+/* Define to 1 if you have the <poll.h> header file. */
+#undef HAVE_POLL_H
+
 /* Define to 1 if you have the `port_create' function. */
 #undef HAVE_PORT_CREATE
 
@@ -822,6 +831,9 @@
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
+/* Define to 1 if you have the <stdio.h> header file. */
+#undef HAVE_STDIO_H
+
 /* Define to 1 if you have the <stdlib.h> header file. */
 #undef HAVE_STDLIB_H
 
@@ -879,7 +891,7 @@
 /* Define to 1 if you have the `strtoull' function. */
 #undef HAVE_STRTOULL
 
-/* Define to 1 if `st_rdev' is member of `struct stat'. */
+/* Define to 1 if `st_rdev' is a member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_RDEV
 
 /* Define to 1 if your `struct stat' has `st_rdev'. Deprecated, use
@@ -945,6 +957,9 @@
 
 /* Define to 1 if you have the <sys/timeb.h> header file. */
 #undef HAVE_SYS_TIMEB_H
+
+/* Define to 1 if you have the <sys/time.h> header file. */
+#undef HAVE_SYS_TIME_H
 
 /* Define to 1 if you have the <sys/types.h> header file. */
 #undef HAVE_SYS_TYPES_H
@@ -1116,8 +1131,7 @@
 /* Define if you have -lwrap */
 #undef LIBWRAP
 
-/* Define to the sub-directory in which libtool stores uninstalled libraries.
-   */
+/* Define to the sub-directory where libtool stores uninstalled libraries. */
 #undef LT_OBJDIR
 
 /* Machine type name, eg sparc */
@@ -1173,6 +1187,9 @@
 
 /* Define to the one symbol short name of this package. */
 #undef PACKAGE_TARNAME
+
+/* Define to the home page for this package. */
+#undef PACKAGE_URL
 
 /* Define to the version of this package. */
 #undef PACKAGE_VERSION
@@ -1236,7 +1253,9 @@
 /* Define to 1 if the `S_IS*' macros in <sys/stat.h> do not work properly. */
 #undef STAT_MACROS_BROKEN
 
-/* Define to 1 if you have the ANSI C header files. */
+/* Define to 1 if all of the C90 standard headers exist (not just the ones
+   required in a freestanding environment). This macro is provided for
+   backward compatibility; new code need not use it. */
 #undef STDC_HEADERS
 
 /* d_ino member present in struct dirent */
@@ -1264,7 +1283,8 @@
 /* Define to 1 if time_t is unsigned */
 #undef TIME_T_UNSIGNED
 
-/* Define to 1 if you can safely include both <sys/time.h> and <time.h>. */
+/* Define to 1 if you can safely include both <sys/time.h> and <time.h>. This
+   macro is obsolete. */
 #undef TIME_WITH_SYS_TIME
 
 /* declaration of TIOCSTAT in sys/ioctl.h */
@@ -1334,6 +1354,9 @@
 
 /* Include MySQL Partitioning Support into mysqld */
 #undef WITH_PARTITION_STORAGE_ENGINE
+
+/* Include LSM-based storage engine with ACID transactions into mysqld */
+#undef WITH_TIDESDB_STORAGE_ENGINE
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */

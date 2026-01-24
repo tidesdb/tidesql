@@ -22,14 +22,21 @@
   @{
 */
 
+%parse-param { void *yythd }
+%lex-param { void *yythd }
+
+%code provides {
+  /* Bison 3.x generates yyerror with parse-param, provide wrapper */
+  #define MYSQLerror(ctx, msg) MYSQLerror_impl(msg)
+}
+
 %{
 /* thd is passed as an argument to yyparse(), and subsequently to yylex().
 ** The type will be void*, so it must be  cast to (THD*) when used.
 ** Use the YYTHD macro for this.
 */
-#define YYPARSE_PARAM yythd
-#define YYLEX_PARAM yythd
 #define YYTHD ((THD *)yythd)
+void MYSQLerror_impl(const char *s);
 #define YYLIP (& YYTHD->m_parser_state->m_lip)
 
 #define MYSQL_YACC
@@ -64,7 +71,7 @@ const LEX_STRING null_lex_str= {0,0};
     ulong val= *(F);                          \
     if (my_yyoverflow((B), (D), &val))        \
     {                                         \
-      yyerror((char*) (A));                   \
+      MYSQLerror_impl((char*) (A));           \
       return 2;                               \
     }                                         \
     else                                      \
@@ -159,7 +166,7 @@ void my_parse_error(const char *s)
   to abort from the parser.
 */
 
-void MYSQLerror(const char *s)
+void MYSQLerror_impl(const char *s)
 {
   THD *thd= current_thd;
 

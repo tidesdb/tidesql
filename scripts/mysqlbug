@@ -23,9 +23,9 @@ VERSION="5.1.63"
 COMPILATION_COMMENT="Source distribution"
 BUGmysql="mysql@lists.mysql.com"
 # This is set by configure
-COMP_CALL_INFO="CC='ccache /opt/studio12/SUNWspro/bin/cc'  CFLAGS='-g'  CXX='ccache /opt/studio12/SUNWspro/bin/CC'  CXXFLAGS=''  LDFLAGS=''  ASFLAGS=''"
-COMP_RUN_INFO="CC='ccache /opt/studio12/SUNWspro/bin/cc'  CFLAGS=' -g   -DHAVE_RWLOCK_T -DUNIV_SOLARIS -DUNIV_SOLARIS'  CXX='ccache /opt/studio12/SUNWspro/bin/CC'  CXXFLAGS='-O1    -DHAVE_RWLOCK_T'  LDFLAGS=' '  ASFLAGS=''"
-CONFIGURE_LINE="./configure  '--with-embedded-server' '--with-ndbcluster' 'CC=ccache /opt/studio12/SUNWspro/bin/cc' 'CXX=ccache /opt/studio12/SUNWspro/bin/CC'"
+COMP_CALL_INFO="CC='gcc'  CFLAGS='-Wno-narrowing'  CXX=''  CXXFLAGS='-I/usr/local/include -Wno-narrowing -fpermissive'  LDFLAGS='-L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy'  ASFLAGS=''"
+COMP_RUN_INFO="CC='gcc'  CFLAGS=' -Wno-narrowing   -DUNIV_LINUX -DUNIV_LINUX'  CXX='g++'  CXXFLAGS=' -I/usr/local/include -Wno-narrowing -fpermissive   -fno-exceptions -fno-rtti'  LDFLAGS='-L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy -rdynamic '  ASFLAGS=''"
+CONFIGURE_LINE="./configure  '--prefix=/usr/local/tidesql' '--with-plugins=tidesdb,myisam,heap,csv' 'CXXFLAGS=-I/usr/local/include -Wno-narrowing -fpermissive' 'CFLAGS=-Wno-narrowing' 'LDFLAGS=-L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy'"
 
 LIBC_INFO=""
 for pat in /lib/libc.* /lib/libc-* /usr/lib/libc.* /usr/lib/libc-*
@@ -253,8 +253,8 @@ ${ORGANIZATION- $ORGANIZATION_C}
 >Class:		$CLASS_C
 >Release:	mysql-${VERSION} ($COMPILATION_COMMENT)
 `test -n "$MYSQL_SERVER" && echo ">Server: $MYSQL_SERVER"`
->C compiler:    
->C++ compiler:  CC: Sun C++ 5.9 SunOS_i386 Patch 124864-26 2010/10/14
+>C compiler:    gcc (Ubuntu 12.3.0-1ubuntu1~23.04) 12.3.0
+>C++ compiler:  g++ (Ubuntu 12.3.0-1ubuntu1~23.04) 12.3.0
 >Environment:
 	$ENVIRONMENT_C
 `test -n "$SYSTEM"  && echo "System: $SYSTEM"`

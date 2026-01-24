@@ -87,21 +87,22 @@ make -j$(nproc)
 sudo make install
 ```
 
-### Option 2: CMake Build
+### Option 2: CMake Build (Windows Only)
 
-```bash
+**Note:** The CMake build system in MySQL 5.1 is designed for Windows. For Linux/macOS, use the autotools build above.
+
+```powershell
+# Windows with Visual Studio
 cd tidesql
 
-mkdir build && cd build
+# Run configure.js first to generate win/configure.data
+cscript win\configure.js
 
-cmake .. \
-    -DCMAKE_INSTALL_PREFIX=/usr/local/tidesql \
-    -DWITH_TIDESDB_STORAGE_ENGINE=1 \
-    -DCMAKE_CXX_FLAGS="-I/usr/local/include" \
-    -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy"
+mkdir build
+cd build
 
-make -j$(nproc)
-sudo make install
+cmake .. -G "Visual Studio 16 2019" -A x64
+cmake --build . --config Release
 ```
 
 ### Build Options

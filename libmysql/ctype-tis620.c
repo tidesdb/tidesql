@@ -1,0 +1,1 @@
+../strings/ctype-tis620.c

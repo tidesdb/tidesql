@@ -1949,6 +1949,8 @@ dnl Checks for header files.
 AC_CHECK_HEADERS(malloc.h sys/cdefs.h)
 
 dnl Checks for library functions.
+dnl Define CRAY_STACKSEG_END for modern autoconf compatibility
+AH_TEMPLATE([CRAY_STACKSEG_END], [Define to the type of the stack segment end symbol])
 AC_FUNC_ALLOCA
 AC_PROG_GCC_TRADITIONAL
 AC_TYPE_SIGNAL
