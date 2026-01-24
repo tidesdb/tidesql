@@ -28,7 +28,6 @@ build/
 
 # Libtool
 .libs/
-*.la
 libtool
 libtoolT
 
@@ -176,3 +175,51 @@ tags
 TAGS
 cscope.*
 compile_commands.json
+
+# Arcanist cache
+/arcanist/.phutil_module_cache
+
+# Jellyfish
+/.jfconfig
+
+# Internal Facebook build puts generate files in directories like:
+/_build-*
+
+# Internal Facebook Howtoeven static analyzer uses this directory.
+/.howtoeven/*
+
+# Files used in Facebook's internal testing system
+/.arcrc
+/tools
+
+# Allow
+!storage/innobase/xtrabackup/*
+
+# Clangd version < 11 index
+/.clangd
+# Clangd version >= 11 index
+/.cache/clangd
+
+# LLVM coverage files
+*.profraw
+
+
+TAGS_sorted_by_file
+
+# googletest files
+source_downloads
+
+# Vim swap files
+[._]*.s[a-v][a-z]
+[._]*.sw[a-p]
+[._]s[a-rt-v][a-z]
+[._]ss[a-gi-z]
+[._]sw[a-p]
+
+datatool/
+datatools/
+__pycache__/
+heatwaveml.*
+automl.egg-info/
+_userconf.sh
+scalability_jobs_*
