@@ -1150,10 +1150,12 @@ int ha_tidesdb::rnd_init(bool scan)
     scan_iter = NULL;
   }
   
-  /* Begin a transaction for the scan */
+  /* Begin a transaction for the scan with configured isolation level */
   if (!current_txn)
   {
-    ret = tidesdb_txn_begin(tidesdb_instance, &current_txn);
+    ret = tidesdb_txn_begin_with_isolation(tidesdb_instance,
+                                            (int)tidesdb_default_isolation,
+                                            &current_txn);
     if (ret != TDB_SUCCESS)
     {
       sql_print_error("TidesDB: Failed to begin transaction for scan: %d", ret);
@@ -1593,6 +1595,32 @@ ha_rows ha_tidesdb::records_in_range(uint inx, key_range *min_key,
 
 /**
   @brief
+  Map MySQL isolation level to TidesDB isolation level.
+  
+  MySQL: ISO_READ_UNCOMMITTED=0, ISO_READ_COMMITTED=1, 
+         ISO_REPEATABLE_READ=2, ISO_SERIALIZABLE=3
+  TidesDB: READ_UNCOMMITTED=0, READ_COMMITTED=1, REPEATABLE_READ=2,
+           SNAPSHOT=3, SERIALIZABLE=4
+*/
+static int map_isolation_level(enum_tx_isolation mysql_iso)
+{
+  switch (mysql_iso)
+  {
+    case ISO_READ_UNCOMMITTED:
+      return 0;  /* TDB_ISOLATION_READ_UNCOMMITTED */
+    case ISO_READ_COMMITTED:
+      return 1;  /* TDB_ISOLATION_READ_COMMITTED */
+    case ISO_REPEATABLE_READ:
+      return 2;  /* TDB_ISOLATION_REPEATABLE_READ */
+    case ISO_SERIALIZABLE:
+      return 4;  /* TDB_ISOLATION_SERIALIZABLE */
+    default:
+      return 1;  /* Default to READ_COMMITTED */
+  }
+}
+
+/**
+  @brief
   Handle external locking (transaction boundaries).
 */
 int ha_tidesdb::external_lock(THD *thd, int lock_type)
@@ -1606,7 +1634,13 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
     /* Starting a new statement/transaction */
     if (!current_txn)
     {
-      ret = tidesdb_txn_begin(tidesdb_instance, &current_txn);
+      /* Get isolation level from THD (SET TRANSACTION ISOLATION LEVEL) */
+      int isolation = map_isolation_level(
+        (enum_tx_isolation)thd->variables.tx_isolation);
+      
+      ret = tidesdb_txn_begin_with_isolation(tidesdb_instance, 
+                                              isolation,
+                                              &current_txn);
       if (ret != TDB_SUCCESS)
       {
         sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
@@ -1708,6 +1742,34 @@ int ha_tidesdb::analyze(THD* thd, HA_CHECK_OPT* check_opt)
   }
   
   DBUG_RETURN(HA_ADMIN_OK);
+}
+
+/**
+  @brief
+  Initialize full-text search.
+  
+  TODO: Implement inverted index for full-text search support.
+  Currently returns error as full-text is not yet implemented.
+*/
+FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
+{
+  DBUG_ENTER("ha_tidesdb::ft_init_ext");
+  
+  /* Full-text search not yet implemented */
+  my_error(ER_NOT_SUPPORTED_YET, MYF(0), "FULLTEXT indexes with TidesDB");
+  DBUG_RETURN(NULL);
+}
+
+/**
+  @brief
+  Read next full-text search result.
+  
+  TODO: Implement when inverted index is available.
+*/
+int ha_tidesdb::ft_read(uchar *buf)
+{
+  DBUG_ENTER("ha_tidesdb::ft_read");
+  DBUG_RETURN(HA_ERR_END_OF_FILE);
 }
 
 /*

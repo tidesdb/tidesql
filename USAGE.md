@@ -291,9 +291,20 @@ CREATE TABLE orders (
 -- For best performance, design tables with good primary keys
 ```
 
-## Transactions
+## Transactions and ACID
 
-TidesDB supports ACID transactions:
+TidesDB provides full ACID transaction support with 5 isolation levels.
+
+### ACID Properties
+
+| Property | TidesDB Implementation |
+|----------|------------------------|
+| **Atomicity** | All operations in a transaction succeed or fail together |
+| **Consistency** | Data integrity maintained through transactions |
+| **Isolation** | 5 isolation levels from READ UNCOMMITTED to SERIALIZABLE |
+| **Durability** | Configurable sync modes (none, interval, full) |
+
+### Basic Transactions
 
 ```sql
 -- Start transaction
@@ -312,16 +323,46 @@ ROLLBACK;
 
 ### Isolation Levels
 
-TidesDB supports multiple isolation levels:
+TidesDB supports 5 isolation levels via the `tidesdb_default_isolation` system variable:
+
+| Level | Description | Use Case |
+|-------|-------------|----------|
+| `read_uncommitted` | Sees uncommitted changes | Maximum concurrency, minimal consistency |
+| `read_committed` | Sees only committed data (default) | Balanced for OLTP workloads |
+| `repeatable_read` | Consistent snapshot, phantom reads possible | Strong point read consistency |
+| `snapshot` | Write-write conflict detection | Prevents lost updates |
+| `serializable` | Full SSI (Serializable Snapshot Isolation) | Strongest guarantees, higher abort rates |
 
 ```sql
--- Set isolation level for session
+-- Standard MySQL syntax (recommended)
+SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
 SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
 
--- Check current level
+-- Check current isolation level
 SELECT @@tx_isolation;
+
+-- Or use TidesDB-specific variable for SNAPSHOT isolation
+SET GLOBAL tidesdb_default_isolation = 'snapshot';
+```
+
+**Note:** TidesDB's SNAPSHOT isolation (write-write conflict detection) is only available via the `tidesdb_default_isolation` variable since MySQL doesn't have a SNAPSHOT level.
+
+### Durability (Sync Modes)
+
+Control the durability vs performance tradeoff:
+
+```sql
+-- Maximum performance, least durable (OS handles flushing)
+SET GLOBAL tidesdb_sync_mode = 'none';
+
+-- Balanced: periodic background syncing (default)
+SET GLOBAL tidesdb_sync_mode = 'interval';
+SET GLOBAL tidesdb_sync_interval_us = 128000;  -- 128ms
+
+-- Maximum durability: fsync on every write
+SET GLOBAL tidesdb_sync_mode = 'full';
 ```
 
 ## Table Maintenance

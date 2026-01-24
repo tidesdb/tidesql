@@ -43,6 +43,8 @@
 #pragma interface			/* gcc class implementation */
 #endif
 
+#include <ft_global.h>
+
 /* Use db.h which has C++-compatible opaque struct definitions */
 #ifdef __cplusplus
 extern "C" {
@@ -201,6 +203,11 @@ public:
   int index_prev(uchar *buf);
   int index_first(uchar *buf);
   int index_last(uchar *buf);
+  
+  /* Full-text search (TODO: implement inverted index) */
+  int ft_init() { return ft_handler ? 0 : HA_ERR_WRONG_COMMAND; }
+  FT_INFO *ft_init_ext(uint flags, uint inx, String *key);
+  int ft_read(uchar *buf);
   
   /* Statistics and info */
   int info(uint flag);
