@@ -1,37 +1,157 @@
 # TideSQL Usage Guide
 
-TideSQL is MySQL with TidesDB as the default storage engine. This guide covers basic usage and TidesDB-specific features.
+TideSQL is MySQL 5.1 with TidesDB as an available storage engine. This guide covers setup, usage, and TidesDB-specific features.
+
+## Quick Start
+
+### 1. Initialize the Data Directory
+
+Before first use, initialize the MySQL data directory:
+
+```bash
+cd /path/to/tidesql
+
+# Create data directory
+mkdir -p /tmp/tidesql-test/data
+
+# Initialize system tables
+perl scripts/mysql_install_db --no-defaults --srcdir=$(pwd) --datadir=/tmp/tidesql-test/data --force
+```
+
+### 2. Start the Server
+
+```bash
+# Start mysqld with TidesDB plugin directory
+LD_LIBRARY_PATH=/usr/local/lib ./sql/mysqld --no-defaults \
+    --datadir=/tmp/tidesql-test/data \
+    --basedir=$(pwd) \
+    --language=$(pwd)/sql/share/english \
+    --socket=/tmp/tidesql-test.sock \
+    --port=3307 \
+    --plugin-dir=$(pwd)/storage/tidesdb/.libs &
+```
+
+### 3. Install the TidesDB Plugin
+
+On first run, install the TidesDB storage engine plugin:
+
+```bash
+./client/mysql --socket=/tmp/tidesql-test.sock -u root \
+    -e "INSTALL PLUGIN tidesdb SONAME 'ha_tidesdb.so';"
+```
+
+### 4. Verify TidesDB is Available
+
+```bash
+./client/mysql --socket=/tmp/tidesql-test.sock -u root -e "SHOW ENGINES;"
+```
+
+Expected output:
+```
+Engine     Support  Comment
+TidesDB    YES      TidesDB LSM-based storage engine with ACID transactions
+MyISAM     DEFAULT  Default engine as of MySQL 3.23 with great performance
+MEMORY     YES      Hash based, stored in memory
+CSV        YES      CSV storage engine
+```
 
 ## Connecting to TideSQL
 
 ```bash
 # Connect via socket
-mysql -S /tmp/tidesql.sock -u root -p
+./client/mysql --socket=/tmp/tidesql-test.sock -u root
 
 # Connect via TCP
-mysql -h 127.0.0.1 -P 3307 -u root -p
+./client/mysql -h 127.0.0.1 -P 3307 -u root
 ```
 
-## Creating Tables
-
-Tables are created with TidesDB by default:
+## Creating Tables with TidesDB
 
 ```sql
--- TidesDB is used automatically (default engine)
+-- Explicitly specify TidesDB engine
 CREATE TABLE users (
-    id INT PRIMARY KEY AUTO_INCREMENT,
+    id INT PRIMARY KEY,
     username VARCHAR(50) NOT NULL,
-    email VARCHAR(100) NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+    email VARCHAR(100) NOT NULL
+) ENGINE=TidesDB;
 
--- Explicitly specify TidesDB
+-- Create another table
 CREATE TABLE products (
     id INT PRIMARY KEY,
     name VARCHAR(100),
     price DECIMAL(10,2),
     stock INT
 ) ENGINE=TidesDB;
+```
+
+### Using TidesDB as Default Engine
+
+To make TidesDB the default for new tables, start the server with:
+
+```bash
+./sql/mysqld --no-defaults \
+    --default-storage-engine=TidesDB \
+    --plugin-load=tidesdb=ha_tidesdb.so \
+    ... other options ...
+```
+
+## TTL (Time-to-Live) Support
+
+TidesDB supports automatic row expiration using a special `_ttl` column.
+
+### Creating a Table with TTL
+
+```sql
+-- Add a _ttl column (INT type) to enable per-row TTL
+CREATE TABLE sessions (
+  id INT PRIMARY KEY,
+  user_id INT,
+  session_data TEXT,
+  _ttl INT DEFAULT 0  -- TTL in seconds (0 = no expiration)
+) ENGINE=TidesDB;
+```
+
+### Inserting Rows with TTL
+
+```sql
+-- Row expires in 60 seconds
+INSERT INTO sessions (id, user_id, session_data, _ttl) 
+VALUES (1, 100, 'session data', 60);
+
+-- Row expires in 1 hour (3600 seconds)
+INSERT INTO sessions (id, user_id, session_data, _ttl) 
+VALUES (2, 101, 'session data', 3600);
+
+-- Row never expires (TTL = 0 or NULL)
+INSERT INTO sessions (id, user_id, session_data, _ttl) 
+VALUES (3, 102, 'permanent data', 0);
+```
+
+### TTL Column Rules
+
+| Value | Behavior |
+|-------|----------|
+| `> 0` | Row expires after N seconds from insert/update time |
+| `0` | Row never expires |
+| `NULL` | Row never expires |
+
+**Column naming:** Use `_ttl` or `_tidesdb_ttl`
+
+**Column type:** Must be an integer type (INT, BIGINT, SMALLINT, TINYINT)
+
+### Updating TTL
+
+```sql
+-- Extend session TTL by updating the _ttl column
+UPDATE sessions SET _ttl = 7200 WHERE id = 1;  -- Now expires in 2 hours
+```
+
+### Global Default TTL
+
+For tables without a `_ttl` column, you can set a global default:
+
+```sql
+SET GLOBAL tidesdb_default_ttl = 3600;  -- 1 hour default for all new rows
 ```
 
 ## Basic CRUD Operations
@@ -103,36 +223,54 @@ DELETE FROM products WHERE stock = 0;
 TRUNCATE TABLE users;
 ```
 
-## TidesDB Configuration
+## Server Management
 
-### View TidesDB Settings
+### Starting the Server
 
-```sql
-SHOW VARIABLES LIKE 'tidesdb%';
+```bash
+# Development/testing (from source directory)
+LD_LIBRARY_PATH=/usr/local/lib ./sql/mysqld --no-defaults \
+    --datadir=/tmp/tidesql-test/data \
+    --basedir=$(pwd) \
+    --language=$(pwd)/sql/share/english \
+    --socket=/tmp/tidesql-test.sock \
+    --port=3307 \
+    --plugin-dir=$(pwd)/storage/tidesdb/.libs &
+
+# Production (after make install)
+/usr/local/tidesql/bin/mysqld_safe --defaults-file=/usr/local/tidesql/my.cnf &
 ```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `tidesdb_data_dir` | `$datadir/tidesdb` | TidesDB data directory |
-| `tidesdb_flush_threads` | 2 | Number of flush threads |
-| `tidesdb_compaction_threads` | 2 | Number of compaction threads |
-| `tidesdb_block_cache_size` | 64MB | Block cache size |
-| `tidesdb_write_buffer_size` | 64MB | Memtable size before flush |
-| `tidesdb_enable_compression` | ON | Enable LZ4 compression |
-| `tidesdb_enable_bloom_filter` | ON | Enable bloom filters |
+### Stopping the Server
 
-### Configuration in my.cnf
+```bash
+# Graceful shutdown
+./client/mysqladmin --socket=/tmp/tidesql-test.sock -u root shutdown
+
+# Or
+killall mysqld
+```
+
+### Sample my.cnf Configuration
 
 ```ini
 [mysqld]
-# TidesDB settings
-tidesdb_data_dir = /var/lib/tidesql/tidesdb
-tidesdb_flush_threads = 4
-tidesdb_compaction_threads = 4
-tidesdb_block_cache_size = 134217728    # 128MB
-tidesdb_write_buffer_size = 134217728   # 128MB
-tidesdb_enable_compression = ON
-tidesdb_enable_bloom_filter = ON
+basedir = /usr/local/tidesql
+datadir = /usr/local/tidesql/data
+socket = /tmp/tidesql.sock
+port = 3307
+language = /usr/local/tidesql/share/english
+plugin-dir = /usr/local/tidesql/lib/plugin
+
+# Load TidesDB plugin at startup
+plugin-load = tidesdb=ha_tidesdb.so
+
+# Optional: Make TidesDB the default engine
+# default-storage-engine = TidesDB
+
+[client]
+socket = /tmp/tidesql.sock
+port = 3307
 ```
 
 ## Working with Indexes
@@ -345,9 +483,43 @@ cp -r /usr/local/tidesql/data /backup/tidesql-$(date +%Y%m%d)
 
 ## Troubleshooting
 
-### Table Not Found
+### TidesDB Plugin Won't Load
 
-Ensure the column family exists in TidesDB:
+**Error:** `undefined symbol: tidesdb_*`
+
+The plugin needs libtidesdb. Ensure LD_LIBRARY_PATH includes `/usr/local/lib`:
+
+```bash
+LD_LIBRARY_PATH=/usr/local/lib ./sql/mysqld ...
+```
+
+Or add to system library path:
+
+```bash
+echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/tidesdb.conf
+sudo ldconfig
+```
+
+### Error Message File Warning
+
+If you see:
+```
+[ERROR] Error message file had only 641 error messages, but it should contain at least 645
+```
+
+Regenerate the error message files:
+
+```bash
+cd extra
+./comp_err --charset=../sql/share/charsets \
+    --in_file=../sql/share/errmsg.txt \
+    --out_dir=../sql/share/ \
+    --header_file=../include/mysqld_error.h \
+    --name_file=../include/mysqld_ername.h \
+    --state_file=../include/sql_state.h
+```
+
+### Table Not Found
 
 ```sql
 -- Check if table exists
@@ -358,12 +530,6 @@ DROP TABLE IF EXISTS tablename;
 CREATE TABLE tablename (...) ENGINE=TidesDB;
 ```
 
-### Slow Queries
-
-1. Check if bloom filters are enabled
-2. Ensure adequate block cache size
-3. Consider table design and primary key choice
-
 ### Connection Issues
 
 ```bash
@@ -371,8 +537,12 @@ CREATE TABLE tablename (...) ENGINE=TidesDB;
 ps aux | grep mysqld
 
 # Check socket file
-ls -la /tmp/tidesql.sock
+ls -la /tmp/tidesql-test.sock
 
-# Check error log
-tail -f /usr/local/tidesql/data/*.err
+# View server output
+tail -f /tmp/tidesql-test/mysqld.log
 ```
+
+### Server Aborts During Bootstrap
+
+Ensure you're using MyISAM as the default engine during bootstrap (handled automatically by `mysql_install_db`). TidesDB is a plugin that loads after the server starts.

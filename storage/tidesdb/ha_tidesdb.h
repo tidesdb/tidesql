@@ -69,6 +69,9 @@ typedef struct st_tidesdb_share {
   /* Primary key info */
   bool has_primary_key;
   uint pk_parts;  /* Number of key parts in primary key */
+  
+  /* TTL column index (-1 if no TTL column) */
+  int ttl_field_index;
 } TIDESDB_SHARE;
 
 /** @brief
@@ -204,6 +207,10 @@ public:
   int extra(enum ha_extra_function operation);
   int delete_all_rows(void);
   ha_rows records_in_range(uint inx, key_range *min_key, key_range *max_key);
+  
+  /* Table maintenance */
+  int optimize(THD* thd, HA_CHECK_OPT* check_opt);
+  int analyze(THD* thd, HA_CHECK_OPT* check_opt);
   
   /* Locking */
   int external_lock(THD *thd, int lock_type);

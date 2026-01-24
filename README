@@ -1,5 +1,6 @@
-TideSQL is a fork of MySQL Server 5.1 with
-TidesDB as the default storage engine.
+TideSQL is a fork of MySQL Server 5.1 with TidesDB as the default
+storage engine.  For building see BUILDING.md for usage
+instructions see USAGE.md
 
 License information can be found in the COPYING file.
 

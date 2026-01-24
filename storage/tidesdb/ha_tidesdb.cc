@@ -54,6 +54,9 @@ static int tidesdb_init_func(void *p);
 static int tidesdb_done_func(void *p);
 static int tidesdb_commit(handlerton *hton, THD *thd, bool all, bool async);
 static int tidesdb_rollback(handlerton *hton, THD *thd, bool all);
+static bool tidesdb_show_status(handlerton *hton, THD *thd, 
+                                stat_print_fn *stat_print, 
+                                enum ha_stat_type stat_type);
 
 /* Global TidesDB instance - one database for all tables */
 static tidesdb_t *tidesdb_instance = NULL;
@@ -75,6 +78,73 @@ static ulonglong tidesdb_block_cache_size = 64 * 1024 * 1024;  /* 64MB */
 static ulonglong tidesdb_write_buffer_size = 64 * 1024 * 1024; /* 64MB */
 static my_bool tidesdb_enable_compression = TRUE;
 static my_bool tidesdb_enable_bloom_filter = TRUE;
+
+/* Compression algorithm: 0=none, 1=snappy, 2=lz4, 3=zstd, 4=lz4_fast */
+static ulong tidesdb_compression_algo = 2;  /* LZ4 default */
+static const char *tidesdb_compression_names[] = {
+  "none", "snappy", "lz4", "zstd", "lz4_fast", NullS
+};
+static TYPELIB tidesdb_compression_typelib = {
+  array_elements(tidesdb_compression_names) - 1,
+  "tidesdb_compression_typelib",
+  tidesdb_compression_names,
+  NULL
+};
+
+/* Sync mode: 0=none, 1=interval, 2=full */
+static ulong tidesdb_sync_mode = 1;  /* interval default */
+static const char *tidesdb_sync_mode_names[] = {
+  "none", "interval", "full", NullS
+};
+static TYPELIB tidesdb_sync_mode_typelib = {
+  array_elements(tidesdb_sync_mode_names) - 1,
+  "tidesdb_sync_mode_typelib",
+  tidesdb_sync_mode_names,
+  NULL
+};
+
+/* Sync interval in microseconds (for interval mode) */
+static ulonglong tidesdb_sync_interval_us = 128000;  /* 128ms default */
+
+/* Bloom filter false positive rate (0.0 to 1.0) */
+static double tidesdb_bloom_fpr = 0.01;  /* 1% default */
+
+/* Default isolation level: 0=read_uncommitted, 1=read_committed, 2=repeatable_read, 3=snapshot, 4=serializable */
+static ulong tidesdb_default_isolation = 1;  /* read_committed default */
+static const char *tidesdb_isolation_names[] = {
+  "read_uncommitted", "read_committed", "repeatable_read", "snapshot", "serializable", NullS
+};
+static TYPELIB tidesdb_isolation_typelib = {
+  array_elements(tidesdb_isolation_names) - 1,
+  "tidesdb_isolation_typelib",
+  tidesdb_isolation_names,
+  NULL
+};
+
+/* Level size ratio for LSM compaction */
+static ulong tidesdb_level_size_ratio = 10;
+
+/* Skip list configuration */
+static ulong tidesdb_skip_list_max_level = 12;
+
+/* Block index configuration */
+static my_bool tidesdb_enable_block_indexes = TRUE;
+static ulong tidesdb_index_sample_ratio = 1;
+
+/* Default TTL in seconds (0 = no expiration) */
+static ulonglong tidesdb_default_ttl = 0;
+
+/* Log level: 0=debug, 1=info, 2=warn, 3=error, 4=fatal, 5=none */
+static ulong tidesdb_log_level = 1;  /* info default */
+static const char *tidesdb_log_level_names[] = {
+  "debug", "info", "warn", "error", "fatal", "none", NullS
+};
+static TYPELIB tidesdb_log_level_typelib = {
+  array_elements(tidesdb_log_level_names) - 1,
+  "tidesdb_log_level_typelib",
+  tidesdb_log_level_names,
+  NULL
+};
 
 /**
   @brief
@@ -230,6 +300,7 @@ static int tidesdb_init_func(void *p)
   tidesdb_hton->flags = HTON_CAN_RECREATE | HTON_CLOSE_CURSORS_AT_COMMIT;
   tidesdb_hton->commit = tidesdb_commit;
   tidesdb_hton->rollback = tidesdb_rollback;
+  tidesdb_hton->show_status = tidesdb_show_status;
   
   /* Initialize TidesDB instance */
   char db_path[FN_REFLEN];
@@ -247,7 +318,7 @@ static int tidesdb_init_func(void *p)
     .db_path = db_path,
     .num_flush_threads = (int)tidesdb_flush_threads,
     .num_compaction_threads = (int)tidesdb_compaction_threads,
-    .log_level = TDB_LOG_INFO,
+    .log_level = (int)tidesdb_log_level,
     .block_cache_size = tidesdb_block_cache_size,
     .max_open_sstables = 256
   };
@@ -309,6 +380,85 @@ static int tidesdb_rollback(handlerton *hton, THD *thd, bool all)
   DBUG_ENTER("tidesdb_rollback");
   /* Transaction rollback is handled per-statement in external_lock */
   DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Show TidesDB engine status.
+  
+  Called by SHOW ENGINE TIDESDB STATUS.
+*/
+static bool tidesdb_show_status(handlerton *hton, THD *thd,
+                                stat_print_fn *stat_print,
+                                enum ha_stat_type stat_type)
+{
+  DBUG_ENTER("tidesdb_show_status");
+  
+  if (stat_type != HA_ENGINE_STATUS)
+  {
+    DBUG_RETURN(FALSE);
+  }
+  
+  char buf[4096];
+  int buf_len = 0;
+  
+  /* Get block cache statistics */
+  tidesdb_cache_stats_t cache_stats;
+  if (tidesdb_get_cache_stats(tidesdb_instance, &cache_stats) == TDB_SUCCESS)
+  {
+    buf_len += snprintf(buf + buf_len, sizeof(buf) - buf_len,
+      "=====================================\n"
+      "TidesDB Engine Status\n"
+      "=====================================\n\n"
+      "Block Cache:\n"
+      "  Enabled: %s\n"
+      "  Total entries: %zu\n"
+      "  Total bytes: %.2f MB\n"
+      "  Hits: %lu\n"
+      "  Misses: %lu\n"
+      "  Hit rate: %.1f%%\n"
+      "  Partitions: %zu\n\n",
+      cache_stats.enabled ? "yes" : "no",
+      cache_stats.total_entries,
+      cache_stats.total_bytes / (1024.0 * 1024.0),
+      cache_stats.hits,
+      cache_stats.misses,
+      cache_stats.hit_rate * 100.0,
+      cache_stats.num_partitions);
+  }
+  
+  /* Configuration summary */
+  buf_len += snprintf(buf + buf_len, sizeof(buf) - buf_len,
+    "Configuration:\n"
+    "  Flush threads: %lu\n"
+    "  Compaction threads: %lu\n"
+    "  Block cache size: %.2f MB\n"
+    "  Write buffer size: %.2f MB\n"
+    "  Compression: %s (%s)\n"
+    "  Bloom filter: %s (FPR: %.2f%%)\n"
+    "  Sync mode: %s\n"
+    "  Default isolation: %s\n"
+    "  Default TTL: %llu seconds\n\n",
+    tidesdb_flush_threads,
+    tidesdb_compaction_threads,
+    tidesdb_block_cache_size / (1024.0 * 1024.0),
+    tidesdb_write_buffer_size / (1024.0 * 1024.0),
+    tidesdb_enable_compression ? "enabled" : "disabled",
+    tidesdb_compression_names[tidesdb_compression_algo],
+    tidesdb_enable_bloom_filter ? "enabled" : "disabled",
+    tidesdb_bloom_fpr * 100.0,
+    tidesdb_sync_mode_names[tidesdb_sync_mode],
+    tidesdb_isolation_names[tidesdb_default_isolation],
+    (unsigned long long)tidesdb_default_ttl);
+  
+  /* List column families (open tables) */
+  buf_len += snprintf(buf + buf_len, sizeof(buf) - buf_len,
+    "Open Tables: %lu\n",
+    (unsigned long)tidesdb_open_tables.records);
+  
+  stat_print(thd, "TidesDB", 7, "", 0, buf, buf_len);
+  
+  DBUG_RETURN(FALSE);
 }
 
 /**
@@ -546,6 +696,30 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
   {
     ref_length = 8;  /* Hidden 8-byte PK */
   }
+  
+  /* Check for TTL column (_tidesdb_ttl or _ttl) */
+  share->ttl_field_index = -1;
+  for (uint i = 0; i < table->s->fields; i++)
+  {
+    Field *field = table->field[i];
+    const char *field_name = field->field_name;
+    if (strcasecmp(field_name, "_tidesdb_ttl") == 0 ||
+        strcasecmp(field_name, "_ttl") == 0)
+    {
+      /* Found TTL column - must be an integer type */
+      if (field->type() == MYSQL_TYPE_LONG ||
+          field->type() == MYSQL_TYPE_LONGLONG ||
+          field->type() == MYSQL_TYPE_INT24 ||
+          field->type() == MYSQL_TYPE_SHORT ||
+          field->type() == MYSQL_TYPE_TINY)
+      {
+        share->ttl_field_index = i;
+        sql_print_information("TidesDB: Table '%s' has TTL column at index %d", 
+                              name, i);
+      }
+      break;
+    }
+  }
 
   DBUG_RETURN(0);
 }
@@ -583,11 +757,19 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg,
   tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
   cf_config.write_buffer_size = tidesdb_write_buffer_size;
   cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-  cf_config.bloom_fpr = 0.01;  /* 1% false positive rate */
+  cf_config.bloom_fpr = tidesdb_bloom_fpr;
+  cf_config.level_size_ratio = tidesdb_level_size_ratio;
+  cf_config.skip_list_max_level = tidesdb_skip_list_max_level;
+  cf_config.enable_block_indexes = tidesdb_enable_block_indexes ? 1 : 0;
+  cf_config.index_sample_ratio = tidesdb_index_sample_ratio;
+  cf_config.sync_mode = tidesdb_sync_mode;
+  cf_config.sync_interval_us = tidesdb_sync_interval_us;
+  cf_config.default_isolation_level = tidesdb_default_isolation;
   
+  /* Set compression algorithm */
   if (tidesdb_enable_compression)
   {
-    cf_config.compression_algo = LZ4_COMPRESSION;
+    cf_config.compression_algo = tidesdb_compression_algo;
   }
   else
   {
@@ -689,8 +871,34 @@ int ha_tidesdb::write_row(uchar *buf)
     own_txn = true;
   }
   
+  /* Calculate TTL from _ttl column or use default */
+  time_t ttl = -1;
+  if (share->ttl_field_index >= 0)
+  {
+    /* Extract TTL from the designated column */
+    Field *ttl_field = table->field[share->ttl_field_index];
+    if (!ttl_field->is_null())
+    {
+      longlong ttl_seconds = ttl_field->val_int();
+      if (ttl_seconds > 0)
+      {
+        ttl = time(NULL) + ttl_seconds;
+      }
+      else if (ttl_seconds == 0)
+      {
+        /* TTL of 0 means no expiration */
+        ttl = -1;
+      }
+    }
+  }
+  else if (tidesdb_default_ttl > 0)
+  {
+    /* Fall back to global default TTL */
+    ttl = time(NULL) + tidesdb_default_ttl;
+  }
+  
   /* Insert the row */
-  ret = tidesdb_txn_put(txn, share->cf, key, key_len, value, value_len, -1);
+  ret = tidesdb_txn_put(txn, share->cf, key, key_len, value, value_len, ttl);
   if (ret != TDB_SUCCESS)
   {
     if (own_txn)
@@ -807,8 +1015,27 @@ int ha_tidesdb::update_row(const uchar *old_data, uchar *new_data)
     }
   }
   
+  /* Calculate TTL from _ttl column or use default */
+  time_t ttl = -1;
+  if (share->ttl_field_index >= 0)
+  {
+    Field *ttl_field = table->field[share->ttl_field_index];
+    if (!ttl_field->is_null())
+    {
+      longlong ttl_seconds = ttl_field->val_int();
+      if (ttl_seconds > 0)
+      {
+        ttl = time(NULL) + ttl_seconds;
+      }
+    }
+  }
+  else if (tidesdb_default_ttl > 0)
+  {
+    ttl = time(NULL) + tidesdb_default_ttl;
+  }
+  
   /* Insert/update the new row */
-  ret = tidesdb_txn_put(txn, share->cf, new_key, new_key_len, value, value_len, -1);
+  ret = tidesdb_txn_put(txn, share->cf, new_key, new_key_len, value, value_len, ttl);
   if (ret != TDB_SUCCESS)
   {
     if (own_txn)
@@ -1422,6 +1649,67 @@ THR_LOCK_DATA **ha_tidesdb::store_lock(THD *thd,
   return to;
 }
 
+/**
+  @brief
+  Optimize table - triggers manual compaction in TidesDB.
+  
+  This is called by OPTIMIZE TABLE statement.
+*/
+int ha_tidesdb::optimize(THD* thd, HA_CHECK_OPT* check_opt)
+{
+  DBUG_ENTER("ha_tidesdb::optimize");
+  
+  if (!share || !share->cf)
+  {
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  sql_print_information("TidesDB: Triggering compaction for table");
+  
+  int ret = tidesdb_compact(share->cf);
+  if (ret != TDB_SUCCESS)
+  {
+    sql_print_error("TidesDB: Compaction failed: %d", ret);
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  DBUG_RETURN(HA_ADMIN_OK);
+}
+
+/**
+  @brief
+  Analyze table - updates statistics.
+  
+  This is called by ANALYZE TABLE statement.
+*/
+int ha_tidesdb::analyze(THD* thd, HA_CHECK_OPT* check_opt)
+{
+  DBUG_ENTER("ha_tidesdb::analyze");
+  
+  if (!share || !share->cf)
+  {
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  /* Get statistics from TidesDB */
+  tidesdb_stats_t *tdb_stats = NULL;
+  int ret = tidesdb_get_stats(share->cf, &tdb_stats);
+  if (ret == TDB_SUCCESS && tdb_stats)
+  {
+    /* Update handler statistics */
+    stats.data_file_length = 0;
+    for (int i = 0; i < tdb_stats->num_levels; i++)
+    {
+      stats.data_file_length += tdb_stats->level_sizes[i];
+    }
+    stats.mean_rec_length = table->s->reclength;
+    
+    tidesdb_free_stats(tdb_stats);
+  }
+  
+  DBUG_RETURN(HA_ADMIN_OK);
+}
+
 /*
   Plugin declaration
 */
@@ -1504,6 +1792,127 @@ static MYSQL_SYSVAR_BOOL(
   NULL,
   TRUE);
 
+static MYSQL_SYSVAR_ENUM(
+  compression_algo,
+  tidesdb_compression_algo,
+  PLUGIN_VAR_RQCMDARG,
+  "Compression algorithm: none, snappy, lz4, zstd, lz4_fast",
+  NULL,
+  NULL,
+  2,  /* lz4 default */
+  &tidesdb_compression_typelib);
+
+static MYSQL_SYSVAR_ENUM(
+  sync_mode,
+  tidesdb_sync_mode,
+  PLUGIN_VAR_RQCMDARG,
+  "Sync mode: none (fastest), interval (balanced), full (safest)",
+  NULL,
+  NULL,
+  1,  /* interval default */
+  &tidesdb_sync_mode_typelib);
+
+static MYSQL_SYSVAR_ULONGLONG(
+  sync_interval_us,
+  tidesdb_sync_interval_us,
+  PLUGIN_VAR_RQCMDARG,
+  "Sync interval in microseconds (for interval sync mode)",
+  NULL,
+  NULL,
+  128000,  /* 128ms default */
+  1000,
+  10000000,
+  0);
+
+static MYSQL_SYSVAR_DOUBLE(
+  bloom_fpr,
+  tidesdb_bloom_fpr,
+  PLUGIN_VAR_RQCMDARG,
+  "Bloom filter false positive rate (0.0 to 1.0)",
+  NULL,
+  NULL,
+  0.01,  /* 1% default */
+  0.0001,
+  0.5,
+  0);
+
+static MYSQL_SYSVAR_ENUM(
+  default_isolation,
+  tidesdb_default_isolation,
+  PLUGIN_VAR_RQCMDARG,
+  "Default transaction isolation level",
+  NULL,
+  NULL,
+  1,  /* read_committed default */
+  &tidesdb_isolation_typelib);
+
+static MYSQL_SYSVAR_ULONG(
+  level_size_ratio,
+  tidesdb_level_size_ratio,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "LSM level size ratio (multiplier between levels)",
+  NULL,
+  NULL,
+  10,
+  2,
+  100,
+  0);
+
+static MYSQL_SYSVAR_ULONG(
+  skip_list_max_level,
+  tidesdb_skip_list_max_level,
+  PLUGIN_VAR_RQCMDARG,
+  "Skip list maximum level for memtables",
+  NULL,
+  NULL,
+  12,
+  4,
+  32,
+  0);
+
+static MYSQL_SYSVAR_BOOL(
+  enable_block_indexes,
+  tidesdb_enable_block_indexes,
+  PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+  "Enable compact block indexes for faster seeks",
+  NULL,
+  NULL,
+  TRUE);
+
+static MYSQL_SYSVAR_ULONG(
+  index_sample_ratio,
+  tidesdb_index_sample_ratio,
+  PLUGIN_VAR_RQCMDARG,
+  "Block index sampling ratio (1 = every block, 8 = every 8th block)",
+  NULL,
+  NULL,
+  1,
+  1,
+  64,
+  0);
+
+static MYSQL_SYSVAR_ULONGLONG(
+  default_ttl,
+  tidesdb_default_ttl,
+  PLUGIN_VAR_RQCMDARG,
+  "Default TTL in seconds for new rows (0 = no expiration)",
+  NULL,
+  NULL,
+  0,
+  0,
+  ULLONG_MAX,
+  0);
+
+static MYSQL_SYSVAR_ENUM(
+  log_level,
+  tidesdb_log_level,
+  PLUGIN_VAR_RQCMDARG,
+  "TidesDB log level: debug, info, warn, error, fatal, none",
+  NULL,
+  NULL,
+  1,  /* info default */
+  &tidesdb_log_level_typelib);
+
 static struct st_mysql_sys_var* tidesdb_system_variables[] = {
   MYSQL_SYSVAR(data_dir),
   MYSQL_SYSVAR(flush_threads),
@@ -1512,6 +1921,17 @@ static struct st_mysql_sys_var* tidesdb_system_variables[] = {
   MYSQL_SYSVAR(write_buffer_size),
   MYSQL_SYSVAR(enable_compression),
   MYSQL_SYSVAR(enable_bloom_filter),
+  MYSQL_SYSVAR(compression_algo),
+  MYSQL_SYSVAR(sync_mode),
+  MYSQL_SYSVAR(sync_interval_us),
+  MYSQL_SYSVAR(bloom_fpr),
+  MYSQL_SYSVAR(default_isolation),
+  MYSQL_SYSVAR(level_size_ratio),
+  MYSQL_SYSVAR(skip_list_max_level),
+  MYSQL_SYSVAR(enable_block_indexes),
+  MYSQL_SYSVAR(index_sample_ratio),
+  MYSQL_SYSVAR(default_ttl),
+  MYSQL_SYSVAR(log_level),
   NULL
 };
 

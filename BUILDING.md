@@ -1,14 +1,14 @@
 # Building TideSQL
 
-TideSQL is a fork of MySQL Server 5.1 with TidesDB as the default storage engine.
+TideSQL is a fork of MySQL Server 5.1 (Facebook fork) with TidesDB as an available storage engine.
 
 ## Prerequisites
 
 ### System Requirements
 
-- **Operating System**: Linux (Debian/Ubuntu, RHEL/CentOS, Arch), macOS, or FreeBSD
-- **Compiler**: GCC 7.0+ or Clang 6.0+
-- **Build Tools**: CMake 3.25+, autoconf, automake, libtool
+- **Operating System**: Linux (Debian/Ubuntu, RHEL/CentOS, Arch), macOS
+- **Compiler**: GCC 7.0+ or Clang 6.0+ (with C++17 support)
+- **Build Tools**: autoconf, automake, libtool, bison 3.x, perl
 
 ### Required Dependencies
 
@@ -72,7 +72,7 @@ cd tidesql
 # Generate configure script using MySQL's autorun script
 ./BUILD/autorun.sh
 
-# Configure with TidesDB as the default engine
+# Configure with TidesDB plugin
 # Note: Use -Wno-narrowing and -fpermissive for modern GCC compatibility
 ./configure \
     --prefix=/usr/local/tidesql \
@@ -86,11 +86,36 @@ bison -y -p MYSQL -d --defines=sql_yacc.h -o sql_yacc.cc sql_yacc.yy
 sed -i 's/#define yyerror         MYSQLerror/#define yyerror(ctx, msg) MYSQLerror_impl(msg)/' sql_yacc.cc
 cd ..
 
-# Build
+# Build the main server
 make -j$(nproc)
 
-# Install
+# Build the TidesDB plugin with proper linking
+# The plugin must be linked with --no-as-needed to include libtidesdb
+cd storage/tidesdb
+g++ -DHAVE_CONFIG_H -I. -I../../include -I../../regex -I../../sql \
+    -DMYSQL_DYNAMIC_PLUGIN -I/usr/local/include \
+    -Wno-narrowing -fpermissive -fno-exceptions -fno-rtti -fPIC -shared \
+    -o .libs/ha_tidesdb.so ha_tidesdb.cc \
+    -L/usr/local/lib -Wl,-rpath,/usr/local/lib -Wl,--no-as-needed \
+    -ltidesdb -lzstd -llz4 -lsnappy
+cd ../..
+
+# Install (optional)
 sudo make install
+```
+
+### Regenerating Error Message Files
+
+If you encounter errors about missing error messages (641 vs 645), regenerate them:
+
+```bash
+cd extra
+./comp_err --charset=../sql/share/charsets \
+    --in_file=../sql/share/errmsg.txt \
+    --out_dir=../sql/share/ \
+    --header_file=../include/mysqld_error.h \
+    --name_file=../include/mysqld_ername.h \
+    --state_file=../include/sql_state.h
 ```
 
 ### Option 2: CMake Build (Windows Only)
@@ -120,27 +145,49 @@ cmake --build . --config Release
 | `--with-ssl` | Enable SSL support |
 | `--prefix=/path` | Installation directory |
 
-## Post-Installation Setup
+## Post-Build Setup
 
-### 1. Create Data Directory
-
-```bash
-sudo mkdir -p /usr/local/tidesql/data
-sudo chown -R mysql:mysql /usr/local/tidesql/data
-```
-
-### 2. Initialize Database
+### 1. Initialize Data Directory
 
 ```bash
-cd /usr/local/tidesql
+# Create data directory
+mkdir -p /tmp/tidesql-test/data
 
-# Initialize system tables
-./scripts/mysql_install_db --user=mysql --datadir=/usr/local/tidesql/data
+# Initialize system tables (from source directory)
+perl scripts/mysql_install_db --no-defaults --srcdir=$(pwd) --datadir=/tmp/tidesql-test/data --force
 ```
 
-### 3. Create Configuration File
+### 2. Start the Server
 
-Create `/usr/local/tidesql/my.cnf`:
+```bash
+# Start mysqld with TidesDB plugin directory
+# LD_LIBRARY_PATH is required for libtidesdb
+LD_LIBRARY_PATH=/usr/local/lib ./sql/mysqld --no-defaults \
+    --datadir=/tmp/tidesql-test/data \
+    --basedir=$(pwd) \
+    --language=$(pwd)/sql/share/english \
+    --socket=/tmp/tidesql-test.sock \
+    --port=3307 \
+    --plugin-dir=$(pwd)/storage/tidesdb/.libs &
+```
+
+### 3. Install TidesDB Plugin
+
+```bash
+# Install the TidesDB storage engine plugin (first time only)
+./client/mysql --socket=/tmp/tidesql-test.sock -u root \
+    -e "INSTALL PLUGIN tidesdb SONAME 'ha_tidesdb.so';"
+```
+
+### 4. Verify Installation
+
+```bash
+./client/mysql --socket=/tmp/tidesql-test.sock -u root -e "SHOW ENGINES;"
+```
+
+### Production Installation
+
+After `make install`, create `/usr/local/tidesql/my.cnf`:
 
 ```ini
 [mysqld]
@@ -148,64 +195,54 @@ basedir = /usr/local/tidesql
 datadir = /usr/local/tidesql/data
 socket = /tmp/tidesql.sock
 port = 3307
+language = /usr/local/tidesql/share/english
+plugin-dir = /usr/local/tidesql/lib/plugin
 
-# TidesDB is the default engine
-default-storage-engine = TidesDB
+# Load TidesDB plugin at startup
+plugin-load = tidesdb=ha_tidesdb.so
 
-# TidesDB configuration
-tidesdb_data_dir = /usr/local/tidesql/data/tidesdb
-tidesdb_flush_threads = 2
-tidesdb_compaction_threads = 2
-tidesdb_block_cache_size = 67108864
-tidesdb_write_buffer_size = 67108864
-tidesdb_enable_compression = ON
-tidesdb_enable_bloom_filter = ON
+# Optional: Make TidesDB the default engine
+# default-storage-engine = TidesDB
 
 [client]
 socket = /tmp/tidesql.sock
 port = 3307
 ```
 
-### 4. Start the Server
+Then start with:
 
 ```bash
-# Start mysqld
 /usr/local/tidesql/bin/mysqld_safe --defaults-file=/usr/local/tidesql/my.cnf &
-
-# Or run directly
-/usr/local/tidesql/bin/mysqld --defaults-file=/usr/local/tidesql/my.cnf
 ```
 
-### 5. Secure Installation
-
-```bash
-/usr/local/tidesql/bin/mysql_secure_installation --socket=/tmp/tidesql.sock
-```
-
-## Verifying the Installation
+## Verifying the Build
 
 ```bash
 # Connect to TideSQL
-/usr/local/tidesql/bin/mysql -S /tmp/tidesql.sock -u root -p
-
-# Check default engine
-mysql> SHOW VARIABLES LIKE 'default_storage_engine';
-+------------------------+---------+
-| Variable_name          | Value   |
-+------------------------+---------+
-| default_storage_engine | TidesDB |
-+------------------------+---------+
+./client/mysql --socket=/tmp/tidesql-test.sock -u root
 
 # Check TidesDB is available
 mysql> SHOW ENGINES;
-+------------+---------+--------------------------------------------+
-| Engine     | Support | Comment                                    |
-+------------+---------+--------------------------------------------+
-| TidesDB    | DEFAULT | TidesDB LSM-based storage engine with ACID |
-| MyISAM     | YES     | Default engine as of MySQL 3.23            |
-| MEMORY     | YES     | Hash based, stored in memory               |
-| CSV        | YES     | CSV storage engine                         |
-+------------+---------+--------------------------------------------+
++------------+---------+------------------------------------------------------+
+| Engine     | Support | Comment                                              |
++------------+---------+------------------------------------------------------+
+| TidesDB    | YES     | TidesDB LSM-based storage engine with ACID transactions |
+| MyISAM     | DEFAULT | Default engine as of MySQL 3.23 with great performance  |
+| MEMORY     | YES     | Hash based, stored in memory                            |
+| CSV        | YES     | CSV storage engine                                      |
++------------+---------+------------------------------------------------------+
+
+# Test creating a TidesDB table
+mysql> CREATE DATABASE test_tidesdb;
+mysql> USE test_tidesdb;
+mysql> CREATE TABLE t1 (id INT PRIMARY KEY, name VARCHAR(100)) ENGINE=TidesDB;
+mysql> INSERT INTO t1 VALUES (1, 'Hello TidesDB');
+mysql> SELECT * FROM t1;
++----+---------------+
+| id | name          |
++----+---------------+
+|  1 | Hello TidesDB |
++----+---------------+
 ```
 
 ## Troubleshooting
@@ -213,23 +250,63 @@ mysql> SHOW ENGINES;
 ### TidesDB library not found
 
 ```bash
-# Add library path
-export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+# Add library path when starting server
+LD_LIBRARY_PATH=/usr/local/lib ./sql/mysqld ...
 
-# Or update ldconfig
+# Or update ldconfig permanently
 echo "/usr/local/lib" | sudo tee /etc/ld.so.conf.d/tidesdb.conf
 sudo ldconfig
 ```
 
-### Plugin load error
+### Plugin load error: undefined symbol
 
-Ensure TidesDB was compiled with the same compiler version as TideSQL.
+The TidesDB plugin must be linked with `--no-as-needed` to include libtidesdb:
+
+```bash
+cd storage/tidesdb
+g++ -DHAVE_CONFIG_H -I. -I../../include -I../../regex -I../../sql \
+    -DMYSQL_DYNAMIC_PLUGIN -I/usr/local/include \
+    -Wno-narrowing -fpermissive -fno-exceptions -fno-rtti -fPIC -shared \
+    -o .libs/ha_tidesdb.so ha_tidesdb.cc \
+    -L/usr/local/lib -Wl,-rpath,/usr/local/lib -Wl,--no-as-needed \
+    -ltidesdb -lzstd -llz4 -lsnappy
+```
+
+Verify linking:
+```bash
+ldd storage/tidesdb/.libs/ha_tidesdb.so | grep tidesdb
+# Should show: libtidesdb.so => /usr/local/lib/libtidesdb.so
+```
+
+### Bison 3.x compatibility errors
+
+If you see parser errors, regenerate sql_yacc.cc:
+
+```bash
+cd sql
+bison -y -p MYSQL -d --defines=sql_yacc.h -o sql_yacc.cc sql_yacc.yy
+sed -i 's/#define yyerror         MYSQLerror/#define yyerror(ctx, msg) MYSQLerror_impl(msg)/' sql_yacc.cc
+```
+
+### Error message file mismatch
+
+If you see "had only 641 error messages, but it should contain at least 645":
+
+```bash
+cd extra
+./comp_err --charset=../sql/share/charsets \
+    --in_file=../sql/share/errmsg.txt \
+    --out_dir=../sql/share/ \
+    --header_file=../include/mysqld_error.h \
+    --name_file=../include/mysqld_ername.h \
+    --state_file=../include/sql_state.h
+```
 
 ### Permission denied
 
 ```bash
-sudo chown -R mysql:mysql /usr/local/tidesql/data
-sudo chmod 750 /usr/local/tidesql/data
+sudo chown -R $USER:$USER /tmp/tidesql-test/data
+chmod 750 /tmp/tidesql-test/data
 ```
 
 ## Development Build
