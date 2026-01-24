@@ -2,7 +2,6 @@
 A space and write optimized MySQL/MariaDB pluggable storage engine that uses [TidesDB](https://github.com/tidesdb/tidesdb).
 
 ## Features
-
 LSM-tree based storage with:
   - ACID transactions (MySQL-level BEGIN/COMMIT/ROLLBACK)
   - Compression (LZ4, Zstd, Snappy)
@@ -10,17 +9,11 @@ LSM-tree based storage with:
   - Column families (rows, index, meta, fulltext)
   - 5 isolation levels
   - TTL support
-
 - Full support for AUTO_INCREMENT columns with persistence across restarts
-
 - Secondary Indexes (BTREE-style)
-
 - Fulltext Search with BM25 ranking - `MATCH...AGAINST` queries with Okapi BM25 scoring
-
 - Foreign key support
-
 - Table RENAME support
-
 - Dynamic configuration updates (some settings can be changed at runtime)
 
 ## Prerequisites
@@ -49,9 +42,9 @@ sudo apt install -y cmake build-essential \
 sudo apt install -y libmariadb-dev
 ```
 
-### MySQL/MariaDB Source (for development)
+### MySQL/MariaDB Source
 
-Building a storage engine requires MySQL/MariaDB source code headers:
+Building the storage engine requires MySQL/MariaDB source code headers:
 
 ```bash
 # Download MySQL source
@@ -177,14 +170,6 @@ START TRANSACTION WITH CONSISTENT SNAPSHOT;
 # Default isolation when MySQL's tx_isolation is not explicitly set
 tidesql_txn_isolation = 1  # 0=READ_UNCOMMITTED, 1=READ_COMMITTED, 2=REPEATABLE_READ, 3=SNAPSHOT, 4=SERIALIZABLE
 ```
-
-**Use Cases:**
-
-- **READ UNCOMMITTED** - Maximum throughput for analytics where dirty reads are acceptable
-- **READ COMMITTED** - Default; good balance for most OLTP workloads
-- **REPEATABLE READ** - Consistent reads within a transaction (e.g., generating reports)
-- **SERIALIZABLE** - When correctness is critical; may cause conflicts on concurrent modifications
-- **WITH CONSISTENT SNAPSHOT** - Point-in-time consistency for backups or consistent multi-table reads
 
 ### Example Configuration (my.cnf)
 
