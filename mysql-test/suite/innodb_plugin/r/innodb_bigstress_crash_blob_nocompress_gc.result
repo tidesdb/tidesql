@@ -1,0 +1,41 @@
+include/master-slave.inc
+[connection master]
+DROP TABLE IF EXISTS t1;
+CREATE TABLE t1(id INT AUTO_INCREMENT PRIMARY KEY,
+msg_prefix VARCHAR(255),
+msg longtext,
+msg_length int,
+msg_checksum varchar(128),
+KEY msg_i(msg_prefix))
+ENGINE=INNODB;
+SELECT @@innodb_file_format_check;
+@@innodb_file_format_check
+Antelope
+drop table if exists errors;
+create table errors(msg text) engine=innodb;
+SELECT @@innodb_file_format_check;
+@@innodb_file_format_check
+Antelope
+call mtr.add_suppression(".*");
+Wait for reconnect
+Checksum master
+stop slave;
+start slave;
+Checksum slave
+Wait for reconnect
+Checksum master
+stop slave;
+start slave;
+Checksum slave
+SELECT @@innodb_file_format_check;
+@@innodb_file_format_check
+Antelope
+SELECT @@innodb_file_format_check;
+@@innodb_file_format_check
+Barracuda
+select * from errors limit 1000;
+msg
+DROP TABLE errors;
+DROP TABLE t1;
+stop slave;
+SET GLOBAL innodb_file_format_check = "Antelope";

@@ -1,7 +1,0 @@
-/home/agpmastersystem/tidesql/build/CMakeFiles/ha_tidesql.dir
-/home/agpmastersystem/tidesql/build/CMakeFiles/edit_cache.dir
-/home/agpmastersystem/tidesql/build/CMakeFiles/rebuild_cache.dir
-/home/agpmastersystem/tidesql/build/CMakeFiles/list_install_components.dir
-/home/agpmastersystem/tidesql/build/CMakeFiles/install.dir
-/home/agpmastersystem/tidesql/build/CMakeFiles/install/local.dir
-/home/agpmastersystem/tidesql/build/CMakeFiles/install/strip.dir

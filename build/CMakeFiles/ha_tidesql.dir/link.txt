@@ -1,1 +1,0 @@
-/usr/bin/c++ -fPIC -shared -Wl,-soname,ha_tidesql.so -o ha_tidesql.so CMakeFiles/ha_tidesql.dir/ha_tidesql.cpp.o  -Wl,-rpath,/usr/local/lib: /usr/local/lib/libtidesdb.so /usr/lib/x86_64-linux-gnu/liblz4.so /usr/lib/x86_64-linux-gnu/libzstd.so /usr/lib/x86_64-linux-gnu/libsnappy.so -lpthread 

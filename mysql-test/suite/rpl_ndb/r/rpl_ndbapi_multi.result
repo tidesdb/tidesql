@@ -1,0 +1,4 @@
+include/master-slave.inc
+[connection master]
+Running ndbapi_simple_dual
+Running mgmapi_logevent

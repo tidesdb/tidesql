@@ -1,0 +1,127 @@
+#
+# Test upgrade and downgrade scenarios of switching back and forth between
+# mysqld binaries which reads and stores 1 or 2 buckets of replication data
+# in InnoDB's system header with data.
+#
+
+source include/have_innodb.inc;
+source include/have_debug.inc;
+source include/master-slave.inc;
+
+--disable_warnings
+drop table if exists t1;
+--enable_warnings
+
+#
+# At start of test the server is in old mode which writes only a single
+# bucket.
+#
+connection slave;
+show variables like 'innodb_old_rpl_transaction';
+
+connection master;
+CREATE TABLE t1(a int primary key auto_increment) engine=innodb;
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+sync_slave_with_master;
+
+#
+# 'Upgrade' by restarting in new mode which writes both buckets.
+#
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.2.expect
+--shutdown_server 10
+--source include/wait_until_disconnected.inc
+
+--enable_reconnect
+--exec echo "restart:--skip-innodb-old-rpl-transaction" > $MYSQLTEST_VARDIR/tmp/mysqld.2.expect
+--source include/wait_until_connected_again.inc
+
+show variables like 'innodb_old_rpl_transaction';
+
+--source include/start_slave.inc
+
+connection master;
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+
+sync_slave_with_master;
+
+#
+# 'Downgrade' by restarting back in old mode.
+#
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.2.expect
+--shutdown_server 10
+--source include/wait_until_disconnected.inc
+
+--enable_reconnect
+--exec echo "restart" > $MYSQLTEST_VARDIR/tmp/mysqld.2.expect
+--source include/wait_until_connected_again.inc
+
+show variables like 'innodb_old_rpl_transaction';
+
+--source include/start_slave.inc
+
+connection master;
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+
+sync_slave_with_master;
+
+#
+# 'Upgrade' by restarting in new mode which writes both buckets.
+#
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.2.expect
+--shutdown_server 10
+--source include/wait_until_disconnected.inc
+
+--enable_reconnect
+--exec echo "restart:--skip-innodb-old-rpl-transaction" > $MYSQLTEST_VARDIR/tmp/mysqld.2.expect
+--source include/wait_until_connected_again.inc
+
+show variables like 'innodb_old_rpl_transaction';
+
+--source include/start_slave.inc
+
+connection master;
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+
+sync_slave_with_master;
+
+#
+# 'Downgrade' again to restore servers to state from start of test.
+#
+--exec echo "wait" > $MYSQLTEST_VARDIR/tmp/mysqld.2.expect
+--shutdown_server 10
+--source include/wait_until_disconnected.inc
+
+--enable_reconnect
+--exec echo "restart" > $MYSQLTEST_VARDIR/tmp/mysqld.2.expect
+--source include/wait_until_connected_again.inc
+
+show variables like 'innodb_old_rpl_transaction';
+
+--source include/start_slave.inc
+
+connection master;
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+insert into t1 values(NULL);
+
+sync_slave_with_master;
+
+#
+# Clean up.
+#
+connection server_2;
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+connection master;
+DROP TABLE t1;
+
+--source include/rpl_end.inc

@@ -1,0 +1,59 @@
+show global variables like "admission_control";
+Variable_name	Value
+admission_control	ON
+grant all on *.* to 'adminc'@'%' with max_concurrent_queries 1 max_user_connections 100;
+select User, Host, max_user_connections, max_concurrent_queries from mysql.user where User = 'adminc';
+User	Host	max_user_connections	max_concurrent_queries
+adminc	%	100	1
+show grants;
+Grants for adminc@%
+GRANT ALL PRIVILEGES ON *.* TO 'adminc'@'%' WITH MAX_USER_CONNECTIONS 100 MAX_CONCURRENT_QUERIES 1
+SET DEBUG_SYNC='in_sleep_func SIGNAL i_am_sleeping';
+SET DEBUG='d,ac_sleep_stall';
+select sleep(1);
+SET DEBUG_SYNC='now WAIT_FOR i_am_sleeping';
+SET DEBUG_SYNC='admission_control_enter_waiting SIGNAL i_am_waiting';
+select 1;
+"Should find one blocked statement"
+SET DEBUG_SYNC='now WAIT_FOR i_am_waiting';
+select User, State, Info from information_schema.processlist where State like '%max concurrent queries%';
+User	State	Info
+adminc	wait for max concurrent queries	NULL
+select User, State, Info from information_schema.processlist where Info like 'select sleep%';
+User	State	Info
+adminc	executing	select sleep(1)
+select queries_running, queries_waiting from information_schema.user_statistics where user_name = 'adminc';
+queries_running	queries_waiting
+1	1
+sleep(1)
+0
+SET DEBUG='RESET';
+1
+1
+SET DEBUG_SYNC='in_sleep_func SIGNAL i_am_sleeping';
+SET DEBUG='d,ac_sleep_stall';
+select sleep(1);
+SET DEBUG_SYNC='now WAIT_FOR i_am_sleeping';
+select sleep(1), 1;
+SET DEBUG_SYNC='in_sleep_func SIGNAL i_am_sleeping';
+select sleep(1), 1;
+"Should find two blocked statements"
+SET DEBUG_SYNC='now WAIT_FOR i_am_sleeping';
+select User, State, Info from information_schema.processlist where State like '%max concurrent queries%';
+User	State	Info
+adminc	wait for max concurrent queries	NULL
+adminc	wait for max concurrent queries	NULL
+select queries_running, queries_waiting from information_schema.user_statistics where user_name = 'adminc';
+queries_running	queries_waiting
+1	2
+sleep(1)
+0
+sleep(1)	1
+0	1
+sleep(1)	1
+0	1
+drop user 'adminc'@'%';
+SET DEBUG_SYNC= 'RESET';
+SET DEBUG='RESET';
+select User, Host, max_user_connections, max_concurrent_queries from mysql.user where User = 'adminc';
+User	Host	max_user_connections	max_concurrent_queries

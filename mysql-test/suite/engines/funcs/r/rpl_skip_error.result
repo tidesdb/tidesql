@@ -1,0 +1,12 @@
+include/master-slave.inc
+[connection master]
+create table t1 (n int not null primary key);
+insert into t1 values (1);
+insert into t1 values (1);
+insert into t1 values (2),(3);
+select * from t1 ORDER BY n;
+n
+1
+2
+3
+drop table t1;

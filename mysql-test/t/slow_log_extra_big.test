@@ -1,0 +1,109 @@
+#
+# Test --log-slow-extra
+# 
+# Also tests fix for http://bugs.mysql.com/bug.php?id=64170 to confirm 
+# the ratio of the unzip_LRU to LRU can be controlled by innodb_unzip_LRU_pct.
+# Also tests that setting innodb_extra_checksums=0 does not crash the server.
+# While it would be nice to count the number of checksums this saves I don't
+# have a counter for that. But from the slow query log the query response
+# time is about 8% faster with the change.
+#
+
+-- source include/have_innodb_plugin.inc
+
+--let $file_format_save = `SELECT @@innodb_file_format`
+--let $file_format_check_save = `SELECT @@innodb_file_format_check`
+
+# Confirm that per-query stats work.
+# Alas, you need to manually read var/mysqld.1/mysqld.slow.log
+#
+
+set global long_query_time=0;
+set global innodb_extra_checksums=0;
+set global innodb_lru_io_to_unzip_factor=1;
+
+--disable_warnings
+--disable_query_log
+
+drop table if exists big_table_slow;
+create table big_table_slow (id int primary key auto_increment, v varchar(200), t text) engine=innodb key_block_size=8;
+
+insert into big_table_slow values (null, lpad("v", 190, "b"), lpad("a", 3000, "b"));
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+insert into big_table_slow select null, v, t from big_table_slow;
+
+--enable_query_log
+--enable_warnings
+
+connect (con,localhost,root,,);
+
+--echo # Confirm that Read_time is correct in the slow query log
+
+select count(*) from big_table_slow;
+
+connect (con1,localhost,root,,);
+
+select count(*) from big_table_slow; 
+
+select count(*) from big_table_slow where id>1000 and id<2000;
+
+select * from big_table_slow where id=2;
+
+select count(*) from big_table_slow where id >10000;
+
+select count(*) from big_table_slow where id < 100000;
+
+--echo # Confirm that the unzip_LRU to LRU ratio is about 10%
+
+select VARIABLE_VALUE into @dlen from information_schema.global_status
+where VARIABLE_NAME = 'INNODB_BUFFER_POOL_PAGES_DATA';
+
+select VARIABLE_VALUE into @ulen from information_schema.global_status
+where VARIABLE_NAME = 'INNODB_BUFFER_POOL_PAGES_UNZIP_LRU';
+
+--disable_query_log
+select (@ulen / @dlen) >= 0.05 as large_enough, (@ulen / @dlen) <= 0.30 as small_enough;
+--enable_query_log
+
+--echo # Confirm that the unzip_LRU to LRU ratio is about 20%
+
+set global innodb_unzip_lru_pct = 20;
+
+select count(*) from big_table_slow;
+
+select VARIABLE_VALUE into @dlen from information_schema.global_status
+where VARIABLE_NAME = 'INNODB_BUFFER_POOL_PAGES_DATA';
+
+select VARIABLE_VALUE into @ulen from information_schema.global_status
+where VARIABLE_NAME = 'INNODB_BUFFER_POOL_PAGES_UNZIP_LRU';
+
+--disable_query_log
+select (@ulen / @dlen) >= 0.15 as large_enough, (@ulen / @dlen) <= 0.40 as small_enough;
+--enable_query_log
+
+--echo # Cleanup
+
+connection default;
+set global long_query_time=1;
+set global innodb_lru_io_to_unzip_factor=50;
+set global innodb_unzip_lru_pct = 10;
+disconnect con1;
+disconnect con;
+drop table big_table_slow;
+
+eval SET GLOBAL innodb_file_format = \"$file_format_save\";
+eval SET GLOBAL innodb_file_format_check = \"$file_format_check_save\";
+
+--exit

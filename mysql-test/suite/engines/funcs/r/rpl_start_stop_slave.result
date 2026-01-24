@@ -1,0 +1,8 @@
+include/master-slave.inc
+[connection master]
+stop slave;
+create table t1(n int);
+start slave;
+stop slave io_thread;
+start slave io_thread;
+drop table t1;

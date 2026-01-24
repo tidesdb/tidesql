@@ -1,0 +1,21 @@
+include/master-slave.inc
+[connection master]
+call mtr.add_suppression("Error in Log_event::read_log_event..: 'read error', data_len: [0-9]+, event_type: [0-9]+");
+call mtr.add_suppression("Attempting backtrace. You can use the following information to find out");
+create table t1 (a int primary key) engine=innodb;
+include/stop_slave.inc
+set global debug="d,corrupt_binlog_tail";
+begin;
+insert into t1 values (0);
+insert into t1 values (1);
+insert into t1 values (2);
+commit;
+ERROR HY000: Lost connection to MySQL server during query
+begin;
+insert into t1 values (0);
+insert into t1 values (1);
+insert into t1 values (2);
+commit;
+include/start_slave.inc
+drop table t1;
+include/rpl_end.inc

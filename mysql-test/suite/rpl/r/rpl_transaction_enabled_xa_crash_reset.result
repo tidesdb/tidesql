@@ -1,0 +1,32 @@
+include/master-slave.inc
+[connection master]
+drop table if exists t1;
+call mtr.add_suppression(".*");
+CREATE TABLE t1(a int primary key) engine=innodb;
+show variables like 'log_slave_updates';
+Variable_name	Value
+log_slave_updates	ON
+SET GLOBAL debug="d,crash_before_writing_xid";
+BEGIN;
+insert into t1 values(10);
+COMMIT;
+insert into t1 values(11);
+start slave;
+insert into t1 values (12);
+show global status like "Xa_recovery_rollback";
+Variable_name	Value
+Xa_recovery_rollback	1
+stop slave;
+change master to master_host='127.0.0.1',master_port=#, master_user='root';
+show global status like "Xa_recovery_rollback";
+Variable_name	Value
+Xa_recovery_rollback	0
+start slave;
+select * from t1;
+a
+10
+11
+12
+SET GLOBAL INNODB_FILE_FORMAT_CHECK=`ANTELOPE`;
+drop table t1;
+stop slave;

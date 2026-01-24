@@ -1,0 +1,5 @@
+include/master-slave.inc
+[connection master]
+use mysql;
+alter database collate latin1_bin;
+alter database collate latin1_swedish_ci;

@@ -1,0 +1,80 @@
+#
+# Test --log-slow-extra
+#
+
+--source include/have_innodb_plugin.inc
+
+set timestamp=10;
+select unix_timestamp(), sleep(2);
+
+let $MYSQLD_DATADIR= `select @@datadir`;
+--exec [ "1" -eq `grep "SET timestamp=10;" $MYSQLD_DATADIR/../mysqld-slow.log | wc -l` ]
+
+# Confirm that errno 1146 is logged
+set global long_query_time=0;
+connect (con,localhost,root,,);
+
+--error ER_NO_SUCH_TABLE
+select * from foobar;
+
+--exec [ "1" -eq `grep "Errno: 1146" $MYSQLD_DATADIR/../mysqld-slow.log | wc -l` ]
+
+set global long_query_time=1;
+connection default;
+
+# Confirm that all errors are logged
+set global log_error_sample_rate=1;
+connect (con2,localhost,root,,);
+
+--error ER_NO_SUCH_TABLE
+select * from foobar;
+
+--error ER_NO_SUCH_TABLE
+select * from foobar;
+
+--exec [ "3" -eq `grep "Errno: 1146" $MYSQLD_DATADIR/../mysqld-slow.log | wc -l` ]
+
+# Confirm that no errors are logged
+set global log_error_sample_rate=0;
+connect (con3,localhost,root,,);
+
+--error ER_NO_SUCH_TABLE
+select * from foobar;
+
+--exec [ "3" -eq `grep "Errno: 1146" $MYSQLD_DATADIR/../mysqld-slow.log | wc -l` ]
+
+#
+# Confirm that per-query stats work.
+# Alas, you need to manually read var/mysqld.1/mysqld.slow.log
+#
+
+set global long_query_time=0;
+connect (con4,localhost,root,,);
+
+--disable_warnings
+drop table if exists islow;
+drop table if exists mslow;
+--enable_warnings
+
+create table islow(i int) engine=innodb;
+insert into islow values (1), (2), (3), (4), (5), (6), (7), (8);
+
+create table mslow(i int) engine=myisam;
+insert into mslow values (1), (2), (3), (4), (5), (6), (7), (8);
+
+select * from islow;
+select * from islow;
+
+select * from mslow;
+select * from mslow;
+
+connection default;
+set global long_query_time=1;
+disconnect con;
+disconnect con2;
+disconnect con3;
+disconnect con4;
+drop table islow;
+drop table mslow;
+
+--exit
