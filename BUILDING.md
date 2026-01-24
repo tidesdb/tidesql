@@ -69,16 +69,22 @@ brew install cmake autoconf automake libtool openssl ncurses bison
 ```bash
 cd tidesql
 
-# Generate configure script (if building from git)
-autoreconf -i
+# Generate configure script using MySQL's autorun script
+./BUILD/autorun.sh
 
 # Configure with TidesDB as the default engine
+# Note: Use -Wno-narrowing and -fpermissive for modern GCC compatibility
 ./configure \
     --prefix=/usr/local/tidesql \
     --with-plugins=tidesdb,myisam,heap,csv \
-    --with-mysqld-ldflags=-ltidesdb \
-    CXXFLAGS="-I/usr/local/include" \
-    LDFLAGS="-L/usr/local/lib"
+    CXXFLAGS="-I/usr/local/include -Wno-narrowing -fpermissive" \
+    LDFLAGS="-L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy"
+
+# Regenerate sql_yacc.cc for bison 3.x compatibility
+cd sql
+bison -y -p MYSQL -d --defines=sql_yacc.h -o sql_yacc.cc sql_yacc.yy
+sed -i 's/#define yyerror         MYSQLerror/#define yyerror(ctx, msg) MYSQLerror_impl(msg)/' sql_yacc.cc
+cd ..
 
 # Build
 make -j$(nproc)

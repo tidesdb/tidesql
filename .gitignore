@@ -1,11 +1,178 @@
-cmake-build-debug
-build
-*.bin
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build directories
+cmake-build-debug/
+cmake-build-release/
+build/
+
+# Object files and libraries
+*.o
+*.lo
+*.la
+*.a
 *.so
+*.so.*
 *.dylib
 *.dll
+*.lib
+
+# Executables
 *.exe
 *.out
+*.bin
+
+# Libtool
+.libs/
+*.la
+libtool
+libtoolT
+
+# Autotools generated files
+Makefile
+!Makefile.am
+config.status
+config.log
+config.cache
+config.h
+config.h.in~
+stamp-h1
+autom4te.cache/
+aclocal.m4
+configure~
+
+# Dependency files
+.deps/
+**/.deps/
+*.Plo
+*.Po
+*.Tpo
+
+# MySQL specific generated files
+sql/mysqld
+sql/sql_yacc.cc
+sql/sql_yacc.h
+sql/sql_yacc.hh
+sql/sql_yacc.output
+sql/sql_builtin.cc
+sql/lex_hash.h
+sql/gen_lex_hash
+sql/share/
+
+# Client binaries
+client/mysql
+client/mysqladmin
+client/mysqlbinlog
+client/mysqlcheck
+client/mysqldump
+client/mysqlimport
+client/mysqlshow
+client/mysqlslap
+client/mysqltest
+
+# Server tools
+server-tools/instance-manager/mysqlmanager
+server-tools/instance-manager/*.o
+server-tools/instance-manager/*.lo
+server-tools/instance-manager/*.la
+server-tools/instance-manager/libnet.a
+server-tools/instance-manager/net_serv.cc
+
+# Test binaries
+mysql-test/mtr
+mysql-test/mysql-test-run
+mysql-test/lib/My/SafeProcess/my_safe_process
+tests/mysql_client_test
+tests/bug25714
+tests/insert_test
+tests/select_test
+tests/thread_test
+tests/*.o
+
+# Storage engine plugins
+storage/*/.libs/
+storage/*/ha_*.so
+storage/tidesdb/.libs/
+
+# Extra tools
+extra/comp_err
+extra/my_print_defaults
+extra/perror
+extra/replace
+extra/resolve_stack_dump
+extra/resolveip
+extra/mysql_waitpid
+extra/innochecksum
+extra/yassl/
+
+# Scripts generated
+scripts/mysql_config
+scripts/mysql_install_db
+scripts/mysql_secure_installation
+scripts/mysql_fix_privilege_tables
+scripts/mysqld_safe
+scripts/mysqldumpslow
+scripts/mysqlhotcopy
+scripts/mysqlaccess
+scripts/mysql_convert_table_format
+scripts/mysql_find_rows
+scripts/mysql_fix_extensions
+scripts/mysql_setpermission
+scripts/mysql_zap
+scripts/mysqlbug
+
+# Support files generated
+support-files/*.cnf
+support-files/*.ini
+support-files/*.spec
+support-files/*.server
+support-files/*.plist
+support-files/binary-configure
+support-files/mysql-log-rotate
+support-files/mysql.server-facebook
+support-files/ndb-config-2-node.ini
+support-files/MacOSX/
+
+# SQL bench generated
+sql-bench/bench-*
+sql-bench/compare-results
+sql-bench/copy-db
+sql-bench/crash-me
+sql-bench/graph-compare-results
+sql-bench/innotest*
+sql-bench/run-all-tests
+sql-bench/server-cfg
+sql-bench/test-*
+
+# Library builds
+libmysql/.libs/
+libmysql_r/.libs/
+libmysqld/.libs/
+libmysqld/examples/mysql_client_test_embedded
+libmysqld/examples/mysqltest_embedded
+
+# Include generated
+include/mysql_version.h
+include/mysqld_ername.h
+include/mysqld_error.h
+include/sql_state.h
+
+# Logs and data
 *.log
-*.swp
-.idea
+*.err
+*.pid
+data/
+
+# Misc
+*.bak
+*.orig
+*.rej
+*.patch
+tags
+TAGS
+cscope.*
+compile_commands.json

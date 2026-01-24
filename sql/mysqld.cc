@@ -485,6 +485,9 @@ static pthread_cond_t COND_thread_cache, COND_flush_thread_cache;
 
 /* Global variables */
 
+/* InnoDB max slots - defined here when InnoDB is built as plugin */
+long innodb_max_slots_allowed= 0;
+
 /* USER_STATS for the SQL slave */
 USER_STATS slave_user_stats;
 
