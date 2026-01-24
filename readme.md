@@ -7,7 +7,6 @@ LSM-tree based storage with:
   - Compression (LZ4, Zstd, Snappy)
   - Bloom filters for fast lookups
   - Column families (rows, index, meta, fulltext)
-  - 5 isolation levels
   - TTL support
 - Full support for AUTO_INCREMENT columns with persistence across restarts
 - Secondary Indexes (BTREE-style)
