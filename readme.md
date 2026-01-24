@@ -9,7 +9,7 @@ LSM-tree based storage with:
   - Column families (rows, index, meta, fulltext)
   - TTL support
 - Full support for AUTO_INCREMENT columns with persistence across restarts
-- Secondary Indexes (BTREE-style)
+- Secondary Indexes
 - Fulltext Search with BM25 ranking - `MATCH...AGAINST` queries with Okapi BM25 scoring
 - Foreign key support
 - Table RENAME support
