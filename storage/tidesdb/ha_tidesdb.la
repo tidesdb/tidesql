@@ -11,13 +11,13 @@ dlname='ha_tidesdb.so.0'
 library_names='ha_tidesdb.so.0.0.0 ha_tidesdb.so.0 ha_tidesdb.so'
 
 # The name of the static archive.
-old_library='ha_tidesdb.a'
+old_library=''
 
 # Linker flags that cannot go in dependency_libs.
 inherited_linker_flags=''
 
 # Libraries that this one depends upon.
-dependency_libs=' -ltidesdb -lzstd -llz4 -lsnappy -ltidesdb -lzstd -llz4 -lsnappy -lpthread -lpthread -ltidesdb -lzstd -llz4 -lsnappy -L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy -lpthread -lcrypt -lnsl -lpthread'
+dependency_libs=' -L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy'
 
 # Names of additional weak libraries provided by this library
 weak_library_names=''
@@ -38,4 +38,4 @@ dlopen=''
 dlpreopen=''
 
 # Directory that this library needs to be installed in:
-libdir='/usr/local/tidesql/lib/mysql/plugin'
+libdir='/usr/local/lib/mysql/plugin'

@@ -44,7 +44,13 @@
 #endif
 
 /* Use db.h which has C++-compatible opaque struct definitions */
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <tidesdb/db.h>
+#ifdef __cplusplus
+}
+#endif
 
 /** @brief
   TIDESDB_SHARE is a structure that will be shared among all open handlers
