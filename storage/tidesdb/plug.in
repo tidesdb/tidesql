@@ -1,0 +1,3 @@
+MYSQL_STORAGE_ENGINE(tidesdb,,  [TidesDB Storage Engine],
+        [LSM-based storage engine with ACID transactions], [max,max-no-ndb])
+MYSQL_PLUGIN_DYNAMIC(tidesdb,   [ha_tidesdb.la])
