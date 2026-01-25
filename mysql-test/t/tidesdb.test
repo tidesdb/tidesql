@@ -1,0 +1,244 @@
+#
+# Test suite for the TidesDB storage engine
+#
+
+--source include/have_tidesdb.inc
+
+# Initialise
+--disable_warnings
+drop table if exists t1,t2,t3;
+--enable_warnings
+SET SQL_WARNINGS=1;
+
+#
+# Basic table operations
+#
+
+--echo # Test: Basic CREATE TABLE with TidesDB
+CREATE TABLE t1 (
+  id INT NOT NULL AUTO_INCREMENT,
+  name VARCHAR(100),
+  value INT,
+  PRIMARY KEY (id)
+) ENGINE=TidesDB;
+
+SHOW CREATE TABLE t1;
+
+--echo # Test: INSERT operations
+INSERT INTO t1 (name, value) VALUES ('test1', 100);
+INSERT INTO t1 (name, value) VALUES ('test2', 200);
+INSERT INTO t1 (name, value) VALUES ('test3', 300);
+
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test: UPDATE operations
+UPDATE t1 SET value = 150 WHERE id = 1;
+SELECT * FROM t1 WHERE id = 1;
+
+--echo # Test: DELETE operations
+DELETE FROM t1 WHERE id = 2;
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test: Auto-increment
+INSERT INTO t1 (name, value) VALUES ('test4', 400);
+SELECT * FROM t1 ORDER BY id;
+
+DROP TABLE t1;
+
+#
+# Test with multiple data types
+#
+
+--echo # Test: Various data types
+CREATE TABLE t2 (
+  id INT NOT NULL AUTO_INCREMENT,
+  tiny_col TINYINT,
+  small_col SMALLINT,
+  medium_col MEDIUMINT,
+  big_col BIGINT,
+  float_col FLOAT,
+  double_col DOUBLE,
+  decimal_col DECIMAL(10,2),
+  char_col CHAR(50),
+  varchar_col VARCHAR(255),
+  text_col TEXT,
+  blob_col BLOB,
+  date_col DATE,
+  datetime_col DATETIME,
+  timestamp_col TIMESTAMP,
+  PRIMARY KEY (id)
+) ENGINE=TidesDB;
+
+INSERT INTO t2 (tiny_col, small_col, medium_col, big_col, float_col, double_col, 
+                decimal_col, char_col, varchar_col, text_col, blob_col, 
+                date_col, datetime_col, timestamp_col)
+VALUES (127, 32767, 8388607, 9223372036854775807, 3.14, 3.14159265359,
+        12345.67, 'char data', 'varchar data', 'text data', 'blob data',
+        '2024-01-15', '2024-01-15 10:30:00', '2024-01-15 10:30:00');
+
+SELECT * FROM t2;
+
+DROP TABLE t2;
+
+#
+# Test table scans
+#
+
+--echo # Test: Table scan with multiple rows
+CREATE TABLE t3 (
+  id INT NOT NULL AUTO_INCREMENT,
+  data VARCHAR(100),
+  PRIMARY KEY (id)
+) ENGINE=TidesDB;
+
+--disable_query_log
+let $i = 100;
+while ($i)
+{
+  eval INSERT INTO t3 (data) VALUES (CONCAT('row_', $i));
+  dec $i;
+}
+--enable_query_log
+
+SELECT COUNT(*) FROM t3;
+SELECT * FROM t3 WHERE id = 50;
+SELECT * FROM t3 WHERE id BETWEEN 10 AND 20 ORDER BY id;
+
+DROP TABLE t3;
+
+#
+# Test CHECK TABLE and REPAIR TABLE
+#
+
+--echo # Test: CHECK TABLE
+CREATE TABLE t1 (
+  id INT NOT NULL AUTO_INCREMENT,
+  data VARCHAR(100),
+  PRIMARY KEY (id)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 (data) VALUES ('check test 1'), ('check test 2');
+
+CHECK TABLE t1;
+
+--echo # Test: REPAIR TABLE
+REPAIR TABLE t1;
+
+--echo # Test: OPTIMIZE TABLE
+OPTIMIZE TABLE t1;
+
+--echo # Test: ANALYZE TABLE
+ANALYZE TABLE t1;
+
+DROP TABLE t1;
+
+#
+# Test bulk insert
+#
+
+--echo # Test: Bulk insert performance
+CREATE TABLE t1 (
+  id INT NOT NULL AUTO_INCREMENT,
+  data VARCHAR(255),
+  PRIMARY KEY (id)
+) ENGINE=TidesDB;
+
+--disable_query_log
+let $i = 1000;
+while ($i)
+{
+  eval INSERT INTO t1 (data) VALUES (REPEAT('x', 200));
+  dec $i;
+}
+--enable_query_log
+
+SELECT COUNT(*) FROM t1;
+
+DROP TABLE t1;
+
+#
+# Test NULL handling
+#
+
+--echo # Test: NULL values
+CREATE TABLE t1 (
+  id INT NOT NULL AUTO_INCREMENT,
+  nullable_col VARCHAR(100),
+  PRIMARY KEY (id)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 (nullable_col) VALUES ('not null');
+INSERT INTO t1 (nullable_col) VALUES (NULL);
+INSERT INTO t1 (nullable_col) VALUES ('also not null');
+
+SELECT * FROM t1 ORDER BY id;
+SELECT * FROM t1 WHERE nullable_col IS NULL;
+SELECT * FROM t1 WHERE nullable_col IS NOT NULL ORDER BY id;
+
+DROP TABLE t1;
+
+#
+# Test DELETE ALL ROWS
+#
+
+--echo # Test: DELETE all rows
+CREATE TABLE t1 (
+  id INT NOT NULL AUTO_INCREMENT,
+  data VARCHAR(100),
+  PRIMARY KEY (id)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 (data) VALUES ('row1'), ('row2'), ('row3');
+SELECT COUNT(*) FROM t1;
+
+DELETE FROM t1;
+SELECT COUNT(*) FROM t1;
+
+DROP TABLE t1;
+
+#
+# Test RENAME TABLE
+#
+
+--echo # Test: RENAME TABLE
+CREATE TABLE t1 (
+  id INT NOT NULL AUTO_INCREMENT,
+  data VARCHAR(100),
+  PRIMARY KEY (id)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 (data) VALUES ('rename test');
+SELECT * FROM t1;
+
+RENAME TABLE t1 TO t2;
+SELECT * FROM t2;
+
+DROP TABLE t2;
+
+#
+# Test transactions (if supported)
+#
+
+--echo # Test: Basic transaction support
+CREATE TABLE t1 (
+  id INT NOT NULL AUTO_INCREMENT,
+  data VARCHAR(100),
+  PRIMARY KEY (id)
+) ENGINE=TidesDB;
+
+START TRANSACTION;
+INSERT INTO t1 (data) VALUES ('txn row 1');
+INSERT INTO t1 (data) VALUES ('txn row 2');
+COMMIT;
+
+SELECT * FROM t1 ORDER BY id;
+
+START TRANSACTION;
+INSERT INTO t1 (data) VALUES ('rollback row');
+ROLLBACK;
+
+SELECT * FROM t1 ORDER BY id;
+
+DROP TABLE t1;
+
+--echo # All TidesDB tests passed!
