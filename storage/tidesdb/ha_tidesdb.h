@@ -143,6 +143,11 @@ class ha_tidesdb: public handler
   uint ft_matched_count;            /* Number of matched PKs */
   uint ft_current_match;            /* Current position in matches */
 
+  /* Secondary index scan state */
+  tidesdb_iter_t *index_iter;       /* Iterator for secondary index scans */
+  uchar *index_key_buf;             /* Saved search key for index_next_same */
+  uint index_key_len;               /* Length of saved search key */
+
   /* Helper methods */
   int pack_row(uchar *buf, uchar **packed, size_t *packed_len);
   int unpack_row(uchar *buf, const uchar *packed, size_t packed_len);

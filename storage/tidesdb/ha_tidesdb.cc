@@ -698,7 +698,10 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
    current_key_len(0),
    bulk_insert_active(false),
    bulk_txn(NULL),
-   bulk_insert_rows(0)
+   bulk_insert_rows(0),
+   index_iter(NULL),
+   index_key_buf(NULL),
+   index_key_len(0)
 {
 }
 
@@ -713,6 +716,10 @@ ha_tidesdb::~ha_tidesdb()
     my_free(pk_buffer, MYF(0));
   if (row_buffer)
     my_free(row_buffer, MYF(0));
+  if (index_iter)
+    tidesdb_iter_free(index_iter);
+  if (index_key_buf)
+    my_free(index_key_buf, MYF(0));
 }
 
 /**
@@ -2768,24 +2775,35 @@ int ha_tidesdb::index_end()
 {
   DBUG_ENTER("ha_tidesdb::index_end");
   active_index = MAX_KEY;
+  
+  /* Clean up secondary index iterator */
+  if (index_iter)
+  {
+    tidesdb_iter_free(index_iter);
+    index_iter = NULL;
+  }
+  if (index_key_buf)
+  {
+    my_free(index_key_buf, MYF(0));
+    index_key_buf = NULL;
+    index_key_len = 0;
+  }
+  
   DBUG_RETURN(0);
 }
 
 /**
   @brief
   Read a row by index key.
+  
+  For primary key: directly lookup in main CF
+  For secondary index: lookup in index CF to get PK, then fetch row from main CF
 */
 int ha_tidesdb::index_read_map(uchar *buf, const uchar *key,
                                key_part_map keypart_map,
                                enum ha_rkey_function find_flag)
 {
   DBUG_ENTER("ha_tidesdb::index_read_map");
-  
-  /* For now, only support primary key lookups */
-  if (active_index != table->s->primary_key)
-  {
-    DBUG_RETURN(HA_ERR_WRONG_COMMAND);
-  }
   
   int ret;
   
@@ -2809,40 +2827,151 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key,
   }
   
   /* Get the key length */
-  KEY *pk = &table->key_info[active_index];
   uint key_len = calculate_key_len(table, active_index, key, keypart_map);
   
-  /* Get the row by key */
   uint8_t *value = NULL;
   size_t value_size = 0;
   
-  ret = tidesdb_txn_get(txn, share->cf, key, key_len, &value, &value_size);
+  if (active_index == table->s->primary_key)
+  {
+    /* Primary key lookup: directly get from main CF */
+    ret = tidesdb_txn_get(txn, share->cf, key, key_len, &value, &value_size);
+    
+    if (ret == TDB_ERR_NOT_FOUND)
+    {
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+    }
+    else if (ret != TDB_SUCCESS)
+    {
+      if (own_txn) tidesdb_txn_free(txn);
+      sql_print_error("TidesDB: Failed to get row by PK: %d", ret);
+      DBUG_RETURN(HA_ERR_GENERIC);
+    }
+    
+    /* Save the primary key */
+    free_current_key();
+    current_key = (uchar *)my_malloc(key_len, MYF(MY_WME));
+    if (!current_key)
+    {
+      free(value);
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+    }
+    memcpy(current_key, key, key_len);
+    current_key_len = key_len;
+  }
+  else
+  {
+    /* Secondary index lookup */
+    /* Check if we have a CF for this index */
+    if (active_index >= TIDESDB_MAX_INDEXES || !share->index_cf[active_index])
+    {
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+    }
+    
+    tidesdb_column_family_t *idx_cf = share->index_cf[active_index];
+    
+    /* For secondary index, we need to use an iterator to find matching keys */
+    /* The index stores: index_key -> primary_key */
+    tidesdb_iter_t *iter = NULL;
+    ret = tidesdb_iter_new(txn, idx_cf, &iter);
+    if (ret != TDB_SUCCESS)
+    {
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_GENERIC);
+    }
+    
+    /* Seek to the key */
+    ret = tidesdb_iter_seek(iter, (uint8_t *)key, key_len);
+    if (ret != TDB_SUCCESS || !tidesdb_iter_valid(iter))
+    {
+      tidesdb_iter_free(iter);
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+    }
+    
+    /* Get the index key and check if it matches our search key */
+    uint8_t *idx_key = NULL;
+    size_t idx_key_len = 0;
+    ret = tidesdb_iter_key(iter, &idx_key, &idx_key_len);
+    if (ret != TDB_SUCCESS)
+    {
+      tidesdb_iter_free(iter);
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+    }
+    
+    /* Check if the found key starts with our search key (prefix match) */
+    if (idx_key_len < key_len || memcmp(idx_key, key, key_len) != 0)
+    {
+      tidesdb_iter_free(iter);
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+    }
+    
+    /* Get the primary key (value of the index entry) */
+    uint8_t *pk_value = NULL;
+    size_t pk_len = 0;
+    ret = tidesdb_iter_value(iter, &pk_value, &pk_len);
+    if (ret != TDB_SUCCESS || pk_len == 0)
+    {
+      tidesdb_iter_free(iter);
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+    }
+    
+    /* Save the primary key for position() */
+    free_current_key();
+    current_key = (uchar *)my_malloc(pk_len, MYF(MY_WME));
+    if (!current_key)
+    {
+      tidesdb_iter_free(iter);
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+    }
+    memcpy(current_key, pk_value, pk_len);
+    current_key_len = pk_len;
+    
+    /* Save iterator for index_next_same */
+    if (index_iter)
+    {
+      tidesdb_iter_free(index_iter);
+    }
+    index_iter = iter;
+    
+    /* Save the search key for index_next_same */
+    if (index_key_buf)
+    {
+      my_free(index_key_buf, MYF(0));
+    }
+    index_key_buf = (uchar *)my_malloc(key_len, MYF(MY_WME));
+    if (index_key_buf)
+    {
+      memcpy(index_key_buf, key, key_len);
+      index_key_len = key_len;
+    }
+    
+    /* Now fetch the actual row using the primary key */
+    ret = tidesdb_txn_get(txn, share->cf, current_key, current_key_len, &value, &value_size);
+    if (ret == TDB_ERR_NOT_FOUND)
+    {
+      if (own_txn) tidesdb_txn_free(txn);
+      DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+    }
+    else if (ret != TDB_SUCCESS)
+    {
+      if (own_txn) tidesdb_txn_free(txn);
+      sql_print_error("TidesDB: Failed to get row by PK from secondary index: %d", ret);
+      DBUG_RETURN(HA_ERR_GENERIC);
+    }
+  }
   
   if (own_txn)
   {
     tidesdb_txn_free(txn);
   }
-  
-  if (ret == TDB_ERR_NOT_FOUND)
-  {
-    DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-  }
-  else if (ret != TDB_SUCCESS)
-  {
-    sql_print_error("TidesDB: Failed to get row by index: %d", ret);
-    DBUG_RETURN(HA_ERR_GENERIC);
-  }
-  
-  /* Save the key */
-  free_current_key();
-  current_key = (uchar *)my_malloc(key_len, MYF(MY_WME));
-  if (!current_key)
-  {
-    free(value);
-    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-  }
-  memcpy(current_key, key, key_len);
-  current_key_len = key_len;
   
   /* Unpack the row */
   ret = unpack_row(buf, value, value_size);
@@ -2871,8 +3000,8 @@ int ha_tidesdb::index_next(uchar *buf)
   @brief
   Read next row with the same key prefix.
   
-  This is used for queries like WHERE key_col = value to efficiently
-  iterate through all rows matching the key prefix.
+  For secondary indexes: uses index_iter to find next matching entry
+  For primary key: uses scan_iter
 */
 int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
 {
@@ -2880,6 +3009,76 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
   
   int ret;
   
+  /* For secondary index, use the saved iterator */
+  if (active_index != table->s->primary_key && index_iter)
+  {
+    /* Move to next entry in secondary index */
+    tidesdb_iter_next(index_iter);
+    
+    if (!tidesdb_iter_valid(index_iter))
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    
+    uint8_t *idx_key = NULL;
+    size_t idx_key_len = 0;
+    ret = tidesdb_iter_key(index_iter, &idx_key, &idx_key_len);
+    if (ret != TDB_SUCCESS)
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    
+    /* Check if key prefix still matches */
+    uint check_len = index_key_len > 0 ? index_key_len : keylen;
+    if (idx_key_len < check_len || 
+        memcmp(idx_key, index_key_buf ? index_key_buf : key, check_len) != 0)
+    {
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    }
+    
+    /* Get the primary key from the index entry */
+    uint8_t *pk_value = NULL;
+    size_t pk_len = 0;
+    ret = tidesdb_iter_value(index_iter, &pk_value, &pk_len);
+    if (ret != TDB_SUCCESS || pk_len == 0)
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    
+    /* Save the primary key */
+    free_current_key();
+    current_key = (uchar *)my_malloc(pk_len, MYF(MY_WME));
+    if (!current_key)
+      DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+    memcpy(current_key, pk_value, pk_len);
+    current_key_len = pk_len;
+    
+    /* Fetch the actual row using the primary key */
+    tidesdb_txn_t *txn = NULL;
+    bool own_txn = false;
+    if (current_txn)
+    {
+      txn = current_txn;
+    }
+    else
+    {
+      ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+      if (ret != TDB_SUCCESS)
+        DBUG_RETURN(HA_ERR_GENERIC);
+      own_txn = true;
+    }
+    
+    uint8_t *value = NULL;
+    size_t value_size = 0;
+    ret = tidesdb_txn_get(txn, share->cf, current_key, current_key_len, &value, &value_size);
+    
+    if (own_txn)
+      tidesdb_txn_free(txn);
+    
+    if (ret != TDB_SUCCESS)
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    
+    ret = unpack_row(buf, value, value_size);
+    free(value);
+    
+    DBUG_RETURN(ret);
+  }
+  
+  /* For primary key, use scan_iter */
   if (!scan_iter || !scan_initialized)
     DBUG_RETURN(HA_ERR_END_OF_FILE);
   
@@ -2891,7 +3090,6 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
   /* Loop to find next row with same key prefix, skipping metadata keys */
   while (tidesdb_iter_valid(scan_iter))
   {
-    /* Move to next entry */
     tidesdb_iter_next(scan_iter);
     
     if (!tidesdb_iter_valid(scan_iter))
@@ -2899,24 +3097,16 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
     
     ret = tidesdb_iter_key(scan_iter, &iter_key, &iter_key_size);
     if (ret != TDB_SUCCESS)
-    {
       DBUG_RETURN(HA_ERR_END_OF_FILE);
-    }
     
-    /* Skip metadata keys (internal keys starting with null byte) */
+    /* Skip metadata keys */
     if (iter_key_size > 0 && iter_key[0] == 0)
-    {
       continue;
-    }
     
     /* Check if key prefix still matches */
     if (iter_key_size < keylen || memcmp(iter_key, key, keylen) != 0)
-    {
-      /* Key prefix no longer matches - end of same-key range */
       DBUG_RETURN(HA_ERR_END_OF_FILE);
-    }
     
-    /* Found a matching row */
     break;
   }
   
@@ -2925,11 +3115,8 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
   
   ret = tidesdb_iter_value(scan_iter, &value, &value_size);
   if (ret != TDB_SUCCESS)
-  {
     DBUG_RETURN(HA_ERR_END_OF_FILE);
-  }
   
-  /* Save the current key for position() */
   free_current_key();
   current_key = (uchar *)my_malloc(iter_key_size, MYF(MY_WME));
   if (!current_key)
@@ -2937,14 +3124,8 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
   memcpy(current_key, iter_key, iter_key_size);
   current_key_len = iter_key_size;
   
-  /* Unpack the row */
   ret = unpack_row(buf, value, value_size);
-  if (ret)
-  {
-    DBUG_RETURN(ret);
-  }
-  
-  DBUG_RETURN(0);
+  DBUG_RETURN(ret);
 }
 
 /**
