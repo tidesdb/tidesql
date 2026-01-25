@@ -12,13 +12,19 @@
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
-INCLUDE("${PROJECT_SOURCE_DIR}/win/mysql_manifest.cmake")
+IF(WIN32)
+  INCLUDE("${PROJECT_SOURCE_DIR}/win/mysql_manifest.cmake")
+ENDIF()
 
 SET(CMAKE_CXX_FLAGS_DEBUG 
-    "${CMAKE_CXX_FLAGS_DEBUG} -DSAFEMALLOC -DSAFE_MUTEX -DUSE_SYMDIR /Zi")
+    "${CMAKE_CXX_FLAGS_DEBUG} -DSAFEMALLOC -DSAFE_MUTEX -DUSE_SYMDIR")
 SET(CMAKE_C_FLAGS_DEBUG 
-    "${CMAKE_C_FLAGS_DEBUG} -DSAFEMALLOC -DSAFE_MUTEX -DUSE_SYMDIR /Zi")
-SET(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} /MAP /MAPINFO:EXPORTS") 
+    "${CMAKE_C_FLAGS_DEBUG} -DSAFEMALLOC -DSAFE_MUTEX -DUSE_SYMDIR")
+IF(MSVC)
+  SET(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Zi")
+  SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /Zi")
+  SET(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} /MAP /MAPINFO:EXPORTS")
+ENDIF() 
 
 INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/include 
                     ${CMAKE_SOURCE_DIR}/extra/yassl/include 
@@ -90,14 +96,22 @@ ADD_LIBRARY(sql ${SQL_SOURCE})
 IF (NOT EXISTS cmake_dummy.cc)
   FILE (WRITE cmake_dummy.cc "")
 ENDIF (NOT EXISTS cmake_dummy.cc)
-ADD_EXECUTABLE(mysqld cmake_dummy.cc message.rc)
+IF(WIN32)
+  ADD_EXECUTABLE(mysqld cmake_dummy.cc message.rc)
+ELSE()
+  ADD_EXECUTABLE(mysqld cmake_dummy.cc)
+ENDIF()
 
 SET_TARGET_PROPERTIES(mysqld PROPERTIES OUTPUT_NAME mysqld${MYSQLD_EXE_SUFFIX})
 SET_TARGET_PROPERTIES(mysqld PROPERTIES ENABLE_EXPORTS TRUE)
 
 SET (MYSQLD_CORE_LIBS mysys zlib dbug strings yassl taocrypt vio regex sql)
 TARGET_LINK_LIBRARIES(mysqld ${MYSQLD_CORE_LIBS} ${MYSQLD_STATIC_ENGINE_LIBS})
-TARGET_LINK_LIBRARIES(mysqld ws2_32.lib)
+IF(WIN32)
+  TARGET_LINK_LIBRARIES(mysqld ws2_32.lib)
+ELSE()
+  TARGET_LINK_LIBRARIES(mysqld pthread dl m)
+ENDIF()
 
 
 IF(MSVC AND NOT WITHOUT_DYNAMIC_PLUGINS)
@@ -106,9 +120,7 @@ IF(MSVC AND NOT WITHOUT_DYNAMIC_PLUGINS)
   SET_TARGET_PROPERTIES(mysqld PROPERTIES LINK_FLAGS "/DEF:mysqld.def /INCREMENTAL:NO")
 
   FOREACH (CORELIB ${MYSQLD_CORE_LIBS})
-    GET_TARGET_PROPERTY(LOC ${CORELIB} LOCATION)
-    FILE(TO_NATIVE_PATH ${LOC} LOC)
-    SET (LIB_LOCATIONS ${LIB_LOCATIONS} ${LOC}) 
+    SET (LIB_LOCATIONS ${LIB_LOCATIONS} $<TARGET_FILE:${CORELIB}>) 
   ENDFOREACH (CORELIB ${MYSQLD_CORE_LIBS})
  
   ADD_CUSTOM_COMMAND(TARGET mysqld PRE_LINK
@@ -130,12 +142,15 @@ ADD_CUSTOM_COMMAND(
 
 # Gen_lex_hash
 ADD_EXECUTABLE(gen_lex_hash gen_lex_hash.cc)
-TARGET_LINK_LIBRARIES(gen_lex_hash debug dbug mysqlclient wsock32)
-GET_TARGET_PROPERTY(GEN_LEX_HASH_EXE gen_lex_hash LOCATION)
+IF(WIN32)
+  TARGET_LINK_LIBRARIES(gen_lex_hash debug dbug mysqlclient wsock32)
+ELSE()
+  TARGET_LINK_LIBRARIES(gen_lex_hash debug dbug mysqlclient)
+ENDIF()
 ADD_CUSTOM_COMMAND(
         OUTPUT ${PROJECT_SOURCE_DIR}/sql/lex_hash.h
-        COMMAND ${GEN_LEX_HASH_EXE} ARGS > lex_hash.h
-        DEPENDS ${GEN_LEX_HASH_EXE})
+        COMMAND $<TARGET_FILE:gen_lex_hash> ARGS > lex_hash.h
+        DEPENDS gen_lex_hash)
 
 ADD_CUSTOM_TARGET(
         GenServerSource ALL
@@ -151,6 +166,11 @@ ADD_DEPENDENCIES(mysqld GenServerSource)
 SET_DIRECTORY_PROPERTIES(PROPERTIES ADDITIONAL_MAKE_CLEAN_FILES 
   "lex_hash.h;sql_yacc.h;sql_yacc.cc;mysqld.def")
 
-ADD_LIBRARY(udf_example MODULE udf_example.c udf_example.def)
+IF(WIN32)
+  ADD_LIBRARY(udf_example MODULE udf_example.c udf_example.def)
+  TARGET_LINK_LIBRARIES(udf_example strings wsock32)
+ELSE()
+  ADD_LIBRARY(udf_example MODULE udf_example.c)
+  TARGET_LINK_LIBRARIES(udf_example strings)
+ENDIF()
 ADD_DEPENDENCIES(udf_example strings GenError)
-TARGET_LINK_LIBRARIES(udf_example strings wsock32)

@@ -14,23 +14,32 @@
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 # Build mysql_fix_privilege_tables.sql
-ADD_CUSTOM_COMMAND(OUTPUT ${PROJECT_SOURCE_DIR}/scripts/mysql_fix_privilege_tables.sql
-                   COMMAND copy /b
-                   mysql_system_tables.sql + mysql_system_tables_fix.sql
-                   mysql_fix_privilege_tables.sql
-                   DEPENDS
-                   ${PROJECT_SOURCE_DIR}/scripts/mysql_system_tables.sql
-                   ${PROJECT_SOURCE_DIR}/scripts/mysql_system_tables_fix.sql)
+IF(WIN32)
+  ADD_CUSTOM_COMMAND(OUTPUT ${PROJECT_SOURCE_DIR}/scripts/mysql_fix_privilege_tables.sql
+                     COMMAND copy /b
+                     mysql_system_tables.sql + mysql_system_tables_fix.sql
+                     mysql_fix_privilege_tables.sql
+                     DEPENDS
+                     ${PROJECT_SOURCE_DIR}/scripts/mysql_system_tables.sql
+                     ${PROJECT_SOURCE_DIR}/scripts/mysql_system_tables_fix.sql)
+ELSE()
+  ADD_CUSTOM_COMMAND(OUTPUT ${PROJECT_SOURCE_DIR}/scripts/mysql_fix_privilege_tables.sql
+                     COMMAND cat
+                     ${PROJECT_SOURCE_DIR}/scripts/mysql_system_tables.sql
+                     ${PROJECT_SOURCE_DIR}/scripts/mysql_system_tables_fix.sql
+                     > ${PROJECT_SOURCE_DIR}/scripts/mysql_fix_privilege_tables.sql
+                     DEPENDS
+                     ${PROJECT_SOURCE_DIR}/scripts/mysql_system_tables.sql
+                     ${PROJECT_SOURCE_DIR}/scripts/mysql_system_tables_fix.sql)
+ENDIF()
 
 # Build comp_sql - used for embedding SQL in C or C++ programs
 ADD_EXECUTABLE(comp_sql comp_sql.c)
 TARGET_LINK_LIBRARIES(comp_sql debug dbug mysys strings)
 
 # Use comp_sql to build mysql_fix_privilege_tables_sql.c
-GET_TARGET_PROPERTY(COMP_SQL_EXE comp_sql LOCATION)
-
 ADD_CUSTOM_COMMAND(OUTPUT ${PROJECT_SOURCE_DIR}/scripts/mysql_fix_privilege_tables_sql.c
-                   COMMAND ${COMP_SQL_EXE}
+                   COMMAND $<TARGET_FILE:comp_sql>
                    mysql_fix_privilege_tables
                    mysql_fix_privilege_tables.sql
                    mysql_fix_privilege_tables_sql.c
@@ -45,7 +54,11 @@ ADD_CUSTOM_TARGET(GenFixPrivs
 # Replace some variables @foo@ in the .in/.sh file, and write the new script
 # ----------------------------------------------------------------------
 
-SET(CFLAGS             "-D_WINDOWS ${CMAKE_C_FLAGS_RELWITHDEBINFO}")
+IF(WIN32)
+  SET(CFLAGS             "-D_WINDOWS ${CMAKE_C_FLAGS_RELWITHDEBINFO}")
+ELSE()
+  SET(CFLAGS             "${CMAKE_C_FLAGS_RELWITHDEBINFO}")
+ENDIF()
 SET(prefix             "${CMAKE_INSTALL_PREFIX}/MySQL Server ${MYSQL_BASE_VERSION}")
 SET(sysconfdir          ${prefix})
 SET(bindir              ${prefix}/bin)
