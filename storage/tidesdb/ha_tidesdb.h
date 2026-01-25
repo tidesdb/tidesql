@@ -74,6 +74,14 @@ typedef struct st_tidesdb_share {
   
   /* TTL column index (-1 if no TTL column) */
   int ttl_field_index;
+  
+  /* Auto-increment tracking */
+  ulonglong auto_increment_value;
+  pthread_mutex_t auto_inc_mutex;
+  
+  /* Row count cache */
+  ha_rows row_count;
+  bool row_count_valid;
 } TIDESDB_SHARE;
 
 /** @brief
@@ -102,6 +110,11 @@ class ha_tidesdb: public handler
   /* Current row position (for rnd_pos) */
   uchar *current_key;
   size_t current_key_len;
+  
+  /* Bulk insert state */
+  bool bulk_insert_active;
+  tidesdb_txn_t *bulk_txn;
+  ha_rows bulk_insert_rows;
 
   /* Helper methods */
   int pack_row(uchar *buf, uchar **packed, size_t *packed_len);
@@ -218,11 +231,30 @@ public:
   /* Table maintenance */
   int optimize(THD* thd, HA_CHECK_OPT* check_opt);
   int analyze(THD* thd, HA_CHECK_OPT* check_opt);
+  int check(THD* thd, HA_CHECK_OPT* check_opt);
+  int repair(THD* thd, HA_CHECK_OPT* check_opt);
+  int backup(THD* thd, HA_CHECK_OPT* check_opt);
+  bool check_and_repair(THD *thd);
+  bool is_crashed() const;
+  
+  /* Auto-increment */
+  virtual void get_auto_increment(ulonglong offset, ulonglong increment,
+                                  ulonglong nb_desired_values,
+                                  ulonglong *first_value,
+                                  ulonglong *nb_reserved_values);
+  int reset_auto_increment(ulonglong value);
+  
+  /* Bulk insert optimization */
+  void start_bulk_insert(ha_rows rows);
+  int end_bulk_insert();
   
   /* Locking */
   int external_lock(THD *thd, int lock_type);
   THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to,
                              enum thr_lock_type lock_type);
+  
+  /* Reset handler state */
+  int reset(void);
 };
 
 #endif /* HA_TIDESDB_H */

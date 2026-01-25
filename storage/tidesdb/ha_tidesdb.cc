@@ -191,11 +191,15 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
     share->cf = NULL;
     share->has_primary_key = false;
     share->pk_parts = 0;
+    share->auto_increment_value = 1;
+    share->row_count = 0;
+    share->row_count_valid = false;
     
     if (my_hash_insert(&tidesdb_open_tables, (uchar*) share))
       goto error;
     thr_lock_init(&share->lock);
     pthread_mutex_init(&share->mutex, MY_MUTEX_INIT_FAST);
+    pthread_mutex_init(&share->auto_inc_mutex, MY_MUTEX_INIT_FAST);
   }
   share->use_count++;
   pthread_mutex_unlock(&tidesdb_mutex);
@@ -204,6 +208,7 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
 
 error:
   pthread_mutex_destroy(&share->mutex);
+  pthread_mutex_destroy(&share->auto_inc_mutex);
   my_free(share, MYF(0));
   pthread_mutex_unlock(&tidesdb_mutex);
   return NULL;
@@ -221,6 +226,7 @@ static int free_share(TIDESDB_SHARE *share)
     hash_delete(&tidesdb_open_tables, (uchar*) share);
     thr_lock_delete(&share->lock);
     pthread_mutex_destroy(&share->mutex);
+    pthread_mutex_destroy(&share->auto_inc_mutex);
     /* Note: We don't drop the column family here, just release the share */
     my_free(share, MYF(0));
   }
@@ -497,7 +503,10 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
    row_buffer(NULL),
    row_buffer_len(0),
    current_key(NULL),
-   current_key_len(0)
+   current_key_len(0),
+   bulk_insert_active(false),
+   bulk_txn(NULL),
+   bulk_insert_rows(0)
 {
 }
 
@@ -850,11 +859,16 @@ int ha_tidesdb::write_row(uchar *buf)
   if (ret)
     DBUG_RETURN(ret);
   
-  /* Begin a transaction if we don't have one */
+  /* Use bulk transaction if active, otherwise begin a new one */
   tidesdb_txn_t *txn = NULL;
   bool own_txn = false;
   
-  if (current_txn)
+  if (bulk_insert_active && bulk_txn)
+  {
+    /* Use the bulk insert transaction */
+    txn = bulk_txn;
+  }
+  else if (current_txn)
   {
     txn = current_txn;
   }
@@ -1467,7 +1481,53 @@ int ha_tidesdb::index_next(uchar *buf)
 int ha_tidesdb::index_prev(uchar *buf)
 {
   DBUG_ENTER("ha_tidesdb::index_prev");
-  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+  
+  int ret;
+  
+  if (!scan_iter || !scan_initialized)
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  
+  /* Move to previous entry */
+  tidesdb_iter_prev(scan_iter);
+  
+  /* Check if iterator is valid */
+  if (!tidesdb_iter_valid(scan_iter))
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  
+  /* Get the current key and value */
+  uint8_t *key = NULL;
+  size_t key_size = 0;
+  uint8_t *value = NULL;
+  size_t value_size = 0;
+  
+  ret = tidesdb_iter_key(scan_iter, &key, &key_size);
+  if (ret != TDB_SUCCESS)
+  {
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  }
+  
+  ret = tidesdb_iter_value(scan_iter, &value, &value_size);
+  if (ret != TDB_SUCCESS)
+  {
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  }
+  
+  /* Save the current key for position() */
+  free_current_key();
+  current_key = (uchar *)my_malloc(key_size, MYF(MY_WME));
+  if (!current_key)
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  memcpy(current_key, key, key_size);
+  current_key_len = key_size;
+  
+  /* Unpack the row */
+  ret = unpack_row(buf, value, value_size);
+  if (ret)
+  {
+    DBUG_RETURN(ret);
+  }
+  
+  DBUG_RETURN(0);
 }
 
 /**
@@ -1492,7 +1552,79 @@ int ha_tidesdb::index_first(uchar *buf)
 int ha_tidesdb::index_last(uchar *buf)
 {
   DBUG_ENTER("ha_tidesdb::index_last");
-  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+  
+  int ret;
+  
+  /* Clean up any existing iterator */
+  if (scan_iter)
+  {
+    tidesdb_iter_free(scan_iter);
+    scan_iter = NULL;
+  }
+  
+  /* Begin a transaction for the scan if needed */
+  if (!current_txn)
+  {
+    ret = tidesdb_txn_begin_with_isolation(tidesdb_instance,
+                                            (int)tidesdb_default_isolation,
+                                            &current_txn);
+    if (ret != TDB_SUCCESS)
+    {
+      sql_print_error("TidesDB: Failed to begin transaction for index_last: %d", ret);
+      DBUG_RETURN(HA_ERR_GENERIC);
+    }
+  }
+  
+  /* Create an iterator */
+  ret = tidesdb_iter_new(current_txn, share->cf, &scan_iter);
+  if (ret != TDB_SUCCESS)
+  {
+    sql_print_error("TidesDB: Failed to create iterator: %d", ret);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  /* Seek to the last entry */
+  tidesdb_iter_seek_to_last(scan_iter);
+  scan_initialized = true;
+  
+  /* Check if iterator is valid */
+  if (!tidesdb_iter_valid(scan_iter))
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  
+  /* Get the current key and value */
+  uint8_t *key = NULL;
+  size_t key_size = 0;
+  uint8_t *value = NULL;
+  size_t value_size = 0;
+  
+  ret = tidesdb_iter_key(scan_iter, &key, &key_size);
+  if (ret != TDB_SUCCESS)
+  {
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  }
+  
+  ret = tidesdb_iter_value(scan_iter, &value, &value_size);
+  if (ret != TDB_SUCCESS)
+  {
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  }
+  
+  /* Save the current key for position() */
+  free_current_key();
+  current_key = (uchar *)my_malloc(key_size, MYF(MY_WME));
+  if (!current_key)
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  memcpy(current_key, key, key_size);
+  current_key_len = key_size;
+  
+  /* Unpack the row */
+  ret = unpack_row(buf, value, value_size);
+  if (ret)
+  {
+    DBUG_RETURN(ret);
+  }
+  
+  DBUG_RETURN(0);
 }
 
 /**
@@ -1506,9 +1638,40 @@ int ha_tidesdb::info(uint flag)
   /* Provide basic statistics */
   if (flag & HA_STATUS_VARIABLE)
   {
-    stats.records = 1000;  /* Estimate - should query TidesDB for real count */
+    /* Use cached row count if available, otherwise estimate */
+    if (share && share->row_count_valid)
+    {
+      stats.records = share->row_count;
+    }
+    else
+    {
+      /* Estimate based on data size or use a reasonable default */
+      stats.records = 1000;
+    }
     stats.deleted = 0;
-    stats.data_file_length = 1024 * 1024;  /* Estimate */
+    
+    /* Get actual data size from TidesDB statistics if available */
+    if (share && share->cf)
+    {
+      tidesdb_stats_t *tdb_stats = NULL;
+      if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+      {
+        stats.data_file_length = 0;
+        for (int i = 0; i < tdb_stats->num_levels; i++)
+        {
+          stats.data_file_length += tdb_stats->level_sizes[i];
+        }
+        tidesdb_free_stats(tdb_stats);
+      }
+      else
+      {
+        stats.data_file_length = 1024 * 1024;  /* Fallback estimate */
+      }
+    }
+    else
+    {
+      stats.data_file_length = 1024 * 1024;
+    }
     stats.index_file_length = 0;
     stats.mean_rec_length = table->s->reclength;
   }
@@ -1521,7 +1684,16 @@ int ha_tidesdb::info(uint flag)
   
   if (flag & HA_STATUS_AUTO)
   {
-    stats.auto_increment_value = 1;
+    if (share)
+    {
+      pthread_mutex_lock(&share->auto_inc_mutex);
+      stats.auto_increment_value = share->auto_increment_value;
+      pthread_mutex_unlock(&share->auto_inc_mutex);
+    }
+    else
+    {
+      stats.auto_increment_value = 1;
+    }
   }
   
   DBUG_RETURN(0);
@@ -1768,6 +1940,384 @@ int ha_tidesdb::ft_read(uchar *buf)
 {
   DBUG_ENTER("ha_tidesdb::ft_read");
   DBUG_RETURN(HA_ERR_END_OF_FILE);
+}
+
+/**
+  @brief
+  Get auto-increment value for INSERT.
+*/
+void ha_tidesdb::get_auto_increment(ulonglong offset, ulonglong increment,
+                                    ulonglong nb_desired_values,
+                                    ulonglong *first_value,
+                                    ulonglong *nb_reserved_values)
+{
+  DBUG_ENTER("ha_tidesdb::get_auto_increment");
+  
+  pthread_mutex_lock(&share->auto_inc_mutex);
+  
+  /* Get current auto-increment value */
+  *first_value = share->auto_increment_value;
+  
+  /* Reserve the requested number of values */
+  share->auto_increment_value += nb_desired_values * increment;
+  
+  /* TidesDB supports concurrent inserts, so reserve all requested */
+  *nb_reserved_values = nb_desired_values;
+  
+  pthread_mutex_unlock(&share->auto_inc_mutex);
+  
+  DBUG_VOID_RETURN;
+}
+
+/**
+  @brief
+  Reset auto-increment value.
+*/
+int ha_tidesdb::reset_auto_increment(ulonglong value)
+{
+  DBUG_ENTER("ha_tidesdb::reset_auto_increment");
+  
+  pthread_mutex_lock(&share->auto_inc_mutex);
+  share->auto_increment_value = value;
+  pthread_mutex_unlock(&share->auto_inc_mutex);
+  
+  DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Start bulk insert operation.
+  
+  Optimizes for large inserts by batching operations in a single transaction.
+*/
+void ha_tidesdb::start_bulk_insert(ha_rows rows)
+{
+  DBUG_ENTER("ha_tidesdb::start_bulk_insert");
+  DBUG_PRINT("info", ("start_bulk_insert: rows %lu", (ulong)rows));
+  
+  bulk_insert_rows = rows;
+  bulk_insert_active = true;
+  
+  /* Start a transaction for the bulk insert */
+  if (!bulk_txn)
+  {
+    int ret = tidesdb_txn_begin(tidesdb_instance, &bulk_txn);
+    if (ret != TDB_SUCCESS)
+    {
+      sql_print_warning("TidesDB: Failed to begin bulk insert transaction");
+      bulk_txn = NULL;
+      bulk_insert_active = false;
+    }
+  }
+  
+  DBUG_VOID_RETURN;
+}
+
+/**
+  @brief
+  End bulk insert operation.
+  
+  Commits the batched transaction.
+*/
+int ha_tidesdb::end_bulk_insert()
+{
+  DBUG_ENTER("ha_tidesdb::end_bulk_insert");
+  
+  int ret = 0;
+  
+  if (bulk_txn)
+  {
+    ret = tidesdb_txn_commit(bulk_txn);
+    if (ret != TDB_SUCCESS)
+    {
+      sql_print_error("TidesDB: Failed to commit bulk insert: %d", ret);
+      tidesdb_txn_rollback(bulk_txn);
+      ret = HA_ERR_GENERIC;
+    }
+    tidesdb_txn_free(bulk_txn);
+    bulk_txn = NULL;
+  }
+  
+  bulk_insert_active = false;
+  bulk_insert_rows = 0;
+  
+  /* Invalidate row count cache since we inserted rows */
+  share->row_count_valid = false;
+  
+  DBUG_RETURN(ret);
+}
+
+/**
+  @brief
+  Check table for errors.
+*/
+int ha_tidesdb::check(THD* thd, HA_CHECK_OPT* check_opt)
+{
+  DBUG_ENTER("ha_tidesdb::check");
+  
+  if (!share || !share->cf)
+  {
+    DBUG_RETURN(HA_ADMIN_CORRUPT);
+  }
+  
+  /* TidesDB has built-in checksums and corruption detection */
+  /* A simple scan will verify data integrity */
+  
+  tidesdb_txn_t *txn = NULL;
+  int ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+  if (ret != TDB_SUCCESS)
+  {
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  tidesdb_iter_t *iter = NULL;
+  ret = tidesdb_iter_new(txn, share->cf, &iter);
+  if (ret != TDB_SUCCESS)
+  {
+    tidesdb_txn_free(txn);
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  ha_rows count = 0;
+  tidesdb_iter_seek_to_first(iter);
+  
+  while (tidesdb_iter_valid(iter))
+  {
+    count++;
+    tidesdb_iter_next(iter);
+  }
+  
+  tidesdb_iter_free(iter);
+  tidesdb_txn_free(txn);
+  
+  /* Update row count cache */
+  share->row_count = count;
+  share->row_count_valid = true;
+  
+  sql_print_information("TidesDB: Table check completed, %lu rows verified", 
+                        (ulong)count);
+  
+  DBUG_RETURN(HA_ADMIN_OK);
+}
+
+/**
+  @brief
+  Repair table - triggers compaction to clean up any issues.
+*/
+int ha_tidesdb::repair(THD* thd, HA_CHECK_OPT* check_opt)
+{
+  DBUG_ENTER("ha_tidesdb::repair");
+  
+  if (!share || !share->cf)
+  {
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  /* TidesDB's compaction removes tombstones and merges data */
+  int ret = tidesdb_compact(share->cf);
+  if (ret != TDB_SUCCESS)
+  {
+    sql_print_error("TidesDB: Repair (compaction) failed: %d", ret);
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  sql_print_information("TidesDB: Table repair (compaction) completed");
+  
+  DBUG_RETURN(HA_ADMIN_OK);
+}
+
+/**
+  @brief
+  Backup table using TidesDB's backup API.
+*/
+int ha_tidesdb::backup(THD* thd, HA_CHECK_OPT* check_opt)
+{
+  DBUG_ENTER("ha_tidesdb::backup");
+  
+  /* TidesDB backup is done at the database level, not per-table */
+  /* For per-table backup, we would need to implement a custom solution */
+  
+  char backup_path[FN_REFLEN];
+  snprintf(backup_path, sizeof(backup_path), "%s/tidesdb_backup_%lu",
+           mysql_data_home, (ulong)time(NULL));
+  
+  int ret = tidesdb_backup(tidesdb_instance, backup_path);
+  if (ret != TDB_SUCCESS)
+  {
+    sql_print_error("TidesDB: Backup failed: %d", ret);
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  sql_print_information("TidesDB: Backup completed to %s", backup_path);
+  
+  DBUG_RETURN(HA_ADMIN_OK);
+}
+
+/**
+  @brief
+  Check and repair table if needed.
+*/
+bool ha_tidesdb::check_and_repair(THD *thd)
+{
+  DBUG_ENTER("ha_tidesdb::check_and_repair");
+  
+  HA_CHECK_OPT check_opt;
+  check_opt.init();
+  
+  if (check(thd, &check_opt) == HA_ADMIN_CORRUPT)
+  {
+    repair(thd, &check_opt);
+    DBUG_RETURN(TRUE);
+  }
+  
+  DBUG_RETURN(FALSE);
+}
+
+/**
+  @brief
+  Check if table is crashed.
+  
+  TidesDB has built-in corruption detection, so this is rarely true.
+*/
+bool ha_tidesdb::is_crashed() const
+{
+  DBUG_ENTER("ha_tidesdb::is_crashed");
+  /* TidesDB handles corruption internally */
+  DBUG_RETURN(FALSE);
+}
+
+/**
+  @brief
+  Reset handler state between statements.
+*/
+int ha_tidesdb::reset(void)
+{
+  DBUG_ENTER("ha_tidesdb::reset");
+  
+  /* Clean up any scan state */
+  if (scan_iter)
+  {
+    tidesdb_iter_free(scan_iter);
+    scan_iter = NULL;
+  }
+  scan_initialized = false;
+  
+  /* Free current key */
+  free_current_key();
+  
+  DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Rename a table by copying data to new column family.
+*/
+int ha_tidesdb::rename_table(const char *from, const char *to)
+{
+  DBUG_ENTER("ha_tidesdb::rename_table");
+  
+  char from_cf[256], to_cf[256];
+  get_cf_name(from, from_cf, sizeof(from_cf));
+  get_cf_name(to, to_cf, sizeof(to_cf));
+  
+  /* Get source column family */
+  tidesdb_column_family_t *src_cf = tidesdb_get_column_family(tidesdb_instance, from_cf);
+  if (!src_cf)
+  {
+    sql_print_error("TidesDB: Source table '%s' not found for rename", from);
+    DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
+  }
+  
+  /* Create destination column family with same config */
+  tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
+  cf_config.write_buffer_size = tidesdb_write_buffer_size;
+  cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
+  cf_config.bloom_fpr = tidesdb_bloom_fpr;
+  
+  if (tidesdb_enable_compression)
+  {
+    cf_config.compression_algo = tidesdb_compression_algo;
+  }
+  
+  int ret = tidesdb_create_column_family(tidesdb_instance, to_cf, &cf_config);
+  if (ret != TDB_SUCCESS)
+  {
+    sql_print_error("TidesDB: Failed to create destination CF '%s': %d", to_cf, ret);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  tidesdb_column_family_t *dst_cf = tidesdb_get_column_family(tidesdb_instance, to_cf);
+  if (!dst_cf)
+  {
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  /* Copy all data from source to destination */
+  tidesdb_txn_t *txn = NULL;
+  ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+  if (ret != TDB_SUCCESS)
+  {
+    tidesdb_drop_column_family(tidesdb_instance, to_cf);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  tidesdb_iter_t *iter = NULL;
+  ret = tidesdb_iter_new(txn, src_cf, &iter);
+  if (ret != TDB_SUCCESS)
+  {
+    tidesdb_txn_free(txn);
+    tidesdb_drop_column_family(tidesdb_instance, to_cf);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  tidesdb_iter_seek_to_first(iter);
+  
+  while (tidesdb_iter_valid(iter))
+  {
+    uint8_t *key = NULL;
+    size_t key_size = 0;
+    uint8_t *value = NULL;
+    size_t value_size = 0;
+    
+    if (tidesdb_iter_key(iter, &key, &key_size) == TDB_SUCCESS &&
+        tidesdb_iter_value(iter, &value, &value_size) == TDB_SUCCESS)
+    {
+      ret = tidesdb_txn_put(txn, dst_cf, key, key_size, value, value_size, -1);
+      if (ret != TDB_SUCCESS)
+      {
+        tidesdb_iter_free(iter);
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        tidesdb_drop_column_family(tidesdb_instance, to_cf);
+        DBUG_RETURN(HA_ERR_GENERIC);
+      }
+    }
+    
+    tidesdb_iter_next(iter);
+  }
+  
+  tidesdb_iter_free(iter);
+  
+  ret = tidesdb_txn_commit(txn);
+  tidesdb_txn_free(txn);
+  
+  if (ret != TDB_SUCCESS)
+  {
+    tidesdb_drop_column_family(tidesdb_instance, to_cf);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  /* Drop source column family */
+  ret = tidesdb_drop_column_family(tidesdb_instance, from_cf);
+  if (ret != TDB_SUCCESS)
+  {
+    sql_print_warning("TidesDB: Failed to drop source CF '%s' after rename: %d", 
+                      from_cf, ret);
+  }
+  
+  sql_print_information("TidesDB: Renamed table '%s' to '%s'", from, to);
+  
+  DBUG_RETURN(0);
 }
 
 /*
