@@ -8788,7 +8788,7 @@ static int mysql_init_variables(void)
   character_set_filesystem_name= (char*) "binary";
   lc_time_names_name= (char*) "en_US";
   /* Set default values for some option variables */
-  default_storage_engine_str= (char*) "MyISAM";
+  default_storage_engine_str= (char*) "TidesDB";
   global_system_variables.table_plugin= NULL;
   global_system_variables.tx_isolation= ISO_REPEATABLE_READ;
   global_system_variables.select_limit= (ulonglong) HA_POS_ERROR;
