@@ -287,6 +287,18 @@ static void get_cf_name(const char *table_path, char *cf_name, size_t cf_name_le
   }
 }
 
+/* Savepoint data structure - must be defined before init function */
+struct tidesdb_savepoint_t
+{
+  char name[64];  /* Savepoint name derived from pointer address */
+  tidesdb_txn_t *txn;  /* Transaction at time of savepoint (for reference) */
+};
+
+/* Forward declarations for savepoint functions */
+static int tidesdb_savepoint_set(handlerton *hton, THD *thd, void *savepoint);
+static int tidesdb_savepoint_rollback(handlerton *hton, THD *thd, void *savepoint);
+static int tidesdb_savepoint_release(handlerton *hton, THD *thd, void *savepoint);
+
 /**
   @brief
   Initialize the TidesDB storage engine.
@@ -307,6 +319,12 @@ static int tidesdb_init_func(void *p)
   tidesdb_hton->commit = tidesdb_commit;
   tidesdb_hton->rollback = tidesdb_rollback;
   tidesdb_hton->show_status = tidesdb_show_status;
+  
+  /* Savepoint support */
+  tidesdb_hton->savepoint_offset = sizeof(tidesdb_savepoint_t);
+  tidesdb_hton->savepoint_set = tidesdb_savepoint_set;
+  tidesdb_hton->savepoint_rollback = tidesdb_savepoint_rollback;
+  tidesdb_hton->savepoint_release = tidesdb_savepoint_release;
   
   /* Initialize TidesDB instance */
   char db_path[FN_REFLEN];
@@ -367,24 +385,194 @@ static int tidesdb_done_func(void *p)
 }
 
 /**
+  Thread-local transaction storage.
+  We use thd_get_ha_data/thd_set_ha_data to store the transaction per-thread.
+*/
+static tidesdb_txn_t* get_thd_txn(THD *thd, handlerton *hton)
+{
+  return (tidesdb_txn_t*)thd_get_ha_data(thd, hton);
+}
+
+static void set_thd_txn(THD *thd, handlerton *hton, tidesdb_txn_t *txn)
+{
+  thd_set_ha_data(thd, hton, txn);
+}
+
+/**
   @brief
   Commit a transaction.
+  
+  Called by MySQL when COMMIT is issued or when auto-commit commits
+  a statement. For multi-statement transactions, this commits the
+  THD-level transaction.
 */
 static int tidesdb_commit(handlerton *hton, THD *thd, bool all, bool async)
 {
   DBUG_ENTER("tidesdb_commit");
-  /* Transaction commit is handled per-statement in external_lock */
+  
+  tidesdb_txn_t *txn = get_thd_txn(thd, hton);
+  
+  if (txn && all)
+  {
+    /* Commit the THD-level transaction */
+    int ret = tidesdb_txn_commit(txn);
+    tidesdb_txn_free(txn);
+    set_thd_txn(thd, hton, NULL);
+    
+    if (ret != TDB_SUCCESS)
+    {
+      sql_print_error("TidesDB: Failed to commit transaction: %d", ret);
+      DBUG_RETURN(HA_ERR_GENERIC);
+    }
+    DBUG_PRINT("info", ("TidesDB: Transaction committed"));
+  }
+  
   DBUG_RETURN(0);
 }
 
 /**
   @brief
   Rollback a transaction.
+  
+  Called by MySQL when ROLLBACK is issued. For multi-statement
+  transactions, this rolls back the THD-level transaction.
 */
 static int tidesdb_rollback(handlerton *hton, THD *thd, bool all)
 {
   DBUG_ENTER("tidesdb_rollback");
-  /* Transaction rollback is handled per-statement in external_lock */
+  
+  tidesdb_txn_t *txn = get_thd_txn(thd, hton);
+  
+  if (txn && all)
+  {
+    /* Rollback the THD-level transaction */
+    int ret = tidesdb_txn_rollback(txn);
+    tidesdb_txn_free(txn);
+    set_thd_txn(thd, hton, NULL);
+    
+    if (ret != TDB_SUCCESS)
+    {
+      sql_print_error("TidesDB: Failed to rollback transaction: %d", ret);
+      DBUG_RETURN(HA_ERR_GENERIC);
+    }
+    DBUG_PRINT("info", ("TidesDB: Transaction rolled back"));
+  }
+  
+  DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Set a transaction savepoint.
+  
+  Creates a savepoint in the current TidesDB transaction using
+  tidesdb_txn_savepoint().
+*/
+static int tidesdb_savepoint_set(handlerton *hton, THD *thd, void *savepoint)
+{
+  DBUG_ENTER("tidesdb_savepoint_set");
+  
+  tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)savepoint;
+  
+  /* Generate a unique savepoint name from the pointer address */
+  snprintf(sp->name, sizeof(sp->name), "sp_%lx", (ulong)savepoint);
+  
+  /* Get the current transaction for this thread */
+  tidesdb_txn_t *txn = get_thd_txn(thd, hton);
+  
+  if (txn)
+  {
+    /* Create savepoint in TidesDB */
+    int ret = tidesdb_txn_savepoint(txn, sp->name);
+    if (ret != TDB_SUCCESS)
+    {
+      sql_print_error("TidesDB: Failed to create savepoint '%s': %d", sp->name, ret);
+      DBUG_RETURN(HA_ERR_GENERIC);
+    }
+    sp->txn = txn;
+    sql_print_information("TidesDB: Savepoint '%s' created (txn=%p)", sp->name, txn);
+  }
+  else
+  {
+    /* No active transaction - savepoint will be created when transaction starts */
+    sp->txn = NULL;
+    sql_print_warning("TidesDB: Savepoint '%s' - NO ACTIVE TRANSACTION", sp->name);
+  }
+  
+  DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Rollback to a transaction savepoint.
+  
+  Rolls back all changes made after the savepoint was set using
+  tidesdb_txn_rollback_to_savepoint().
+*/
+static int tidesdb_savepoint_rollback(handlerton *hton, THD *thd, void *savepoint)
+{
+  DBUG_ENTER("tidesdb_savepoint_rollback");
+  
+  tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)savepoint;
+  
+  /* Get the current transaction for this thread */
+  tidesdb_txn_t *txn = get_thd_txn(thd, hton);
+  
+  if (txn)
+  {
+    /* Rollback to savepoint in TidesDB */
+    sql_print_information("TidesDB: Attempting rollback to savepoint '%s' (txn=%p)", sp->name, txn);
+    int ret = tidesdb_txn_rollback_to_savepoint(txn, sp->name);
+    sql_print_information("TidesDB: tidesdb_txn_rollback_to_savepoint returned %d", ret);
+    if (ret != TDB_SUCCESS)
+    {
+      sql_print_error("TidesDB: Failed to rollback to savepoint '%s': %d", sp->name, ret);
+      DBUG_RETURN(HA_ERR_NO_SAVEPOINT);
+    }
+    sql_print_information("TidesDB: Successfully rolled back to savepoint '%s'", sp->name);
+  }
+  else
+  {
+    /* No active transaction - nothing to rollback */
+    sql_print_warning("TidesDB: Savepoint rollback '%s' - NO ACTIVE TRANSACTION", sp->name);
+  }
+  
+  DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Release a transaction savepoint.
+  
+  Releases the savepoint without rolling back using
+  tidesdb_txn_release_savepoint().
+*/
+static int tidesdb_savepoint_release(handlerton *hton, THD *thd, void *savepoint)
+{
+  DBUG_ENTER("tidesdb_savepoint_release");
+  
+  tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)savepoint;
+  
+  /* Get the current transaction for this thread */
+  tidesdb_txn_t *txn = get_thd_txn(thd, hton);
+  
+  if (txn)
+  {
+    /* Release savepoint in TidesDB */
+    int ret = tidesdb_txn_release_savepoint(txn, sp->name);
+    if (ret != TDB_SUCCESS)
+    {
+      sql_print_error("TidesDB: Failed to release savepoint '%s': %d", sp->name, ret);
+      DBUG_RETURN(HA_ERR_NO_SAVEPOINT);
+    }
+    DBUG_PRINT("info", ("TidesDB: Savepoint '%s' released", sp->name));
+  }
+  else
+  {
+    /* No active transaction - nothing to release */
+    DBUG_PRINT("info", ("TidesDB: No active transaction for savepoint release"));
+  }
+  
   DBUG_RETURN(0);
 }
 
@@ -859,7 +1047,7 @@ int ha_tidesdb::write_row(uchar *buf)
   if (ret)
     DBUG_RETURN(ret);
   
-  /* Use bulk transaction if active, otherwise begin a new one */
+  /* Use bulk transaction if active, otherwise use current/THD transaction */
   tidesdb_txn_t *txn = NULL;
   bool own_txn = false;
   
@@ -867,20 +1055,36 @@ int ha_tidesdb::write_row(uchar *buf)
   {
     /* Use the bulk insert transaction */
     txn = bulk_txn;
+    sql_print_information("TidesDB: write_row using bulk_txn=%p", txn);
   }
   else if (current_txn)
   {
+    /* Use handler's current transaction */
     txn = current_txn;
+    sql_print_information("TidesDB: write_row using current_txn=%p", txn);
   }
   else
   {
-    ret = tidesdb_txn_begin(tidesdb_instance, &txn);
-    if (ret != TDB_SUCCESS)
+    /* Check for THD-level transaction (multi-statement transaction) */
+    THD *thd = ha_thd();
+    tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+    if (thd_txn)
     {
-      sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
-      DBUG_RETURN(HA_ERR_GENERIC);
+      txn = thd_txn;
+      sql_print_information("TidesDB: write_row using thd_txn=%p", txn);
     }
-    own_txn = true;
+    else
+    {
+      /* No transaction available, create one for this operation */
+      ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+      if (ret != TDB_SUCCESS)
+      {
+        sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
+        DBUG_RETURN(HA_ERR_GENERIC);
+      }
+      own_txn = true;
+      sql_print_information("TidesDB: write_row created own_txn=%p (will auto-commit)", txn);
+    }
   }
   
   /* Calculate TTL from _ttl column or use default */
@@ -1162,16 +1366,27 @@ int ha_tidesdb::rnd_init(bool scan)
     scan_iter = NULL;
   }
   
-  /* Begin a transaction for the scan with configured isolation level */
+  /* Use existing transaction or THD-level transaction for the scan */
   if (!current_txn)
   {
-    ret = tidesdb_txn_begin_with_isolation(tidesdb_instance,
-                                            (int)tidesdb_default_isolation,
-                                            &current_txn);
-    if (ret != TDB_SUCCESS)
+    /* Check for THD-level transaction (multi-statement transaction) */
+    THD *thd = ha_thd();
+    tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+    if (thd_txn)
     {
-      sql_print_error("TidesDB: Failed to begin transaction for scan: %d", ret);
-      DBUG_RETURN(HA_ERR_GENERIC);
+      current_txn = thd_txn;
+    }
+    else
+    {
+      /* No transaction available, create one for this scan */
+      ret = tidesdb_txn_begin_with_isolation(tidesdb_instance,
+                                              (tidesdb_isolation_level_t)tidesdb_default_isolation,
+                                              &current_txn);
+      if (ret != TDB_SUCCESS)
+      {
+        sql_print_error("TidesDB: Failed to begin transaction for scan: %d", ret);
+        DBUG_RETURN(HA_ERR_GENERIC);
+      }
     }
   }
   
@@ -1792,46 +2007,94 @@ static int map_isolation_level(enum_tx_isolation mysql_iso)
 /**
   @brief
   Handle external locking (transaction boundaries).
+  
+  For proper savepoint support, we store the transaction at the THD level
+  when in a multi-statement transaction (BEGIN...COMMIT), and at the
+  handler level for auto-commit mode.
 */
 int ha_tidesdb::external_lock(THD *thd, int lock_type)
 {
   DBUG_ENTER("ha_tidesdb::external_lock");
   
   int ret;
+  bool in_transaction = thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
   
   if (lock_type != F_UNLCK)
   {
     /* Starting a new statement/transaction */
-    if (!current_txn)
+    
+    if (in_transaction)
     {
-      /* Get isolation level from THD (SET TRANSACTION ISOLATION LEVEL) */
-      int isolation = map_isolation_level(
-        (enum_tx_isolation)thd->variables.tx_isolation);
+      /* Multi-statement transaction - use THD-level transaction for savepoint support */
+      tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
       
-      ret = tidesdb_txn_begin_with_isolation(tidesdb_instance, 
-                                              isolation,
-                                              &current_txn);
-      if (ret != TDB_SUCCESS)
+      if (!thd_txn)
       {
-        sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        /* Start a new transaction at THD level */
+        int isolation = map_isolation_level(
+          (enum_tx_isolation)thd->variables.tx_isolation);
+        
+        ret = tidesdb_txn_begin_with_isolation(tidesdb_instance, 
+                                                (tidesdb_isolation_level_t)isolation,
+                                                &thd_txn);
+        if (ret != TDB_SUCCESS)
+        {
+          sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
+          DBUG_RETURN(HA_ERR_GENERIC);
+        }
+        set_thd_txn(thd, tidesdb_hton, thd_txn);
+        
+        /* Register with MySQL transaction coordinator */
+        trans_register_ha(thd, TRUE, tidesdb_hton);
+      }
+      
+      /* Use THD transaction for this handler */
+      current_txn = thd_txn;
+      trans_register_ha(thd, FALSE, tidesdb_hton);
+    }
+    else
+    {
+      /* Auto-commit mode - use handler-level transaction */
+      if (!current_txn)
+      {
+        int isolation = map_isolation_level(
+          (enum_tx_isolation)thd->variables.tx_isolation);
+        
+        ret = tidesdb_txn_begin_with_isolation(tidesdb_instance, 
+                                                (tidesdb_isolation_level_t)isolation,
+                                                &current_txn);
+        if (ret != TDB_SUCCESS)
+        {
+          sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
+          DBUG_RETURN(HA_ERR_GENERIC);
+        }
       }
     }
   }
   else
   {
     /* Ending statement/transaction */
-    if (current_txn)
+    
+    if (in_transaction)
     {
-      /* For now, auto-commit on unlock */
-      ret = tidesdb_txn_commit(current_txn);
-      tidesdb_txn_free(current_txn);
+      /* Multi-statement transaction - don't commit yet, wait for COMMIT */
+      /* Just clear the handler's reference to the THD transaction */
       current_txn = NULL;
-      
-      if (ret != TDB_SUCCESS)
+    }
+    else
+    {
+      /* Auto-commit mode - commit immediately */
+      if (current_txn)
       {
-        sql_print_error("TidesDB: Failed to commit transaction: %d", ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        ret = tidesdb_txn_commit(current_txn);
+        tidesdb_txn_free(current_txn);
+        current_txn = NULL;
+        
+        if (ret != TDB_SUCCESS)
+        {
+          sql_print_error("TidesDB: Failed to commit transaction: %d", ret);
+          DBUG_RETURN(HA_ERR_GENERIC);
+        }
       }
     }
   }
@@ -1989,6 +2252,8 @@ int ha_tidesdb::reset_auto_increment(ulonglong value)
   Start bulk insert operation.
   
   Optimizes for large inserts by batching operations in a single transaction.
+  If we're in a multi-statement transaction, use that transaction instead of
+  creating a new one (to support savepoints and proper rollback).
 */
 void ha_tidesdb::start_bulk_insert(ha_rows rows)
 {
@@ -1996,9 +2261,23 @@ void ha_tidesdb::start_bulk_insert(ha_rows rows)
   DBUG_PRINT("info", ("start_bulk_insert: rows %lu", (ulong)rows));
   
   bulk_insert_rows = rows;
+  
+  /* Check if we're in a multi-statement transaction */
+  THD *thd = ha_thd();
+  tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+  
+  if (thd_txn)
+  {
+    /* Use THD-level transaction for proper savepoint/rollback support */
+    bulk_txn = thd_txn;
+    bulk_insert_active = true;
+    /* Don't commit this in end_bulk_insert - it's managed by THD */
+    DBUG_VOID_RETURN;
+  }
+  
+  /* Not in a multi-statement transaction, create our own */
   bulk_insert_active = true;
   
-  /* Start a transaction for the bulk insert */
   if (!bulk_txn)
   {
     int ret = tidesdb_txn_begin(tidesdb_instance, &bulk_txn);
@@ -2017,7 +2296,8 @@ void ha_tidesdb::start_bulk_insert(ha_rows rows)
   @brief
   End bulk insert operation.
   
-  Commits the batched transaction.
+  Commits the batched transaction (unless it's a THD-level transaction
+  which is managed by the transaction coordinator).
 */
 int ha_tidesdb::end_bulk_insert()
 {
@@ -2027,15 +2307,28 @@ int ha_tidesdb::end_bulk_insert()
   
   if (bulk_txn)
   {
-    ret = tidesdb_txn_commit(bulk_txn);
-    if (ret != TDB_SUCCESS)
+    /* Check if this is a THD-level transaction - don't commit it here */
+    THD *thd = ha_thd();
+    tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+    
+    if (bulk_txn == thd_txn)
     {
-      sql_print_error("TidesDB: Failed to commit bulk insert: %d", ret);
-      tidesdb_txn_rollback(bulk_txn);
-      ret = HA_ERR_GENERIC;
+      /* THD transaction - don't commit, just clear our reference */
+      bulk_txn = NULL;
     }
-    tidesdb_txn_free(bulk_txn);
-    bulk_txn = NULL;
+    else
+    {
+      /* Our own transaction - commit it */
+      ret = tidesdb_txn_commit(bulk_txn);
+      if (ret != TDB_SUCCESS)
+      {
+        sql_print_error("TidesDB: Failed to commit bulk insert: %d", ret);
+        tidesdb_txn_rollback(bulk_txn);
+        ret = HA_ERR_GENERIC;
+      }
+      tidesdb_txn_free(bulk_txn);
+      bulk_txn = NULL;
+    }
   }
   
   bulk_insert_active = false;
