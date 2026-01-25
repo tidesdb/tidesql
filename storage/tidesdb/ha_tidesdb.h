@@ -58,6 +58,9 @@ extern "C" {
   TIDESDB_SHARE is a structure that will be shared among all open handlers
   for the same table. Contains the column family handle and table metadata.
 */
+/* Maximum number of secondary indexes per table */
+#define TIDESDB_MAX_INDEXES 64
+
 typedef struct st_tidesdb_share {
   char *table_name;
   uint table_name_length;
@@ -65,8 +68,12 @@ typedef struct st_tidesdb_share {
   pthread_mutex_t mutex;
   THR_LOCK lock;
   
-  /* TidesDB column family for this table */
+  /* TidesDB column family for this table (primary data) */
   tidesdb_column_family_t *cf;
+  
+  /* Secondary index column families (one per non-primary index) */
+  tidesdb_column_family_t *index_cf[TIDESDB_MAX_INDEXES];
+  uint num_indexes;
   
   /* Primary key info */
   bool has_primary_key;
@@ -129,6 +136,14 @@ class ha_tidesdb: public handler
   void load_hidden_pk_value();
   void free_current_key();
   
+  /* Secondary index helper methods */
+  int build_index_key(uint idx, const uchar *buf, uchar **key, size_t *key_len);
+  int insert_index_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn);
+  int delete_index_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn);
+  int update_index_entries(const uchar *old_buf, const uchar *new_buf, tidesdb_txn_t *txn);
+  int create_secondary_indexes(const char *table_name);
+  int open_secondary_indexes(const char *table_name);
+  
 public:
   ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg);
   ~ha_tidesdb();
@@ -150,6 +165,10 @@ public:
 
   /** @brief
     Table flags indicating what functionality the storage engine implements.
+    
+    TidesDB uses MVCC (Multi-Version Concurrency Control) for row-level
+    concurrency - no table-level locking is needed. Each transaction sees
+    a consistent snapshot based on its isolation level.
   */
   ulonglong table_flags() const
   {
@@ -159,8 +178,11 @@ public:
            HA_NULL_IN_KEY |           /* Nulls allowed in keys */
            HA_CAN_INDEX_BLOBS |       /* Can index blob columns */
            HA_PRIMARY_KEY_IN_READ_INDEX |
-           HA_PRIMARY_KEY_REQUIRED_FOR_POSITION;
-           /* Hidden PK is now supported for tables without explicit PK */
+           HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
+           HA_STATS_RECORDS_IS_EXACT |  /* We can provide exact row counts */
+           HA_CAN_SQL_HANDLER;          /* Supports HANDLER interface */
+           /* TidesDB uses MVCC for row-level concurrency control */
+           /* Hidden PK is supported for tables without explicit PK */
   }
 
   /** @brief
@@ -243,6 +265,13 @@ public:
   int backup(THD* thd, HA_CHECK_OPT* check_opt);
   bool check_and_repair(THD *thd);
   bool is_crashed() const;
+  
+  /* Foreign key support */
+  char *get_foreign_key_create_info();
+  int get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list);
+  uint referenced_by_foreign_key();
+  void free_foreign_key_create_info(char *str);
+  bool can_switch_engines();
   
   /* Auto-increment */
   virtual void get_auto_increment(ulonglong offset, ulonglong increment,
