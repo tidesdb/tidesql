@@ -194,12 +194,14 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
     share->auto_increment_value = 1;
     share->row_count = 0;
     share->row_count_valid = false;
+    share->hidden_pk_value = 0;  /* Will be loaded from metadata on open */
     
     if (my_hash_insert(&tidesdb_open_tables, (uchar*) share))
       goto error;
     thr_lock_init(&share->lock);
     pthread_mutex_init(&share->mutex, MY_MUTEX_INIT_FAST);
     pthread_mutex_init(&share->auto_inc_mutex, MY_MUTEX_INIT_FAST);
+    pthread_mutex_init(&share->hidden_pk_mutex, MY_MUTEX_INIT_FAST);
   }
   share->use_count++;
   pthread_mutex_unlock(&tidesdb_mutex);
@@ -209,6 +211,7 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
 error:
   pthread_mutex_destroy(&share->mutex);
   pthread_mutex_destroy(&share->auto_inc_mutex);
+  pthread_mutex_destroy(&share->hidden_pk_mutex);
   my_free(share, MYF(0));
   pthread_mutex_unlock(&tidesdb_mutex);
   return NULL;
@@ -227,6 +230,7 @@ static int free_share(TIDESDB_SHARE *share)
     thr_lock_delete(&share->lock);
     pthread_mutex_destroy(&share->mutex);
     pthread_mutex_destroy(&share->auto_inc_mutex);
+    pthread_mutex_destroy(&share->hidden_pk_mutex);
     /* Note: We don't drop the column family here, just release the share */
     my_free(share, MYF(0));
   }
@@ -818,16 +822,18 @@ int ha_tidesdb::build_primary_key(const uchar *buf, uchar **key, size_t *key_len
 /**
   @brief
   Build a hidden primary key for tables without explicit PK.
-  Uses an auto-incrementing 8-byte integer.
+  Uses a per-table auto-incrementing 8-byte integer that is persisted
+  to TidesDB metadata for crash recovery.
+  
+  The hidden PK is stored as a special metadata key in the column family:
+  Key: "__hidden_pk_max__"
+  Value: 8-byte big-endian counter
 */
 int ha_tidesdb::build_hidden_pk(uchar **key, size_t *key_len)
 {
   DBUG_ENTER("ha_tidesdb::build_hidden_pk");
   
-  /* For hidden PK, we use a simple incrementing counter */
-  /* In production, this should be persisted and atomic */
-  static ulonglong hidden_pk_counter = 0;
-  
+  /* Ensure we have a buffer for the 8-byte key */
   if (pk_buffer_len < 8)
   {
     if (pk_buffer)
@@ -838,13 +844,147 @@ int ha_tidesdb::build_hidden_pk(uchar **key, size_t *key_len)
     pk_buffer_len = 8;
   }
   
-  ulonglong pk_val = __sync_add_and_fetch(&hidden_pk_counter, 1);
+  /* Get next hidden PK value atomically using per-table mutex */
+  pthread_mutex_lock(&share->hidden_pk_mutex);
+  
+  ulonglong pk_val = ++share->hidden_pk_value;
+  
+  /* Persist the new max value to TidesDB metadata every N inserts for performance.
+     We persist every 100 values and on close. On recovery, we'll scan to find
+     the actual max, but this reduces write amplification. */
+  if ((pk_val % 100) == 0 || pk_val == 1)
+  {
+    persist_hidden_pk_value(pk_val);
+  }
+  
+  pthread_mutex_unlock(&share->hidden_pk_mutex);
+  
+  /* Store as big-endian for proper sort order in TidesDB */
   int8store(pk_buffer, pk_val);
   
   *key = pk_buffer;
   *key_len = 8;
   
   DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Persist the hidden PK max value to TidesDB metadata.
+  Called periodically during inserts and on table close.
+*/
+void ha_tidesdb::persist_hidden_pk_value(ulonglong value)
+{
+  if (!share || !share->cf || !tidesdb_instance)
+    return;
+  
+  /* Use a special metadata key that sorts before all data keys */
+  static const char *meta_key = "\x00__hidden_pk_max__";
+  size_t meta_key_len = 19;  /* Including leading null byte */
+  
+  uchar value_buf[8];
+  int8store(value_buf, value);
+  
+  /* Write directly without transaction for metadata */
+  tidesdb_txn_t *txn = NULL;
+  if (tidesdb_txn_begin(tidesdb_instance, &txn) == TDB_SUCCESS)
+  {
+    tidesdb_txn_put(txn, share->cf, 
+                    (uint8_t *)meta_key, meta_key_len,
+                    value_buf, 8, -1);
+    tidesdb_txn_commit(txn);
+    tidesdb_txn_free(txn);
+  }
+}
+
+/**
+  @brief
+  Load the hidden PK max value from TidesDB metadata on table open.
+  If not found, scans the table to find the maximum existing key.
+*/
+void ha_tidesdb::load_hidden_pk_value()
+{
+  if (!share || !share->cf || !tidesdb_instance)
+    return;
+  
+  /* Already loaded? */
+  if (share->hidden_pk_value > 0)
+    return;
+  
+  pthread_mutex_lock(&share->hidden_pk_mutex);
+  
+  /* Double-check after acquiring lock */
+  if (share->hidden_pk_value > 0)
+  {
+    pthread_mutex_unlock(&share->hidden_pk_mutex);
+    return;
+  }
+  
+  ulonglong max_pk = 0;
+  
+  /* Try to read persisted value first */
+  static const char *meta_key = "\x00__hidden_pk_max__";
+  size_t meta_key_len = 19;
+  
+  tidesdb_txn_t *txn = NULL;
+  if (tidesdb_txn_begin(tidesdb_instance, &txn) == TDB_SUCCESS)
+  {
+    uint8_t *value = NULL;
+    size_t value_len = 0;
+    
+    if (tidesdb_txn_get(txn, share->cf, 
+                        (uint8_t *)meta_key, meta_key_len,
+                        &value, &value_len) == TDB_SUCCESS && value_len == 8)
+    {
+      max_pk = uint8korr(value);
+    }
+    
+    /* If no persisted value or to verify, scan for actual max.
+       This handles crash recovery where inserts happened after last persist. */
+    if (!share->has_primary_key)
+    {
+      tidesdb_iter_t *iter = NULL;
+      if (tidesdb_iter_new(txn, share->cf, &iter) == TDB_SUCCESS)
+      {
+        tidesdb_iter_seek_to_last(iter);
+        
+        /* Skip metadata keys (starting with null byte) and find max data key */
+        while (tidesdb_iter_valid(iter))
+        {
+          uint8_t *key = NULL;
+          size_t key_len = 0;
+          
+          if (tidesdb_iter_key(iter, &key, &key_len) == TDB_SUCCESS)
+          {
+            /* Skip metadata keys */
+            if (key_len > 0 && key[0] == 0)
+            {
+              tidesdb_iter_prev(iter);
+              continue;
+            }
+            
+            /* Found a data key - extract the hidden PK value */
+            if (key_len == 8)
+            {
+              ulonglong found_pk = uint8korr(key);
+              if (found_pk > max_pk)
+                max_pk = found_pk;
+            }
+            break;
+          }
+          tidesdb_iter_prev(iter);
+        }
+        
+        tidesdb_iter_free(iter);
+      }
+    }
+    
+    tidesdb_txn_free(txn);
+  }
+  
+  share->hidden_pk_value = max_pk;
+  
+  pthread_mutex_unlock(&share->hidden_pk_mutex);
 }
 
 /**
@@ -915,6 +1055,12 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
       break;
     }
   }
+  
+  /* Load hidden PK value for tables without explicit primary key */
+  if (!share->has_primary_key)
+  {
+    load_hidden_pk_value();
+  }
 
   DBUG_RETURN(0);
 }
@@ -931,6 +1077,12 @@ int ha_tidesdb::close(void)
   {
     tidesdb_iter_free(scan_iter);
     scan_iter = NULL;
+  }
+  
+  /* Persist hidden PK value on close for crash recovery */
+  if (share && !share->has_primary_key && share->hidden_pk_value > 0)
+  {
+    persist_hidden_pk_value(share->hidden_pk_value);
   }
   
   DBUG_RETURN(free_share(share));
@@ -1426,6 +1578,7 @@ int ha_tidesdb::rnd_end()
 /**
   @brief
   Read the next row in a table scan.
+  Skips internal metadata keys (those starting with null byte).
 */
 int ha_tidesdb::rnd_next(uchar *buf)
 {
@@ -1436,21 +1589,34 @@ int ha_tidesdb::rnd_next(uchar *buf)
   if (!scan_iter || !scan_initialized)
     DBUG_RETURN(HA_ERR_END_OF_FILE);
   
-  /* Check if iterator is valid */
-  if (!tidesdb_iter_valid(scan_iter))
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
-  
-  /* Get the current key and value */
   uint8_t *key = NULL;
   size_t key_size = 0;
   uint8_t *value = NULL;
   size_t value_size = 0;
   
-  ret = tidesdb_iter_key(scan_iter, &key, &key_size);
-  if (ret != TDB_SUCCESS)
+  /* Loop to skip metadata keys (starting with null byte) */
+  while (tidesdb_iter_valid(scan_iter))
   {
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
+    ret = tidesdb_iter_key(scan_iter, &key, &key_size);
+    if (ret != TDB_SUCCESS)
+    {
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    }
+    
+    /* Skip metadata keys (internal keys starting with null byte) */
+    if (key_size > 0 && key[0] == 0)
+    {
+      tidesdb_iter_next(scan_iter);
+      continue;
+    }
+    
+    /* Found a data key */
+    break;
   }
+  
+  /* Check if we reached the end */
+  if (!tidesdb_iter_valid(scan_iter))
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
   
   ret = tidesdb_iter_value(scan_iter, &value, &value_size);
   if (ret != TDB_SUCCESS)
@@ -1473,7 +1639,7 @@ int ha_tidesdb::rnd_next(uchar *buf)
     DBUG_RETURN(ret);
   }
   
-  /* Move to next entry */
+  /* Move to next entry for next call */
   tidesdb_iter_next(scan_iter);
   
   DBUG_RETURN(0);

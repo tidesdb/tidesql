@@ -82,6 +82,10 @@ typedef struct st_tidesdb_share {
   /* Row count cache */
   ha_rows row_count;
   bool row_count_valid;
+  
+  /* Hidden primary key counter for tables without explicit PK */
+  ulonglong hidden_pk_value;
+  pthread_mutex_t hidden_pk_mutex;
 } TIDESDB_SHARE;
 
 /** @brief
@@ -121,6 +125,8 @@ class ha_tidesdb: public handler
   int unpack_row(uchar *buf, const uchar *packed, size_t packed_len);
   int build_primary_key(const uchar *buf, uchar **key, size_t *key_len);
   int build_hidden_pk(uchar **key, size_t *key_len);
+  void persist_hidden_pk_value(ulonglong value);
+  void load_hidden_pk_value();
   void free_current_key();
   
 public:
@@ -153,8 +159,8 @@ public:
            HA_NULL_IN_KEY |           /* Nulls allowed in keys */
            HA_CAN_INDEX_BLOBS |       /* Can index blob columns */
            HA_PRIMARY_KEY_IN_READ_INDEX |
-           HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
-           HA_REQUIRE_PRIMARY_KEY;    /* Require PK for optimal performance */
+           HA_PRIMARY_KEY_REQUIRED_FOR_POSITION;
+           /* Hidden PK is now supported for tables without explicit PK */
   }
 
   /** @brief
