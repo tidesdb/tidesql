@@ -2,13 +2,26 @@
 
 TideSQL is a fork of MySQL Server 5.1 (Facebook fork) with TidesDB as an available storage engine.
 
+## TidesDB Features
+
+TidesDB is an LSM-tree based storage engine providing:
+
+- ACID Transactions support with 5 isolation levels (READ UNCOMMITTED through SERIALIZABLE)
+- Multi-Version Concurrency Control for row-level concurrency
+- Time to live support with automatic row expiration via `_ttl` column
+- Inverted index-based fulltext search with `MATCH...AGAINST` syntax
+- LZ4, Zstd, and Snappy compression algorithms
+- Configurable bloom filters for faster lookups
+- Non-blocking backup via `BACKUP TABLE` command
+- Secondary Indexes 
+
 ## Prerequisites
 
 ### System Requirements
 
-- **Operating System**: Linux (Debian/Ubuntu, RHEL/CentOS, Arch), macOS
-- **Compiler**: GCC 7.0+ or Clang 6.0+ (with C++17 support)
-- **Build Tools**: autoconf, automake, libtool, bison 3.x, perl
+- Operating System: Linux (Debian/Ubuntu, RHEL/CentOS, Arch), macOS
+- Compiler: GCC 7.0+ or Clang 6.0+ (with C++17 support)
+- Build Tools: autoconf, automake, libtool, bison 3.x, perl
 
 ### Required Dependencies
 
@@ -120,7 +133,7 @@ cd extra
 
 ### Option 2: CMake Build (Windows Only)
 
-**Note:** The CMake build system in MySQL 5.1 is designed for Windows. For Linux/macOS, use the autotools build above.
+The CMake build system in MySQL 5.1 is designed for Windows. For Linux/macOS, use the autotools build above.
 
 ```powershell
 # Windows with Visual Studio
@@ -223,14 +236,14 @@ Then start with:
 
 # Check TidesDB is available
 mysql> SHOW ENGINES;
-+------------+---------+------------------------------------------------------+
-| Engine     | Support | Comment                                              |
-+------------+---------+------------------------------------------------------+
++------------+---------+---------------------------------------------------------+
+| Engine     | Support | Comment                                                 |
++------------+---------+---------------------------------------------------------+
 | TidesDB    | YES     | TidesDB LSM-based storage engine with ACID transactions |
 | MyISAM     | DEFAULT | Default engine as of MySQL 3.23 with great performance  |
 | MEMORY     | YES     | Hash based, stored in memory                            |
 | CSV        | YES     | CSV storage engine                                      |
-+------------+---------+------------------------------------------------------+
++------------+---------+---------------------------------------------------------+
 
 # Test creating a TidesDB table
 mysql> CREATE DATABASE test_tidesdb;
@@ -243,6 +256,21 @@ mysql> SELECT * FROM t1;
 +----+---------------+
 |  1 | Hello TidesDB |
 +----+---------------+
+
+# Test fulltext search
+mysql> CREATE TABLE articles (
+    ->   id INT PRIMARY KEY,
+    ->   body TEXT,
+    ->   FULLTEXT INDEX ft_body (body)
+    -> ) ENGINE=TidesDB;
+mysql> INSERT INTO articles VALUES (1, 'MySQL database tutorial');
+mysql> INSERT INTO articles VALUES (2, 'TidesDB storage engine');
+mysql> SELECT * FROM articles WHERE MATCH(body) AGAINST('database');
++----+-------------------------+
+| id | body                    |
++----+-------------------------+
+|  1 | MySQL database tutorial |
++----+-------------------------+
 ```
 
 ## Troubleshooting

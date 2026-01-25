@@ -287,9 +287,63 @@ CREATE TABLE orders (
     order_date DATE
 );
 
--- Note: Secondary indexes are stored as separate column families
--- For best performance, design tables with good primary keys
+-- Secondary indexes are stored as separate column families
+CREATE TABLE products (
+    id INT PRIMARY KEY,
+    name VARCHAR(100),
+    category VARCHAR(50),
+    INDEX idx_category (category)
+);
 ```
+
+## Fulltext Search
+
+TidesDB supports fulltext search using an inverted index structure.
+
+### Creating a Fulltext Index
+
+```sql
+CREATE TABLE articles (
+    id INT PRIMARY KEY,
+    title VARCHAR(200),
+    body TEXT,
+    FULLTEXT INDEX ft_body (body)
+) ENGINE=TidesDB;
+
+-- Multiple columns in fulltext index
+CREATE TABLE documents (
+    id INT PRIMARY KEY,
+    title VARCHAR(200),
+    content TEXT,
+    FULLTEXT INDEX ft_content (title, content)
+) ENGINE=TidesDB;
+```
+
+### Fulltext Search Queries
+
+```sql
+-- Insert sample data
+INSERT INTO articles VALUES 
+    (1, 'MySQL Tutorial', 'This is a tutorial about MySQL database'),
+    (2, 'TidesDB Guide', 'TidesDB is a fast storage engine'),
+    (3, 'Database Basics', 'Learn about database fundamentals');
+
+-- Search for rows containing 'database'
+SELECT * FROM articles WHERE MATCH(body) AGAINST('database');
+-- Returns rows 1 and 3
+
+-- Search for 'storage'
+SELECT * FROM articles WHERE MATCH(body) AGAINST('storage');
+-- Returns row 2
+```
+
+### Fulltext Search Notes
+
+- Words are tokenized and converted to lowercase
+- Minimum word length follows MySQL's `ft_min_word_len` setting (default: 4)
+- Maximum word length follows MySQL's `ft_max_word_len` setting (default: 84)
+- The inverted index is stored in a separate column family per fulltext index
+- Updates and deletes automatically maintain the fulltext index
 
 ## Transactions and ACID
 
@@ -347,7 +401,7 @@ SELECT @@tx_isolation;
 SET GLOBAL tidesdb_default_isolation = 'snapshot';
 ```
 
-**Note:** TidesDB's SNAPSHOT isolation (write-write conflict detection) is only available via the `tidesdb_default_isolation` variable since MySQL doesn't have a SNAPSHOT level.
+TidesDB's SNAPSHOT isolation (write-write conflict detection) is only available via the `tidesdb_default_isolation` variable since MySQL doesn't have a SNAPSHOT level.
 
 ### Durability (Sync Modes)
 
@@ -462,6 +516,72 @@ tidesdb_block_cache_size = 536870912   # 512MB
 
 LZ4 compression is enabled by default. For storage-constrained environments, this provides good compression with minimal CPU overhead.
 
+## TidesDB System Variables
+
+TidesDB provides several system variables for tuning performance and behavior:
+
+### Storage Configuration
+
+```sql
+-- Data directory (read-only, set at startup)
+SHOW VARIABLES LIKE 'tidesdb_data_dir';
+
+-- Write buffer size (memtable flush threshold)
+SET GLOBAL tidesdb_write_buffer_size = 134217728;  -- 128MB
+
+-- Block cache size for reads
+SET GLOBAL tidesdb_block_cache_size = 268435456;   -- 256MB
+```
+
+### Compression
+
+```sql
+-- Enable/disable compression (default: enabled)
+SET GLOBAL tidesdb_enable_compression = ON;
+
+-- Compression algorithm: 0=none, 1=snappy, 2=lz4, 3=zstd
+SET GLOBAL tidesdb_compression_algo = 2;  -- LZ4 (default)
+```
+
+### Bloom Filters
+
+```sql
+-- Enable bloom filters for faster lookups
+SET GLOBAL tidesdb_enable_bloom_filter = ON;
+
+-- Bloom filter false positive rate (lower = more accurate, more memory)
+SET GLOBAL tidesdb_bloom_fpr = 0.01;  -- 1% false positive rate
+```
+
+### Background Threads
+
+```sql
+-- Number of flush threads
+SET GLOBAL tidesdb_flush_threads = 2;
+
+-- Number of compaction threads
+SET GLOBAL tidesdb_compaction_threads = 2;
+```
+
+### TTL and Durability
+
+```sql
+-- Default TTL for rows without _ttl column (0 = no expiration)
+SET GLOBAL tidesdb_default_ttl = 0;
+
+-- Sync mode: 0=none, 1=interval, 2=full
+SET GLOBAL tidesdb_sync_mode = 1;  -- interval (default)
+
+-- Sync interval in microseconds (for interval mode)
+SET GLOBAL tidesdb_sync_interval_us = 128000;  -- 128ms
+```
+
+### View All TidesDB Variables
+
+```sql
+SHOW VARIABLES LIKE 'tidesdb%';
+```
+
 ## Monitoring
 
 ### Check Engine Status
@@ -521,6 +641,17 @@ cp -r /usr/local/tidesql/data /backup/tidesql-$(date +%Y%m%d)
 # Restart server
 /usr/local/tidesql/bin/mysqld_safe --defaults-file=/usr/local/tidesql/my.cnf &
 ```
+
+### Online Backup (BACKUP TABLE)
+
+TidesDB supports online backup using the `BACKUP TABLE` command:
+
+```sql
+-- Backup a table (creates snapshot in /tmp/tidesdb_backup_TIMESTAMP)
+BACKUP TABLE mytable TO '/tmp/backup';
+```
+
+This flushes the memtable and copies the data directory without blocking reads/writes.
 
 ## Troubleshooting
 
@@ -583,7 +714,3 @@ ls -la /tmp/tidesql-test.sock
 # View server output
 tail -f /tmp/tidesql-test/mysqld.log
 ```
-
-### Server Aborts During Bootstrap
-
-Ensure you're using MyISAM as the default engine during bootstrap (handled automatically by `mysql_install_db`). TidesDB is a plugin that loads after the server starts.

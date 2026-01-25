@@ -733,7 +733,7 @@ void ha_tidesdb::free_current_key()
   @brief
   Pack a MySQL row into a byte buffer for storage.
   
-  Uses MySQL's native row format for simplicity.
+  Uses MySQL's native row format
 */
 int ha_tidesdb::pack_row(uchar *buf, uchar **packed, size_t *packed_len)
 {
@@ -1517,7 +1517,7 @@ int ha_tidesdb::open_fulltext_indexes(const char *table_name)
 
 /**
   @brief
-  Simple word tokenizer for fulltext indexing.
+  Word tokenizer for fulltext indexing.
   
   Splits text into words, converts to lowercase, and calls callback for each word.
   Skips words shorter than ft_min_word_len or longer than ft_max_word_len.
@@ -1595,8 +1595,9 @@ static void ft_insert_word_callback(const char *word, size_t word_len, void *arg
   key[word_len] = '\0';
   memcpy(key + word_len + 1, ctx->pk, ctx->pk_len);
   
-  /* Insert into FT index - value is empty */
-  int ret = tidesdb_txn_put(ctx->txn, ctx->ft_cf, key, key_len, (uint8_t *)"", 0, -1);
+  /* Insert into FT index - use single byte value since empty might cause issues */
+  uint8_t dummy_value = 1;
+  int ret = tidesdb_txn_put(ctx->txn, ctx->ft_cf, key, key_len, &dummy_value, 1, -1);
   my_free(key, MYF(0));
   
   if (ret != TDB_SUCCESS && ret != TDB_ERR_EXISTS)
@@ -2210,28 +2211,21 @@ int ha_tidesdb::write_row(uchar *buf)
     }
   }
   
-  /* 
-    TODO: Fulltext index entries - disabled for now due to transaction issues.
-    The inverted index structure is in place but needs debugging.
-    
-    if (share->num_ft_indexes > 0)
+  /* Insert fulltext index entries */
+  for (uint i = 0; i < share->num_ft_indexes; i++)
+  {
+    ret = insert_ft_words(i, buf, txn);
+    if (ret)
     {
-      for (uint i = 0; i < share->num_ft_indexes; i++)
+      sql_print_error("TidesDB: Failed to insert FT words for index %u: %d", i, ret);
+      if (own_txn)
       {
-        ret = insert_ft_words(i, buf, txn);
-        if (ret)
-        {
-          sql_print_error("TidesDB: Failed to insert FT words for index %u: %d", i, ret);
-          if (own_txn)
-          {
-            tidesdb_txn_rollback(txn);
-            tidesdb_txn_free(txn);
-          }
-          DBUG_RETURN(ret);
-        }
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
       }
+      DBUG_RETURN(ret);
     }
-  */
+  }
   
   /* Commit if we own the transaction */
   if (own_txn)
@@ -3539,9 +3533,209 @@ static void tidesdb_ft_reinit_search(FT_INFO *fts)
 
 /**
   @brief
+  Search for a single word in the fulltext index.
+  
+  Returns matching primary keys in the provided arrays.
+  Uses prefix seek for efficient lookup.
+*/
+static int ft_search_word(tidesdb_column_family_t *ft_cf, 
+                          const char *word, size_t word_len,
+                          char ***out_pks, size_t **out_pk_lens, 
+                          uint *out_count, size_t max_matches)
+{
+  if (word_len == 0)
+    return 0;
+  
+  /* Create prefix to search: word + '\0' */
+  char prefix[258];
+  if (word_len > 255)
+    word_len = 255;
+  memcpy(prefix, word, word_len);
+  prefix[word_len] = '\0';
+  size_t prefix_len = word_len + 1;
+  
+  *out_pks = (char **)my_malloc(max_matches * sizeof(char *), MYF(MY_WME | MY_ZEROFILL));
+  *out_pk_lens = (size_t *)my_malloc(max_matches * sizeof(size_t), MYF(MY_WME | MY_ZEROFILL));
+  *out_count = 0;
+  
+  if (!*out_pks || !*out_pk_lens)
+    return -1;
+  
+  tidesdb_txn_t *txn = NULL;
+  if (tidesdb_txn_begin(tidesdb_instance, &txn) != TDB_SUCCESS)
+    return -1;
+  
+  tidesdb_iter_t *iter = NULL;
+  if (tidesdb_iter_new(txn, ft_cf, &iter) != TDB_SUCCESS)
+  {
+    tidesdb_txn_rollback(txn);
+    tidesdb_txn_free(txn);
+    return -1;
+  }
+  
+  /* Seek to prefix using block index for O(log n) lookup */
+  tidesdb_iter_seek(iter, (uint8_t *)prefix, prefix_len);
+  
+  while (tidesdb_iter_valid(iter) && *out_count < max_matches)
+  {
+    uint8_t *iter_key = NULL;
+    size_t iter_key_len = 0;
+    
+    if (tidesdb_iter_key(iter, &iter_key, &iter_key_len) != TDB_SUCCESS)
+      break;
+    
+    /* Check if key starts with our prefix */
+    if (iter_key_len < prefix_len || memcmp(iter_key, prefix, prefix_len) != 0)
+      break;
+    
+    /* Extract primary key (after word + '\0') */
+    size_t pk_len = iter_key_len - prefix_len;
+    if (pk_len > 0)
+    {
+      char *pk = (char *)my_malloc(pk_len, MYF(MY_WME));
+      if (pk)
+      {
+        memcpy(pk, iter_key + prefix_len, pk_len);
+        (*out_pks)[*out_count] = pk;
+        (*out_pk_lens)[*out_count] = pk_len;
+        (*out_count)++;
+      }
+    }
+    
+    tidesdb_iter_next(iter);
+  }
+  
+  tidesdb_iter_free(iter);
+  tidesdb_txn_rollback(txn);
+  tidesdb_txn_free(txn);
+  
+  return 0;
+}
+
+/**
+  @brief
+  Intersect two sorted PK arrays (AND operation).
+  
+  Returns a new array containing only PKs present in both inputs.
+*/
+static void ft_intersect_results(char **pks1, size_t *lens1, uint count1,
+                                  char **pks2, size_t *lens2, uint count2,
+                                  char ***out_pks, size_t **out_lens, uint *out_count)
+{
+  size_t max_out = (count1 < count2) ? count1 : count2;
+  *out_pks = (char **)my_malloc(max_out * sizeof(char *), MYF(MY_WME | MY_ZEROFILL));
+  *out_lens = (size_t *)my_malloc(max_out * sizeof(size_t), MYF(MY_WME | MY_ZEROFILL));
+  *out_count = 0;
+  
+  if (!*out_pks || !*out_lens)
+    return;
+  
+  /* Simple O(n*m) intersection - could optimize with hash set for large sets */
+  for (uint i = 0; i < count1 && *out_count < max_out; i++)
+  {
+    for (uint j = 0; j < count2; j++)
+    {
+      if (lens1[i] == lens2[j] && memcmp(pks1[i], pks2[j], lens1[i]) == 0)
+      {
+        /* Found match - copy PK */
+        char *pk = (char *)my_malloc(lens1[i], MYF(MY_WME));
+        if (pk)
+        {
+          memcpy(pk, pks1[i], lens1[i]);
+          (*out_pks)[*out_count] = pk;
+          (*out_lens)[*out_count] = lens1[i];
+          (*out_count)++;
+        }
+        break;
+      }
+    }
+  }
+}
+
+/**
+  @brief
+  Union two PK arrays (OR operation).
+  
+  Returns a new array containing PKs from either input (deduplicated).
+*/
+static void ft_union_results(char **pks1, size_t *lens1, uint count1,
+                              char **pks2, size_t *lens2, uint count2,
+                              char ***out_pks, size_t **out_lens, uint *out_count)
+{
+  size_t max_out = count1 + count2;
+  *out_pks = (char **)my_malloc(max_out * sizeof(char *), MYF(MY_WME | MY_ZEROFILL));
+  *out_lens = (size_t *)my_malloc(max_out * sizeof(size_t), MYF(MY_WME | MY_ZEROFILL));
+  *out_count = 0;
+  
+  if (!*out_pks || !*out_lens)
+    return;
+  
+  /* Add all from first set */
+  for (uint i = 0; i < count1; i++)
+  {
+    char *pk = (char *)my_malloc(lens1[i], MYF(MY_WME));
+    if (pk)
+    {
+      memcpy(pk, pks1[i], lens1[i]);
+      (*out_pks)[*out_count] = pk;
+      (*out_lens)[*out_count] = lens1[i];
+      (*out_count)++;
+    }
+  }
+  
+  /* Add from second set if not already present */
+  for (uint i = 0; i < count2; i++)
+  {
+    bool found = false;
+    for (uint j = 0; j < count1; j++)
+    {
+      if (lens2[i] == lens1[j] && memcmp(pks2[i], pks1[j], lens2[i]) == 0)
+      {
+        found = true;
+        break;
+      }
+    }
+    if (!found && *out_count < max_out)
+    {
+      char *pk = (char *)my_malloc(lens2[i], MYF(MY_WME));
+      if (pk)
+      {
+        memcpy(pk, pks2[i], lens2[i]);
+        (*out_pks)[*out_count] = pk;
+        (*out_lens)[*out_count] = lens2[i];
+        (*out_count)++;
+      }
+    }
+  }
+}
+
+/**
+  @brief
+  Free a PK result set.
+*/
+static void ft_free_results(char **pks, size_t *lens, uint count)
+{
+  if (pks)
+  {
+    for (uint i = 0; i < count; i++)
+    {
+      if (pks[i])
+        my_free(pks[i], MYF(0));
+    }
+    my_free(pks, MYF(0));
+  }
+  if (lens)
+    my_free(lens, MYF(0));
+}
+
+/**
+  @brief
   Initialize full-text search.
   
-  Searches the inverted index for matching words and collects primary keys.
+  Supports multi-word search:
+  - Natural language mode: words are OR'd together
+  - Boolean mode (FT_BOOL flag): words are AND'd together
+  - Respects ft_min_word_len and ft_max_word_len
 */
 FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
 {
@@ -3578,100 +3772,118 @@ FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
   info->current_match = 0;
   info->relevance = 1.0f;
   
-  /* Tokenize the search query */
+  /* Tokenize the search query into words */
   const char *query = key->ptr();
   size_t query_len = key->length();
   
-  /* Simple single-word search for now */
+  /* Extract all words from query */
+  char words[32][256];
+  size_t word_lens[32];
+  uint word_count = 0;
+  
   char word_buf[256];
   size_t word_len = 0;
   
-  for (size_t i = 0; i <= query_len && word_len < sizeof(word_buf) - 1; i++)
+  for (size_t i = 0; i <= query_len; i++)
   {
     char c = (i < query_len) ? query[i] : ' ';
     bool is_word_char = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
                         (c >= '0' && c <= '9') || (c == '_');
     
-    if (is_word_char)
+    if (is_word_char && word_len < sizeof(word_buf) - 1)
     {
+      /* Convert to lowercase */
       word_buf[word_len++] = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
     }
     else if (word_len > 0)
     {
-      break;  /* Use first word only for simple search */
+      /* End of word - check length constraints */
+      if (word_len >= ft_min_word_len && word_len <= ft_max_word_len && word_count < 32)
+      {
+        memcpy(words[word_count], word_buf, word_len);
+        words[word_count][word_len] = '\0';
+        word_lens[word_count] = word_len;
+        word_count++;
+      }
+      word_len = 0;
     }
   }
-  word_buf[word_len] = '\0';
   
-  if (word_len == 0)
+  if (word_count == 0)
   {
     ft_handler = (FT_INFO *)info;
     DBUG_RETURN((FT_INFO *)info);
   }
   
-  /* Search the inverted index for this word */
   tidesdb_column_family_t *ft_cf = share->ft_cf[ft_idx];
+  size_t max_matches = 10000;
   
-  /* Create prefix to search: word + '\0' */
-  char prefix[258];
-  memcpy(prefix, word_buf, word_len);
-  prefix[word_len] = '\0';
-  size_t prefix_len = word_len + 1;
+  /* Boolean mode uses AND, natural language uses OR */
+  bool use_and = (flags & FT_BOOL) != 0;
   
-  /* Collect matching primary keys */
-  size_t max_matches = 1000;
-  info->matched_pks = (char **)my_malloc(max_matches * sizeof(char *), MYF(MY_WME | MY_ZEROFILL));
-  info->matched_pk_lens = (size_t *)my_malloc(max_matches * sizeof(size_t), MYF(MY_WME | MY_ZEROFILL));
+  /* Search for first word */
+  char **result_pks = NULL;
+  size_t *result_lens = NULL;
+  uint result_count = 0;
   
-  if (!info->matched_pks || !info->matched_pk_lens)
+  if (ft_search_word(ft_cf, words[0], word_lens[0], 
+                     &result_pks, &result_lens, &result_count, max_matches) != 0)
   {
     tidesdb_ft_close_search((FT_INFO *)info);
     DBUG_RETURN(NULL);
   }
   
-  /* Iterate through the FT index looking for matching prefix */
-  tidesdb_txn_t *txn = NULL;
-  if (tidesdb_txn_begin(tidesdb_instance, &txn) == TDB_SUCCESS)
+  /* Process remaining words */
+  for (uint w = 1; w < word_count && result_count > 0; w++)
   {
-    tidesdb_iter_t *iter = NULL;
-    if (tidesdb_iter_new(txn, ft_cf, &iter) == TDB_SUCCESS)
+    char **word_pks = NULL;
+    size_t *word_lens_arr = NULL;
+    uint word_pk_count = 0;
+    
+    if (ft_search_word(ft_cf, words[w], word_lens[w],
+                       &word_pks, &word_lens_arr, &word_pk_count, max_matches) != 0)
     {
-      /* Seek to prefix */
-      tidesdb_iter_seek(iter, (uint8_t *)prefix, prefix_len);
-      
-      while (tidesdb_iter_valid(iter) && info->matched_count < max_matches)
-      {
-        uint8_t *iter_key = NULL;
-        size_t iter_key_len = 0;
-        
-        if (tidesdb_iter_key(iter, &iter_key, &iter_key_len) != TDB_SUCCESS)
-          break;
-        
-        /* Check if key starts with our prefix */
-        if (iter_key_len < prefix_len || memcmp(iter_key, prefix, prefix_len) != 0)
-          break;
-        
-        /* Extract primary key (after word + '\0') */
-        size_t pk_len = iter_key_len - prefix_len;
-        if (pk_len > 0)
-        {
-          char *pk = (char *)my_malloc(pk_len, MYF(MY_WME));
-          if (pk)
-          {
-            memcpy(pk, iter_key + prefix_len, pk_len);
-            info->matched_pks[info->matched_count] = pk;
-            info->matched_pk_lens[info->matched_count] = pk_len;
-            info->matched_count++;
-          }
-        }
-        
-        tidesdb_iter_next(iter);
-      }
-      
-      tidesdb_iter_free(iter);
+      ft_free_results(result_pks, result_lens, result_count);
+      tidesdb_ft_close_search((FT_INFO *)info);
+      DBUG_RETURN(NULL);
     }
-    tidesdb_txn_rollback(txn);
-    tidesdb_txn_free(txn);
+    
+    /* Combine results */
+    char **new_pks = NULL;
+    size_t *new_lens = NULL;
+    uint new_count = 0;
+    
+    if (use_and)
+    {
+      ft_intersect_results(result_pks, result_lens, result_count,
+                           word_pks, word_lens_arr, word_pk_count,
+                           &new_pks, &new_lens, &new_count);
+    }
+    else
+    {
+      ft_union_results(result_pks, result_lens, result_count,
+                       word_pks, word_lens_arr, word_pk_count,
+                       &new_pks, &new_lens, &new_count);
+    }
+    
+    /* Free old results */
+    ft_free_results(result_pks, result_lens, result_count);
+    ft_free_results(word_pks, word_lens_arr, word_pk_count);
+    
+    result_pks = new_pks;
+    result_lens = new_lens;
+    result_count = new_count;
+  }
+  
+  /* Store results in info structure */
+  info->matched_pks = result_pks;
+  info->matched_pk_lens = result_lens;
+  info->matched_count = result_count;
+  
+  /* Calculate relevance based on match count */
+  if (result_count > 0)
+  {
+    info->relevance = (float)word_count;  /* More matching words = higher relevance */
   }
   
   ft_handler = (FT_INFO *)info;
@@ -4415,11 +4627,11 @@ mysql_declare_plugin(tidesdb)
   "TidesDB Authors",
   "TidesDB LSM-based storage engine with ACID transactions",
   PLUGIN_LICENSE_GPL,
-  tidesdb_init_func,                            /* Plugin Init */
-  tidesdb_done_func,                            /* Plugin Deinit */
-  0x0001 /* 0.1 */,
+  tidesdb_init_func,                                      /* Plugin Init */
+  tidesdb_done_func,                                /* Plugin Deinit */
+  0x0001,                                          /* version */
   NULL,                                         /* status variables */
-  tidesdb_system_variables,                     /* system variables */
+  tidesdb_system_variables,                               /* system variables */
   NULL                                          /* config options */
 }
 mysql_declare_plugin_end;
