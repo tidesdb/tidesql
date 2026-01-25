@@ -537,9 +537,7 @@ void ha_tidesdb::free_current_key()
 int ha_tidesdb::pack_row(uchar *buf, uchar **packed, size_t *packed_len)
 {
   DBUG_ENTER("ha_tidesdb::pack_row");
-  
-  /* For now, store the entire row buffer as-is */
-  /* This is the simplest approach - MySQL's internal format */
+
   size_t row_len = table->s->reclength;
   
   if (row_buffer_len < row_len)

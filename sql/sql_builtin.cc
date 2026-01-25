@@ -18,10 +18,10 @@
 typedef struct st_mysql_plugin builtin_plugin[];
 
 extern builtin_plugin 
-  builtin_binlog_plugin, builtin_csv_plugin, builtin_heap_plugin, builtin_myisam_plugin, builtin_myisammrg_plugin;
+  builtin_binlog_plugin,builtin_csv_plugin,builtin_heap_plugin,builtin_myisam_plugin,builtin_myisammrg_plugin,builtin_partition_plugin;
 
 struct st_mysql_plugin *mysqld_builtins[]=
 {
-  builtin_binlog_plugin, builtin_csv_plugin, builtin_heap_plugin, builtin_myisam_plugin, builtin_myisammrg_plugin,(struct st_mysql_plugin *)0
+  builtin_binlog_plugin,builtin_csv_plugin,builtin_heap_plugin,builtin_myisam_plugin,builtin_myisammrg_plugin,builtin_partition_plugin,(struct st_mysql_plugin *)0
 };
 

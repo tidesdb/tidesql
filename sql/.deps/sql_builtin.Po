@@ -1,4 +1,0 @@
-sql_builtin.o: sql_builtin.cc /usr/include/stdc-predef.h \
- ../include/mysql/plugin.h
-/usr/include/stdc-predef.h:
-../include/mysql/plugin.h:
