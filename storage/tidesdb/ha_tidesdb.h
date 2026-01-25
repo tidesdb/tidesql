@@ -219,6 +219,7 @@ public:
   int index_read_map(uchar *buf, const uchar *key,
                      key_part_map keypart_map, enum ha_rkey_function find_flag);
   int index_next(uchar *buf);
+  int index_next_same(uchar *buf, const uchar *key, uint keylen);
   int index_prev(uchar *buf);
   int index_first(uchar *buf);
   int index_last(uchar *buf);

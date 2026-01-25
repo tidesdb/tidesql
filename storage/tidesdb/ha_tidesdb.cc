@@ -1161,18 +1161,131 @@ int ha_tidesdb::delete_table(const char *name, my_bool delayed_drop)
 
 /**
   @brief
-  Rename a table.
+  Rename a table by copying all data to a new column family and dropping the old one.
+  
+  TidesDB doesn't support renaming column families directly, so we:
+  1. Create new column family with new name
+  2. Copy all data from old CF to new CF
+  3. Drop old column family
 */
 int ha_tidesdb::rename_table(const char *from, const char *to)
 {
   DBUG_ENTER("ha_tidesdb::rename_table");
   
-  /* TidesDB doesn't support renaming column families directly */
-  /* We would need to copy all data to a new CF and drop the old one */
-  /* For now, return an error */
-  sql_print_error("TidesDB: Rename table not yet supported");
+  int ret;
+  char old_cf_name[256];
+  char new_cf_name[256];
   
-  DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+  get_cf_name(from, old_cf_name, sizeof(old_cf_name));
+  get_cf_name(to, new_cf_name, sizeof(new_cf_name));
+  
+  /* Get the old column family */
+  tidesdb_column_family_t *old_cf = tidesdb_get_column_family(tidesdb_instance, old_cf_name);
+  if (!old_cf)
+  {
+    sql_print_error("TidesDB: Cannot rename - source table '%s' not found", from);
+    DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
+  }
+  
+  /* Create new column family with default config */
+  tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
+  cf_config.write_buffer_size = tidesdb_write_buffer_size;
+  cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
+  cf_config.bloom_fpr = tidesdb_bloom_fpr;
+  
+  if (tidesdb_enable_compression)
+  {
+    cf_config.compression_algo = tidesdb_compression_algo;
+  }
+  
+  ret = tidesdb_create_column_family(tidesdb_instance, new_cf_name, &cf_config);
+  if (ret != TDB_SUCCESS)
+  {
+    sql_print_error("TidesDB: Failed to create destination column family '%s': %d", 
+                    new_cf_name, ret);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  tidesdb_column_family_t *new_cf = tidesdb_get_column_family(tidesdb_instance, new_cf_name);
+  if (!new_cf)
+  {
+    sql_print_error("TidesDB: Failed to get new column family '%s'", new_cf_name);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  /* Copy all data from old CF to new CF */
+  tidesdb_txn_t *txn = NULL;
+  ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+  if (ret != TDB_SUCCESS)
+  {
+    tidesdb_drop_column_family(tidesdb_instance, new_cf_name);
+    sql_print_error("TidesDB: Failed to begin transaction for rename: %d", ret);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  tidesdb_iter_t *iter = NULL;
+  ret = tidesdb_iter_new(txn, old_cf, &iter);
+  if (ret != TDB_SUCCESS)
+  {
+    tidesdb_txn_free(txn);
+    tidesdb_drop_column_family(tidesdb_instance, new_cf_name);
+    sql_print_error("TidesDB: Failed to create iterator for rename: %d", ret);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  tidesdb_iter_seek_to_first(iter);
+  
+  while (tidesdb_iter_valid(iter))
+  {
+    uint8_t *key = NULL;
+    size_t key_size = 0;
+    uint8_t *value = NULL;
+    size_t value_size = 0;
+    
+    if (tidesdb_iter_key(iter, &key, &key_size) == TDB_SUCCESS &&
+        tidesdb_iter_value(iter, &value, &value_size) == TDB_SUCCESS)
+    {
+      /* Copy to new CF */
+      ret = tidesdb_txn_put(txn, new_cf, key, key_size, value, value_size, -1);
+      if (ret != TDB_SUCCESS)
+      {
+        tidesdb_iter_free(iter);
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        tidesdb_drop_column_family(tidesdb_instance, new_cf_name);
+        sql_print_error("TidesDB: Failed to copy data during rename: %d", ret);
+        DBUG_RETURN(HA_ERR_GENERIC);
+      }
+    }
+    
+    tidesdb_iter_next(iter);
+  }
+  
+  tidesdb_iter_free(iter);
+  
+  /* Commit the copy transaction */
+  ret = tidesdb_txn_commit(txn);
+  tidesdb_txn_free(txn);
+  
+  if (ret != TDB_SUCCESS)
+  {
+    tidesdb_drop_column_family(tidesdb_instance, new_cf_name);
+    sql_print_error("TidesDB: Failed to commit rename transaction: %d", ret);
+    DBUG_RETURN(HA_ERR_GENERIC);
+  }
+  
+  /* Drop the old column family */
+  ret = tidesdb_drop_column_family(tidesdb_instance, old_cf_name);
+  if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
+  {
+    sql_print_warning("TidesDB: Failed to drop old column family '%s': %d", 
+                      old_cf_name, ret);
+    /* Continue anyway - data was copied successfully */
+  }
+  
+  sql_print_information("TidesDB: Renamed table '%s' to '%s'", from, to);
+  
+  DBUG_RETURN(0);
 }
 
 /**
@@ -1207,13 +1320,11 @@ int ha_tidesdb::write_row(uchar *buf)
   {
     /* Use the bulk insert transaction */
     txn = bulk_txn;
-    sql_print_information("TidesDB: write_row using bulk_txn=%p", txn);
   }
   else if (current_txn)
   {
     /* Use handler's current transaction */
     txn = current_txn;
-    sql_print_information("TidesDB: write_row using current_txn=%p", txn);
   }
   else
   {
@@ -1223,7 +1334,6 @@ int ha_tidesdb::write_row(uchar *buf)
     if (thd_txn)
     {
       txn = thd_txn;
-      sql_print_information("TidesDB: write_row using thd_txn=%p", txn);
     }
     else
     {
@@ -1235,7 +1345,6 @@ int ha_tidesdb::write_row(uchar *buf)
         DBUG_RETURN(HA_ERR_GENERIC);
       }
       own_txn = true;
-      sql_print_information("TidesDB: write_row created own_txn=%p (will auto-commit)", txn);
     }
   }
   
@@ -1342,7 +1451,7 @@ int ha_tidesdb::update_row(const uchar *old_data, uchar *new_data)
     DBUG_RETURN(ret);
   }
   
-  /* Begin a transaction if we don't have one */
+  /* Use existing transaction, THD-level transaction, or create new one */
   tidesdb_txn_t *txn = NULL;
   bool own_txn = false;
   
@@ -1352,14 +1461,24 @@ int ha_tidesdb::update_row(const uchar *old_data, uchar *new_data)
   }
   else
   {
-    ret = tidesdb_txn_begin(tidesdb_instance, &txn);
-    if (ret != TDB_SUCCESS)
+    /* Check for THD-level transaction (multi-statement transaction) */
+    THD *thd = ha_thd();
+    tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+    if (thd_txn)
     {
-      my_free(saved_old_key, MYF(0));
-      sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
-      DBUG_RETURN(HA_ERR_GENERIC);
+      txn = thd_txn;
     }
-    own_txn = true;
+    else
+    {
+      ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+      if (ret != TDB_SUCCESS)
+      {
+        my_free(saved_old_key, MYF(0));
+        sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
+        DBUG_RETURN(HA_ERR_GENERIC);
+      }
+      own_txn = true;
+    }
   }
   
   /* Check if primary key changed */
@@ -1451,7 +1570,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
   if (ret)
     DBUG_RETURN(ret);
   
-  /* Begin a transaction if we don't have one */
+  /* Use existing transaction, THD-level transaction, or create new one */
   tidesdb_txn_t *txn = NULL;
   bool own_txn = false;
   
@@ -1461,13 +1580,23 @@ int ha_tidesdb::delete_row(const uchar *buf)
   }
   else
   {
-    ret = tidesdb_txn_begin(tidesdb_instance, &txn);
-    if (ret != TDB_SUCCESS)
+    /* Check for THD-level transaction (multi-statement transaction) */
+    THD *thd = ha_thd();
+    tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+    if (thd_txn)
     {
-      sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
-      DBUG_RETURN(HA_ERR_GENERIC);
+      txn = thd_txn;
     }
-    own_txn = true;
+    else
+    {
+      ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+      if (ret != TDB_SUCCESS)
+      {
+        sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
+        DBUG_RETURN(HA_ERR_GENERIC);
+      }
+      own_txn = true;
+    }
   }
   
   /* Delete the row */
@@ -1857,7 +1986,88 @@ int ha_tidesdb::index_next(uchar *buf)
 
 /**
   @brief
+  Read next row with the same key prefix.
+  
+  This is used for queries like WHERE key_col = value to efficiently
+  iterate through all rows matching the key prefix.
+*/
+int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
+{
+  DBUG_ENTER("ha_tidesdb::index_next_same");
+  
+  int ret;
+  
+  if (!scan_iter || !scan_initialized)
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  
+  uint8_t *iter_key = NULL;
+  size_t iter_key_size = 0;
+  uint8_t *value = NULL;
+  size_t value_size = 0;
+  
+  /* Loop to find next row with same key prefix, skipping metadata keys */
+  while (tidesdb_iter_valid(scan_iter))
+  {
+    /* Move to next entry */
+    tidesdb_iter_next(scan_iter);
+    
+    if (!tidesdb_iter_valid(scan_iter))
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    
+    ret = tidesdb_iter_key(scan_iter, &iter_key, &iter_key_size);
+    if (ret != TDB_SUCCESS)
+    {
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    }
+    
+    /* Skip metadata keys (internal keys starting with null byte) */
+    if (iter_key_size > 0 && iter_key[0] == 0)
+    {
+      continue;
+    }
+    
+    /* Check if key prefix still matches */
+    if (iter_key_size < keylen || memcmp(iter_key, key, keylen) != 0)
+    {
+      /* Key prefix no longer matches - end of same-key range */
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    }
+    
+    /* Found a matching row */
+    break;
+  }
+  
+  if (!tidesdb_iter_valid(scan_iter))
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  
+  ret = tidesdb_iter_value(scan_iter, &value, &value_size);
+  if (ret != TDB_SUCCESS)
+  {
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  }
+  
+  /* Save the current key for position() */
+  free_current_key();
+  current_key = (uchar *)my_malloc(iter_key_size, MYF(MY_WME));
+  if (!current_key)
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  memcpy(current_key, iter_key, iter_key_size);
+  current_key_len = iter_key_size;
+  
+  /* Unpack the row */
+  ret = unpack_row(buf, value, value_size);
+  if (ret)
+  {
+    DBUG_RETURN(ret);
+  }
+  
+  DBUG_RETURN(0);
+}
+
+/**
+  @brief
   Read previous row in index order.
+  Skips internal metadata keys (those starting with null byte).
 */
 int ha_tidesdb::index_prev(uchar *buf)
 {
@@ -1868,23 +2078,35 @@ int ha_tidesdb::index_prev(uchar *buf)
   if (!scan_iter || !scan_initialized)
     DBUG_RETURN(HA_ERR_END_OF_FILE);
   
-  /* Move to previous entry */
-  tidesdb_iter_prev(scan_iter);
-  
-  /* Check if iterator is valid */
-  if (!tidesdb_iter_valid(scan_iter))
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
-  
-  /* Get the current key and value */
   uint8_t *key = NULL;
   size_t key_size = 0;
   uint8_t *value = NULL;
   size_t value_size = 0;
   
-  ret = tidesdb_iter_key(scan_iter, &key, &key_size);
-  if (ret != TDB_SUCCESS)
+  /* Loop to skip metadata keys (starting with null byte) */
+  while (true)
   {
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
+    /* Move to previous entry */
+    tidesdb_iter_prev(scan_iter);
+    
+    /* Check if iterator is valid */
+    if (!tidesdb_iter_valid(scan_iter))
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    
+    ret = tidesdb_iter_key(scan_iter, &key, &key_size);
+    if (ret != TDB_SUCCESS)
+    {
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    }
+    
+    /* Skip metadata keys (internal keys starting with null byte) */
+    if (key_size > 0 && key[0] == 0)
+    {
+      continue;
+    }
+    
+    /* Found a data key */
+    break;
   }
   
   ret = tidesdb_iter_value(scan_iter, &value, &value_size);
@@ -1929,6 +2151,7 @@ int ha_tidesdb::index_first(uchar *buf)
 /**
   @brief
   Read last row in index order.
+  Skips internal metadata keys (those starting with null byte).
 */
 int ha_tidesdb::index_last(uchar *buf)
 {
@@ -1968,21 +2191,34 @@ int ha_tidesdb::index_last(uchar *buf)
   tidesdb_iter_seek_to_last(scan_iter);
   scan_initialized = true;
   
-  /* Check if iterator is valid */
-  if (!tidesdb_iter_valid(scan_iter))
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
-  
-  /* Get the current key and value */
   uint8_t *key = NULL;
   size_t key_size = 0;
   uint8_t *value = NULL;
   size_t value_size = 0;
   
-  ret = tidesdb_iter_key(scan_iter, &key, &key_size);
-  if (ret != TDB_SUCCESS)
+  /* Loop backwards to skip metadata keys (starting with null byte) */
+  while (tidesdb_iter_valid(scan_iter))
   {
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
+    ret = tidesdb_iter_key(scan_iter, &key, &key_size);
+    if (ret != TDB_SUCCESS)
+    {
+      DBUG_RETURN(HA_ERR_END_OF_FILE);
+    }
+    
+    /* Skip metadata keys (internal keys starting with null byte) */
+    if (key_size > 0 && key[0] == 0)
+    {
+      tidesdb_iter_prev(scan_iter);
+      continue;
+    }
+    
+    /* Found a data key */
+    break;
   }
+  
+  /* Check if we reached the beginning without finding data */
+  if (!tidesdb_iter_valid(scan_iter))
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
   
   ret = tidesdb_iter_value(scan_iter, &value, &value_size);
   if (ret != TDB_SUCCESS)
