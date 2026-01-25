@@ -1,6 +1,6 @@
 # TideSQL Usage Guide
 
-TideSQL is MySQL 5.1 with TidesDB as an available storage engine. This guide covers setup, usage, and TidesDB-specific features.
+TideSQL is MySQL 5.1 with TidesDB as the default storage engine. This guide covers setup, usage, and TidesDB-specific features.
 
 ## Quick Start
 
@@ -48,11 +48,12 @@ On first run, install the TidesDB storage engine plugin:
 
 Expected output:
 ```
-Engine     Support  Comment
-TidesDB    YES      TidesDB LSM-based storage engine with ACID transactions
-MyISAM     DEFAULT  Default engine as of MySQL 3.23 with great performance
-MEMORY     YES      Hash based, stored in memory
-CSV        YES      CSV storage engine
+Engine     Support  Comment                                                  Transactions  XA  Savepoints
+TidesDB    DEFAULT  TidesDB LSM-based storage engine with ACID transactions  YES           NO  YES
+MRG_MYISAM YES      Collection of identical MyISAM tables                    NO            NO  NO
+MEMORY     YES      Hash based, stored in memory, useful for temporary...    NO            NO  NO
+MyISAM     YES      Default engine as of MySQL 3.23 with great performance   NO            NO  NO
+CSV        YES      CSV storage engine                                       NO            NO  NO
 ```
 
 ## Connecting to TideSQL
@@ -84,15 +85,17 @@ CREATE TABLE products (
 ) ENGINE=TidesDB;
 ```
 
-### Using TidesDB as Default Engine
+### TidesDB is the Default Engine
 
-To make TidesDB the default for new tables, start the server with:
+TidesDB is the default storage engine. Tables created without specifying `ENGINE=` will use TidesDB:
 
-```bash
-./sql/mysqld --no-defaults \
-    --default-storage-engine=TidesDB \
-    --plugin-load=tidesdb=ha_tidesdb.so \
-    ... other options ...
+```sql
+-- This table will use TidesDB (the default)
+CREATE TABLE orders (
+    id INT PRIMARY KEY,
+    customer_id INT,
+    total DECIMAL(10,2)
+);
 ```
 
 ## TTL (Time-to-Live) Support

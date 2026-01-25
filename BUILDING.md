@@ -1,6 +1,6 @@
 # Building TideSQL
 
-TideSQL is a fork of MySQL Server 5.1 (Facebook fork) with TidesDB as an available storage engine.
+TideSQL is a fork of MySQL Server 5.1 (Facebook fork) with TidesDB as the default storage engine.
 
 ## TidesDB Features
 
@@ -8,7 +8,7 @@ TidesDB is an LSM-tree based storage engine providing:
 
 - ACID Transactions support with 5 isolation levels (READ UNCOMMITTED through SERIALIZABLE)
 - Multi-Version Concurrency Control for row-level concurrency
-- Time to live support with automatic row expiration via `_ttl` column
+- Time to live support with automatic row expiration via `TTL` column
 - Inverted index-based fulltext search with `MATCH...AGAINST` syntax
 - LZ4, Zstd, and Snappy compression algorithms
 - Configurable bloom filters for faster lookups
@@ -214,8 +214,8 @@ plugin-dir = /usr/local/tidesql/lib/plugin
 # Load TidesDB plugin at startup
 plugin-load = tidesdb=ha_tidesdb.so
 
-# Optional: Make TidesDB the default engine
-# default-storage-engine = TidesDB
+# TidesDB is the default engine
+default-storage-engine = TidesDB
 
 [client]
 socket = /tmp/tidesql.sock
@@ -236,14 +236,15 @@ Then start with:
 
 # Check TidesDB is available
 mysql> SHOW ENGINES;
-+------------+---------+---------------------------------------------------------+
-| Engine     | Support | Comment                                                 |
-+------------+---------+---------------------------------------------------------+
-| TidesDB    | YES     | TidesDB LSM-based storage engine with ACID transactions |
-| MyISAM     | DEFAULT | Default engine as of MySQL 3.23 with great performance  |
-| MEMORY     | YES     | Hash based, stored in memory                            |
-| CSV        | YES     | CSV storage engine                                      |
-+------------+---------+---------------------------------------------------------+
++------------+---------+---------------------------------------------------------+--------------+------+------------+
+| Engine     | Support | Comment                                                 | Transactions | XA   | Savepoints |
++------------+---------+---------------------------------------------------------+--------------+------+------------+
+| TidesDB    | DEFAULT | TidesDB LSM-based storage engine with ACID transactions | YES          | NO   | YES        |
+| MRG_MYISAM | YES     | Collection of identical MyISAM tables                   | NO           | NO   | NO         |
+| MEMORY     | YES     | Hash based, stored in memory, useful for temporary...   | NO           | NO   | NO         |
+| MyISAM     | YES     | Default engine as of MySQL 3.23 with great performance  | NO           | NO   | NO         |
+| CSV        | YES     | CSV storage engine                                      | NO           | NO   | NO         |
++------------+---------+---------------------------------------------------------+--------------+------+------------+
 
 # Test creating a TidesDB table
 mysql> CREATE DATABASE test_tidesdb;
