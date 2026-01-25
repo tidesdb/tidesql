@@ -4117,8 +4117,31 @@ static int ft_search_word(tidesdb_column_family_t *ft_cf,
 
 /**
   @brief
-  Intersect two sorted PK arrays (AND operation).
+  Hash function for PK bytes.
+*/
+static uchar *ft_pk_get_key(const uchar *entry, size_t *length, 
+                            my_bool not_used __attribute__((unused)))
+{
+  /* Entry format: [4-byte length][pk data] */
+  uint32 len = uint4korr(entry);
+  *length = len;
+  return (uchar *)(entry + 4);
+}
+
+/**
+  @brief
+  Free function for hash entries.
+*/
+static void ft_pk_free(void *entry)
+{
+  my_free((uchar *)entry, MYF(0));
+}
+
+/**
+  @brief
+  Intersect two PK arrays (AND operation) using hash set.
   
+  O(n+m) complexity using hash lookup instead of O(n*m) nested loop.
   Returns a new array containing only PKs present in both inputs.
 */
 static void ft_intersect_results(char **pks1, size_t *lens1, uint count1,
@@ -4132,26 +4155,106 @@ static void ft_intersect_results(char **pks1, size_t *lens1, uint count1,
   
   if (!*out_pks || !*out_lens)
     return;
-
-  for (uint i = 0; i < count1 && *out_count < max_out; i++)
+  
+  /* For small sets, use simple O(n*m) -- hash overhead not worth it */
+  if (count1 <= 16 || count2 <= 16)
   {
-    for (uint j = 0; j < count2; j++)
+    for (uint i = 0; i < count1 && *out_count < max_out; i++)
     {
-      if (lens1[i] == lens2[j] && memcmp(pks1[i], pks2[j], lens1[i]) == 0)
+      for (uint j = 0; j < count2; j++)
       {
-        /* Found match -- copy PK */
-        char *pk = (char *)my_malloc(lens1[i], MYF(MY_WME));
-        if (pk)
+        if (lens1[i] == lens2[j] && memcmp(pks1[i], pks2[j], lens1[i]) == 0)
         {
-          memcpy(pk, pks1[i], lens1[i]);
-          (*out_pks)[*out_count] = pk;
-          (*out_lens)[*out_count] = lens1[i];
-          (*out_count)++;
+          char *pk = (char *)my_malloc(lens1[i], MYF(MY_WME));
+          if (pk)
+          {
+            memcpy(pk, pks1[i], lens1[i]);
+            (*out_pks)[*out_count] = pk;
+            (*out_lens)[*out_count] = lens1[i];
+            (*out_count)++;
+          }
+          break;
         }
-        break;
+      }
+    }
+    return;
+  }
+  
+  /* Build hash set from smaller array for O(n+m) lookup */
+  char **smaller_pks, **larger_pks;
+  size_t *smaller_lens, *larger_lens;
+  uint smaller_count, larger_count;
+  
+  if (count1 <= count2)
+  {
+    smaller_pks = pks1; smaller_lens = lens1; smaller_count = count1;
+    larger_pks = pks2; larger_lens = lens2; larger_count = count2;
+  }
+  else
+  {
+    smaller_pks = pks2; smaller_lens = lens2; smaller_count = count2;
+    larger_pks = pks1; larger_lens = lens1; larger_count = count1;
+  }
+  
+  /* Create hash table from smaller set */
+  HASH pk_hash;
+  if (hash_init(&pk_hash, &my_charset_bin, smaller_count, 0, 0,
+                ft_pk_get_key, ft_pk_free, HASH_UNIQUE))
+  {
+    /* Hash init failed -- fall back to O(n*m) */
+    for (uint i = 0; i < count1 && *out_count < max_out; i++)
+    {
+      for (uint j = 0; j < count2; j++)
+      {
+        if (lens1[i] == lens2[j] && memcmp(pks1[i], pks2[j], lens1[i]) == 0)
+        {
+          char *pk = (char *)my_malloc(lens1[i], MYF(MY_WME));
+          if (pk)
+          {
+            memcpy(pk, pks1[i], lens1[i]);
+            (*out_pks)[*out_count] = pk;
+            (*out_lens)[*out_count] = lens1[i];
+            (*out_count)++;
+          }
+          break;
+        }
+      }
+    }
+    return;
+  }
+  
+  /* Insert smaller set into hash -- format: [4-byte len][pk data] */
+  for (uint i = 0; i < smaller_count; i++)
+  {
+    size_t entry_size = 4 + smaller_lens[i];
+    uchar *entry = (uchar *)my_malloc(entry_size, MYF(MY_WME));
+    if (entry)
+    {
+      int4store(entry, (uint32)smaller_lens[i]);
+      memcpy(entry + 4, smaller_pks[i], smaller_lens[i]);
+      if (my_hash_insert(&pk_hash, entry))
+        my_free(entry, MYF(0));
+    }
+  }
+  
+  /* Probe hash with larger set */
+  for (uint i = 0; i < larger_count && *out_count < max_out; i++)
+  {
+    uchar *found = (uchar *)hash_search(&pk_hash, (uchar *)larger_pks[i], larger_lens[i]);
+    if (found)
+    {
+      char *pk = (char *)my_malloc(larger_lens[i], MYF(MY_WME));
+      if (pk)
+      {
+        memcpy(pk, larger_pks[i], larger_lens[i]);
+        (*out_pks)[*out_count] = pk;
+        (*out_lens)[*out_count] = larger_lens[i];
+        (*out_count)++;
       }
     }
   }
+  
+  hash_free(&pk_hash);
 }
 
 /**
