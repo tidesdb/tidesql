@@ -288,7 +288,7 @@ public:
   /* Statistics and info */
   int info(uint flag);
   int extra(enum ha_extra_function operation);
-  int delete_all_rows(void);
+  int delete_all_rows(ha_rows* nrows=NULL);
   ha_rows records_in_range(uint inx, key_range *min_key, key_range *max_key);
   
   /* Table maintenance */

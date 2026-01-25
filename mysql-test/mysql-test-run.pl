@@ -448,7 +448,7 @@ sub main {
     }
   }
 
-  if ( not defined @$completed ) {
+  if ( not defined($completed) || !@$completed ) {
     mtr_error("Test suite aborted");
   }
 
