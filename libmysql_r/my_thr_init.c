@@ -1,1 +1,0 @@
-../libmysql/my_thr_init.c

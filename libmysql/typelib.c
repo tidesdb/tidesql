@@ -1,1 +1,0 @@
-../mysys/typelib.c

@@ -1,1 +1,0 @@
-../strings/ctype-gbk.c

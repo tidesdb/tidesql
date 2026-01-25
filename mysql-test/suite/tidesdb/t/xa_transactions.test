@@ -1,0 +1,89 @@
+--echo #
+--echo # TidesDB XA Transaction Tests
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Create test table
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  value VARCHAR(100)
+) ENGINE=TidesDB;
+
+--echo # Test 2: Basic XA transaction - commit
+XA START 'xa_test_1';
+INSERT INTO t1 VALUES (1, 'xa value 1');
+INSERT INTO t1 VALUES (2, 'xa value 2');
+XA END 'xa_test_1';
+XA PREPARE 'xa_test_1';
+XA COMMIT 'xa_test_1';
+
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 3: XA transaction - rollback
+XA START 'xa_test_2';
+INSERT INTO t1 VALUES (3, 'xa value 3');
+INSERT INTO t1 VALUES (4, 'xa value 4');
+XA END 'xa_test_2';
+XA PREPARE 'xa_test_2';
+XA ROLLBACK 'xa_test_2';
+
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 4: XA transaction with update
+XA START 'xa_test_3';
+UPDATE t1 SET value = 'updated xa value' WHERE id = 1;
+XA END 'xa_test_3';
+XA PREPARE 'xa_test_3';
+XA COMMIT 'xa_test_3';
+
+SELECT * FROM t1 WHERE id = 1;
+
+--echo # Test 5: XA transaction with delete
+XA START 'xa_test_4';
+DELETE FROM t1 WHERE id = 2;
+XA END 'xa_test_4';
+XA PREPARE 'xa_test_4';
+XA COMMIT 'xa_test_4';
+
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 6: XA RECOVER (should show no prepared transactions)
+XA RECOVER;
+
+--echo # Test 7: Multiple operations in XA transaction
+XA START 'xa_test_5';
+INSERT INTO t1 VALUES (10, 'multi 1');
+INSERT INTO t1 VALUES (11, 'multi 2');
+UPDATE t1 SET value = 'multi updated' WHERE id = 10;
+DELETE FROM t1 WHERE id = 11;
+INSERT INTO t1 VALUES (12, 'multi 3');
+XA END 'xa_test_5';
+XA PREPARE 'xa_test_5';
+XA COMMIT 'xa_test_5';
+
+SELECT * FROM t1 WHERE id >= 10 ORDER BY id;
+
+--echo # Test 8: XA with one phase commit (no prepare)
+XA START 'xa_test_6';
+INSERT INTO t1 VALUES (20, 'one phase');
+XA END 'xa_test_6';
+XA COMMIT 'xa_test_6' ONE PHASE;
+
+SELECT * FROM t1 WHERE id = 20;
+
+--echo # Cleanup
+DROP TABLE t1;
+
+--echo #
+--echo # XA transaction tests completed!
+--echo #

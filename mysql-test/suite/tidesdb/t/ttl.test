@@ -1,0 +1,84 @@
+--echo #
+--echo # TidesDB TTL (Time-To-Live) Tests
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Create table and insert data with default TTL
+--echo # Note: TidesDB supports TTL at the row level via the tidesdb_default_ttl variable
+
+# Show current TTL setting
+SHOW VARIABLES LIKE 'tidesdb_default_ttl';
+
+--echo # Test 2: Create a table for TTL testing
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  data VARCHAR(100),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=TidesDB;
+
+--echo # Test 3: Insert data (with default TTL = 0, no expiration)
+INSERT INTO t1 (id, data) VALUES (1, 'persistent data 1');
+INSERT INTO t1 (id, data) VALUES (2, 'persistent data 2');
+INSERT INTO t1 (id, data) VALUES (3, 'persistent data 3');
+
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 4: Verify data persists (no TTL expiration)
+SELECT COUNT(*) FROM t1;
+
+--echo # Test 5: Update data
+UPDATE t1 SET data = 'updated data' WHERE id = 2;
+SELECT * FROM t1 WHERE id = 2;
+
+--echo # Test 6: Delete and verify
+DELETE FROM t1 WHERE id = 3;
+SELECT COUNT(*) FROM t1;
+
+--echo # Test 7: Table with timestamp for manual TTL tracking
+CREATE TABLE t2 (
+  id INT PRIMARY KEY,
+  data VARCHAR(100),
+  expires_at TIMESTAMP,
+  INDEX idx_expires (expires_at)
+) ENGINE=TidesDB;
+
+INSERT INTO t2 VALUES (1, 'temp data 1', DATE_ADD(NOW(), INTERVAL 1 HOUR));
+INSERT INTO t2 VALUES (2, 'temp data 2', DATE_ADD(NOW(), INTERVAL 2 HOUR));
+INSERT INTO t2 VALUES (3, 'expired data', DATE_SUB(NOW(), INTERVAL 1 HOUR));
+
+--echo # Query for non-expired data
+SELECT id, data FROM t2 WHERE expires_at > NOW() ORDER BY id;
+
+--echo # Query for expired data (would be cleaned up by application)
+SELECT id, data FROM t2 WHERE expires_at <= NOW() ORDER BY id;
+
+--echo # Test 8: Bulk insert with timestamps
+CREATE TABLE t3 (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  event_type VARCHAR(50),
+  event_data TEXT,
+  event_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+) ENGINE=TidesDB;
+
+INSERT INTO t3 (event_type, event_data) VALUES ('login', 'user1 logged in');
+INSERT INTO t3 (event_type, event_data) VALUES ('action', 'user1 performed action');
+INSERT INTO t3 (event_type, event_data) VALUES ('logout', 'user1 logged out');
+
+SELECT id, event_type FROM t3 ORDER BY id;
+
+--echo # Cleanup
+DROP TABLE t1, t2, t3;
+
+--echo #
+--echo # TTL tests completed!
+--echo #

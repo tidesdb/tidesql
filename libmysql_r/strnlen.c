@@ -1,1 +1,0 @@
-../libmysql/strnlen.c

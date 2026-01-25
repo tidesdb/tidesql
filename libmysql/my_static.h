@@ -1,1 +1,0 @@
-../mysys/my_static.h

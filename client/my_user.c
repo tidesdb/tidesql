@@ -1,1 +1,0 @@
-../sql-common/my_user.c

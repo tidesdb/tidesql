@@ -1,1 +1,0 @@
-../strings/ctype-big5.c

@@ -1,4 +1,0 @@
---default-storage-engine=innodb
---innodb-file-per-table
---innodb_buffer_pool_min_pages_div32=7
---innodb_buffer_pool_size=6mb

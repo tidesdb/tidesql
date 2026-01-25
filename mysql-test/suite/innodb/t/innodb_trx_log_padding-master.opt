@@ -1,2 +1,0 @@
---innodb_trx_log_write_block_size=0
---innodb_flush_log_at_trx_commit=1

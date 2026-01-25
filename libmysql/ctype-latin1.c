@@ -1,1 +1,0 @@
-../strings/ctype-latin1.c

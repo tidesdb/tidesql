@@ -1,1 +1,0 @@
-../strings/ctype-win1250ch.c

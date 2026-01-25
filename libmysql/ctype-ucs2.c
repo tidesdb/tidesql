@@ -1,1 +1,0 @@
-../strings/ctype-ucs2.c

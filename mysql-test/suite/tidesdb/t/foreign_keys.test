@@ -1,0 +1,56 @@
+--echo #
+--echo # TidesDB Foreign Key Definition Tests
+--echo #
+--echo # Note: TidesDB stores FK definitions in MariaDB's data dictionary.
+--echo # FK constraint enforcement is application-level responsibility.
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE tidesdb_check;
+
+--echo # Test 1: Create tables with FK definition
+CREATE TABLE parent (
+  id INT PRIMARY KEY,
+  name VARCHAR(50)
+) ENGINE=TidesDB;
+
+CREATE TABLE child (
+  id INT PRIMARY KEY,
+  parent_id INT,
+  value VARCHAR(50),
+  FOREIGN KEY (parent_id) REFERENCES parent(id)
+) ENGINE=TidesDB;
+
+--echo # Test 2: Verify FK is stored in schema
+SHOW CREATE TABLE child;
+
+--echo # Test 3: Insert data
+INSERT INTO parent VALUES (1, 'Parent 1');
+INSERT INTO parent VALUES (2, 'Parent 2');
+INSERT INTO child VALUES (1, 1, 'Child 1');
+INSERT INTO child VALUES (2, 2, 'Child 2');
+
+SELECT * FROM child ORDER BY id;
+
+--echo # Test 4: FK with FOREIGN_KEY_CHECKS=0
+SET FOREIGN_KEY_CHECKS=0;
+INSERT INTO child VALUES (3, 999, 'Child with non-existent parent');
+SET FOREIGN_KEY_CHECKS=1;
+
+SELECT * FROM child ORDER BY id;
+
+--echo # Cleanup
+DROP TABLE child;
+DROP TABLE parent;
+
+--echo #
+--echo # Foreign key definition tests completed!
+--echo #
