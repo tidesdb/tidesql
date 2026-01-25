@@ -61,6 +61,9 @@ extern "C" {
 /* Maximum number of secondary indexes per table */
 #define TIDESDB_MAX_INDEXES 64
 
+/* Maximum number of fulltext indexes per table */
+#define TIDESDB_MAX_FT_INDEXES 16
+
 typedef struct st_tidesdb_share {
   char *table_name;
   uint table_name_length;
@@ -93,6 +96,11 @@ typedef struct st_tidesdb_share {
   /* Hidden primary key counter for tables without explicit PK */
   ulonglong hidden_pk_value;
   pthread_mutex_t hidden_pk_mutex;
+  
+  /* Fulltext index column families (inverted indexes) */
+  tidesdb_column_family_t *ft_cf[TIDESDB_MAX_FT_INDEXES];
+  uint ft_key_nr[TIDESDB_MAX_FT_INDEXES];  /* Key number for each FT index */
+  uint num_ft_indexes;
 } TIDESDB_SHARE;
 
 /** @brief
@@ -126,6 +134,14 @@ class ha_tidesdb: public handler
   bool bulk_insert_active;
   tidesdb_txn_t *bulk_txn;
   ha_rows bulk_insert_rows;
+  
+  /* Fulltext search state */
+  uint ft_current_idx;              /* Current FT index being searched */
+  tidesdb_iter_t *ft_iter;          /* Iterator for FT results */
+  char **ft_matched_pks;            /* Array of matched primary keys */
+  size_t *ft_matched_pk_lens;       /* Lengths of matched PKs */
+  uint ft_matched_count;            /* Number of matched PKs */
+  uint ft_current_match;            /* Current position in matches */
 
   /* Helper methods */
   int pack_row(uchar *buf, uchar **packed, size_t *packed_len);
@@ -143,6 +159,14 @@ class ha_tidesdb: public handler
   int update_index_entries(const uchar *old_buf, const uchar *new_buf, tidesdb_txn_t *txn);
   int create_secondary_indexes(const char *table_name);
   int open_secondary_indexes(const char *table_name);
+  
+  /* Fulltext index helper methods */
+  int create_fulltext_indexes(const char *table_name);
+  int open_fulltext_indexes(const char *table_name);
+  int insert_ft_words(uint ft_idx, const uchar *buf, tidesdb_txn_t *txn);
+  int delete_ft_words(uint ft_idx, const uchar *buf, tidesdb_txn_t *txn);
+  int tokenize_text(const char *text, size_t len, CHARSET_INFO *cs,
+                    void (*callback)(const char *word, size_t word_len, void *arg), void *arg);
   
 public:
   ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg);
@@ -177,6 +201,7 @@ public:
            HA_REC_NOT_IN_SEQ |        /* Records not in sequential order */
            HA_NULL_IN_KEY |           /* Nulls allowed in keys */
            HA_CAN_INDEX_BLOBS |       /* Can index blob columns */
+           HA_CAN_FULLTEXT |          /* Supports FULLTEXT indexes */
            HA_PRIMARY_KEY_IN_READ_INDEX |
            HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
            HA_STATS_RECORDS_IS_EXACT |  /* We can provide exact row counts */

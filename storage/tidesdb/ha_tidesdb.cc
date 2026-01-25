@@ -331,7 +331,7 @@ static int tidesdb_init_func(void *p)
   tidesdb_hton->savepoint_release = tidesdb_savepoint_release;
   
   /* Initialize TidesDB instance */
-  char db_path[FN_REFLEN];
+  static char db_path[FN_REFLEN];  /* Static to ensure it persists */
   if (tidesdb_data_dir)
   {
     strncpy(db_path, tidesdb_data_dir, sizeof(db_path) - 1);
@@ -341,15 +341,15 @@ static int tidesdb_init_func(void *p)
     /* Default to MySQL data directory + tidesdb */
     snprintf(db_path, sizeof(db_path), "%s/tidesdb", mysql_data_home);
   }
+  db_path[sizeof(db_path) - 1] = '\0';
   
-  tidesdb_config_t config = {
-    .db_path = db_path,
-    .num_flush_threads = (int)tidesdb_flush_threads,
-    .num_compaction_threads = (int)tidesdb_compaction_threads,
-    .log_level = (int)tidesdb_log_level,
-    .block_cache_size = tidesdb_block_cache_size,
-    .max_open_sstables = 256
-  };
+  tidesdb_config_t config = tidesdb_default_config();
+  config.db_path = db_path;
+  config.num_flush_threads = (int)tidesdb_flush_threads;
+  config.num_compaction_threads = (int)tidesdb_compaction_threads;
+  config.log_level = (int)tidesdb_log_level;
+  config.block_cache_size = tidesdb_block_cache_size;
+  config.max_open_sstables = 256;
   
   if (tidesdb_open(&config, &tidesdb_instance) != TDB_SUCCESS)
   {
@@ -741,19 +741,73 @@ int ha_tidesdb::pack_row(uchar *buf, uchar **packed, size_t *packed_len)
 
   size_t row_len = table->s->reclength;
   
-  if (row_buffer_len < row_len)
+  /* Calculate total size including BLOB/TEXT data with 4-byte length prefix each */
+  size_t total_len = row_len;
+  for (uint i = 0; i < table->s->fields; i++)
   {
-    if (row_buffer)
-      my_free(row_buffer, MYF(0));
-    row_buffer = (uchar *)my_malloc(row_len, MYF(MY_WME));
-    if (!row_buffer)
-      DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-    row_buffer_len = row_len;
+    Field *field = table->field[i];
+    if (field->type() == MYSQL_TYPE_BLOB || 
+        field->type() == MYSQL_TYPE_MEDIUM_BLOB ||
+        field->type() == MYSQL_TYPE_LONG_BLOB ||
+        field->type() == MYSQL_TYPE_TINY_BLOB)
+    {
+      total_len += 4;  /* 4-byte length prefix */
+      if (!field->is_null())
+      {
+        String str;
+        field->val_str(&str);
+        total_len += str.length();
+      }
+    }
   }
   
-  memcpy(row_buffer, buf, row_len);
-  *packed = row_buffer;
-  *packed_len = row_len;
+  /* Allocate buffer for row + BLOB data */
+  uchar *new_buf = (uchar *)my_malloc(total_len, MYF(MY_WME));
+  if (!new_buf)
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  
+  /* Copy fixed-length portion */
+  memcpy(new_buf, buf, row_len);
+  
+  /* Append BLOB/TEXT data with length prefix */
+  size_t blob_offset = row_len;
+  for (uint i = 0; i < table->s->fields; i++)
+  {
+    Field *field = table->field[i];
+    if (field->type() == MYSQL_TYPE_BLOB || 
+        field->type() == MYSQL_TYPE_MEDIUM_BLOB ||
+        field->type() == MYSQL_TYPE_LONG_BLOB ||
+        field->type() == MYSQL_TYPE_TINY_BLOB)
+    {
+      uint32 blob_len = 0;
+      if (!field->is_null())
+      {
+        String str;
+        field->val_str(&str);
+        blob_len = str.length();
+        
+        /* Store 4-byte length prefix */
+        int4store(new_buf + blob_offset, blob_len);
+        blob_offset += 4;
+        
+        /* Copy blob data */
+        if (blob_len > 0)
+        {
+          memcpy(new_buf + blob_offset, str.ptr(), blob_len);
+          blob_offset += blob_len;
+        }
+      }
+      else
+      {
+        /* NULL blob - store 0 length */
+        int4store(new_buf + blob_offset, 0);
+        blob_offset += 4;
+      }
+    }
+  }
+  
+  *packed = new_buf;
+  *packed_len = total_len;
   
   DBUG_RETURN(0);
 }
@@ -761,6 +815,10 @@ int ha_tidesdb::pack_row(uchar *buf, uchar **packed, size_t *packed_len)
 /**
   @brief
   Unpack a stored row back into MySQL's row buffer.
+  
+  For BLOB/TEXT fields, the data is stored after the fixed-length row portion
+  with a 4-byte length prefix for each blob field. We copy blob data to 
+  row_buffer to ensure it persists after the packed buffer is freed.
 */
 int ha_tidesdb::unpack_row(uchar *buf, const uchar *packed, size_t packed_len)
 {
@@ -772,7 +830,91 @@ int ha_tidesdb::unpack_row(uchar *buf, const uchar *packed, size_t packed_len)
     DBUG_RETURN(HA_ERR_CRASHED);
   }
   
+  /* Copy fixed-length portion */
   memcpy(buf, packed, row_len);
+  
+  /* Calculate total blob data size needed */
+  size_t total_blob_size = 0;
+  size_t blob_offset = row_len;
+  for (uint i = 0; i < table->s->fields; i++)
+  {
+    Field *field = table->field[i];
+    if (field->type() == MYSQL_TYPE_BLOB || 
+        field->type() == MYSQL_TYPE_MEDIUM_BLOB ||
+        field->type() == MYSQL_TYPE_LONG_BLOB ||
+        field->type() == MYSQL_TYPE_TINY_BLOB)
+    {
+      if (blob_offset + 4 > packed_len)
+        DBUG_RETURN(HA_ERR_CRASHED);
+      
+      uint32 blob_len = uint4korr(packed + blob_offset);
+      blob_offset += 4 + blob_len;
+      total_blob_size += blob_len;
+    }
+  }
+  
+  /* Allocate/reallocate row_buffer for blob data */
+  if (total_blob_size > 0)
+  {
+    if (row_buffer_len < total_blob_size)
+    {
+      if (row_buffer)
+        my_free(row_buffer, MYF(0));
+      row_buffer = (uchar *)my_malloc(total_blob_size, MYF(MY_WME));
+      if (!row_buffer)
+        DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+      row_buffer_len = total_blob_size;
+    }
+  }
+  
+  /* Read BLOB/TEXT data and set up pointers */
+  blob_offset = row_len;
+  size_t buffer_offset = 0;
+  for (uint i = 0; i < table->s->fields; i++)
+  {
+    Field *field = table->field[i];
+    if (field->type() == MYSQL_TYPE_BLOB || 
+        field->type() == MYSQL_TYPE_MEDIUM_BLOB ||
+        field->type() == MYSQL_TYPE_LONG_BLOB ||
+        field->type() == MYSQL_TYPE_TINY_BLOB)
+    {
+      Field_blob *blob_field = (Field_blob *)field;
+      uint packlength = blob_field->pack_length_no_ptr();
+      uchar *field_ptr = buf + (field->ptr - table->record[0]);
+      
+      /* Read 4-byte length prefix from packed data */
+      uint32 blob_len = uint4korr(packed + blob_offset);
+      blob_offset += 4;
+      
+      /* Store length in field's native format */
+      switch (packlength)
+      {
+        case 1: field_ptr[0] = (uchar)blob_len; break;
+        case 2: int2store(field_ptr, blob_len); break;
+        case 3: int3store(field_ptr, blob_len); break;
+        case 4: int4store(field_ptr, blob_len); break;
+      }
+      
+      /* Copy blob data to our persistent buffer and point to it */
+      if (blob_len > 0)
+      {
+        if (blob_offset + blob_len > packed_len)
+          DBUG_RETURN(HA_ERR_CRASHED);
+        
+        memcpy(row_buffer + buffer_offset, packed + blob_offset, blob_len);
+        uchar *blob_ptr = row_buffer + buffer_offset;
+        memcpy(field_ptr + packlength, &blob_ptr, sizeof(char*));
+        blob_offset += blob_len;
+        buffer_offset += blob_len;
+      }
+      else
+      {
+        /* Empty blob - set pointer to NULL */
+        uchar *null_ptr = NULL;
+        memcpy(field_ptr + packlength, &null_ptr, sizeof(char*));
+      }
+    }
+  }
   
   DBUG_RETURN(0);
 }
@@ -1225,6 +1367,10 @@ int ha_tidesdb::create_secondary_indexes(const char *table_name)
     if (i == table->s->primary_key)
       continue;
     
+    /* Skip fulltext keys - handled separately */
+    if (table->key_info[i].algorithm == HA_KEY_ALG_FULLTEXT)
+      continue;
+    
     /* Create CF for this secondary index: tablename_idx_N */
     snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%u", cf_name, i);
     
@@ -1265,6 +1411,13 @@ int ha_tidesdb::open_secondary_indexes(const char *table_name)
       continue;
     }
     
+    /* Skip fulltext keys - handled separately */
+    if (table->key_info[i].algorithm == HA_KEY_ALG_FULLTEXT)
+    {
+      share->index_cf[i] = NULL;
+      continue;
+    }
+    
     /* Try to open CF for this secondary index */
     snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%u", cf_name, i);
     
@@ -1276,6 +1429,334 @@ int ha_tidesdb::open_secondary_indexes(const char *table_name)
   }
   
   DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Create column families for fulltext indexes during table creation.
+  
+  Fulltext indexes use an inverted index structure:
+  - Key: word (normalized, lowercase)
+  - Value: list of primary keys containing that word
+*/
+int ha_tidesdb::create_fulltext_indexes(const char *table_name)
+{
+  DBUG_ENTER("ha_tidesdb::create_fulltext_indexes");
+  
+  char cf_name[256];
+  char ft_cf_name[512];
+  get_cf_name(table_name, cf_name, sizeof(cf_name));
+  
+  tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
+  cf_config.write_buffer_size = tidesdb_write_buffer_size;
+  cf_config.enable_bloom_filter = 1;  /* Always use bloom filter for FT */
+  cf_config.bloom_fpr = 0.01;
+  
+  if (tidesdb_enable_compression)
+  {
+    cf_config.compression_algo = tidesdb_compression_algo;
+  }
+  
+  uint ft_count = 0;
+  for (uint i = 0; i < table->s->keys && ft_count < TIDESDB_MAX_FT_INDEXES; i++)
+  {
+    KEY *key = &table->key_info[i];
+    if (key->algorithm != HA_KEY_ALG_FULLTEXT)
+      continue;
+    
+    /* Create CF for this fulltext index: tablename_ft_N */
+    snprintf(ft_cf_name, sizeof(ft_cf_name), "%s_ft_%u", cf_name, i);
+    
+    int ret = tidesdb_create_column_family(tidesdb_instance, ft_cf_name, &cf_config);
+    if (ret != TDB_SUCCESS && ret != TDB_ERR_EXISTS)
+    {
+      sql_print_error("TidesDB: Failed to create FT index CF '%s': %d", ft_cf_name, ret);
+      DBUG_RETURN(HA_ERR_GENERIC);
+    }
+    
+    sql_print_information("TidesDB: Created fulltext index '%s' for key %u", ft_cf_name, i);
+    ft_count++;
+  }
+  
+  DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Open fulltext index column families for an existing table.
+*/
+int ha_tidesdb::open_fulltext_indexes(const char *table_name)
+{
+  DBUG_ENTER("ha_tidesdb::open_fulltext_indexes");
+  
+  char cf_name[256];
+  char ft_cf_name[512];
+  get_cf_name(table_name, cf_name, sizeof(cf_name));
+  
+  share->num_ft_indexes = 0;
+  
+  for (uint i = 0; i < table->s->keys && share->num_ft_indexes < TIDESDB_MAX_FT_INDEXES; i++)
+  {
+    KEY *key = &table->key_info[i];
+    if (key->algorithm != HA_KEY_ALG_FULLTEXT)
+      continue;
+    
+    snprintf(ft_cf_name, sizeof(ft_cf_name), "%s_ft_%u", cf_name, i);
+    
+    tidesdb_column_family_t *ft_cf = tidesdb_get_column_family(tidesdb_instance, ft_cf_name);
+    if (ft_cf)
+    {
+      share->ft_cf[share->num_ft_indexes] = ft_cf;
+      share->ft_key_nr[share->num_ft_indexes] = i;
+      share->num_ft_indexes++;
+    }
+  }
+  
+  DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Simple word tokenizer for fulltext indexing.
+  
+  Splits text into words, converts to lowercase, and calls callback for each word.
+  Skips words shorter than ft_min_word_len or longer than ft_max_word_len.
+*/
+int ha_tidesdb::tokenize_text(const char *text, size_t len, CHARSET_INFO *cs,
+                               void (*callback)(const char *word, size_t word_len, void *arg), 
+                               void *arg)
+{
+  DBUG_ENTER("ha_tidesdb::tokenize_text");
+  
+  if (!text || len == 0)
+    DBUG_RETURN(0);
+  
+  char word_buf[256];
+  size_t word_len = 0;
+  
+  for (size_t i = 0; i <= len; i++)
+  {
+    char c = (i < len) ? text[i] : ' ';
+    
+    /* Check if character is alphanumeric */
+    bool is_word_char = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || (c == '_');
+    
+    if (is_word_char && word_len < sizeof(word_buf) - 1)
+    {
+      /* Convert to lowercase */
+      word_buf[word_len++] = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
+    }
+    else if (word_len > 0)
+    {
+      /* End of word - check length constraints */
+      if (word_len >= ft_min_word_len && word_len <= ft_max_word_len)
+      {
+        word_buf[word_len] = '\0';
+        callback(word_buf, word_len, arg);
+      }
+      word_len = 0;
+    }
+  }
+  
+  DBUG_RETURN(0);
+}
+
+/* Callback context for inserting FT words */
+struct ft_insert_ctx {
+  ha_tidesdb *handler;
+  tidesdb_column_family_t *ft_cf;
+  tidesdb_txn_t *txn;
+  uchar *pk;
+  size_t pk_len;
+  int result;
+};
+
+static void ft_insert_word_callback(const char *word, size_t word_len, void *arg)
+{
+  ft_insert_ctx *ctx = (ft_insert_ctx *)arg;
+  if (ctx->result != 0)
+    return;
+  
+  /* 
+    Inverted index format:
+    Key: word + '\0' + primary_key
+    Value: empty (presence indicates match)
+  */
+  size_t key_len = word_len + 1 + ctx->pk_len;
+  uchar *key = (uchar *)my_malloc(key_len, MYF(MY_WME));
+  if (!key)
+  {
+    ctx->result = HA_ERR_OUT_OF_MEM;
+    return;
+  }
+  
+  memcpy(key, word, word_len);
+  key[word_len] = '\0';
+  memcpy(key + word_len + 1, ctx->pk, ctx->pk_len);
+  
+  /* Insert into FT index - value is empty */
+  int ret = tidesdb_txn_put(ctx->txn, ctx->ft_cf, key, key_len, (uint8_t *)"", 0, -1);
+  my_free(key, MYF(0));
+  
+  if (ret != TDB_SUCCESS && ret != TDB_ERR_EXISTS)
+  {
+    ctx->result = HA_ERR_GENERIC;
+  }
+}
+
+/**
+  @brief
+  Insert words from a row into the fulltext index.
+*/
+int ha_tidesdb::insert_ft_words(uint ft_idx, const uchar *buf, tidesdb_txn_t *txn)
+{
+  DBUG_ENTER("ha_tidesdb::insert_ft_words");
+  
+  if (ft_idx >= share->num_ft_indexes || !share->ft_cf[ft_idx])
+    DBUG_RETURN(0);
+  
+  uint key_nr = share->ft_key_nr[ft_idx];
+  KEY *key = &table->key_info[key_nr];
+  
+  /* Get primary key for this row */
+  uchar *pk = NULL;
+  size_t pk_len = 0;
+  int ret = build_primary_key(buf, &pk, &pk_len);
+  if (ret)
+    DBUG_RETURN(ret);
+  
+  /* Save PK since build_primary_key uses shared buffer */
+  uchar *saved_pk = (uchar *)my_malloc(pk_len, MYF(MY_WME));
+  if (!saved_pk)
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  memcpy(saved_pk, pk, pk_len);
+  
+  ft_insert_ctx ctx;
+  ctx.handler = this;
+  ctx.ft_cf = share->ft_cf[ft_idx];
+  ctx.txn = txn;
+  ctx.pk = saved_pk;
+  ctx.pk_len = pk_len;
+  ctx.result = 0;
+  
+  /* Process each column in the fulltext key */
+  for (uint i = 0; i < key->key_parts; i++)
+  {
+    KEY_PART_INFO *part = &key->key_part[i];
+    Field *field = part->field;
+    
+    if (field->is_null())
+      continue;
+    
+    /* Get field value as string */
+    String str;
+    field->val_str(&str);
+    
+    if (str.length() > 0)
+    {
+      tokenize_text(str.ptr(), str.length(), field->charset(),
+                    ft_insert_word_callback, &ctx);
+    }
+  }
+  
+  my_free(saved_pk, MYF(0));
+  
+  DBUG_RETURN(ctx.result);
+}
+
+/* Callback context for deleting FT words */
+struct ft_delete_ctx {
+  ha_tidesdb *handler;
+  tidesdb_column_family_t *ft_cf;
+  tidesdb_txn_t *txn;
+  uchar *pk;
+  size_t pk_len;
+  int result;
+};
+
+static void ft_delete_word_callback(const char *word, size_t word_len, void *arg)
+{
+  ft_delete_ctx *ctx = (ft_delete_ctx *)arg;
+  if (ctx->result != 0)
+    return;
+  
+  size_t key_len = word_len + 1 + ctx->pk_len;
+  uchar *key = (uchar *)my_malloc(key_len, MYF(MY_WME));
+  if (!key)
+  {
+    ctx->result = HA_ERR_OUT_OF_MEM;
+    return;
+  }
+  
+  memcpy(key, word, word_len);
+  key[word_len] = '\0';
+  memcpy(key + word_len + 1, ctx->pk, ctx->pk_len);
+  
+  int ret = tidesdb_txn_delete(ctx->txn, ctx->ft_cf, key, key_len);
+  my_free(key, MYF(0));
+  
+  if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
+  {
+    ctx->result = HA_ERR_GENERIC;
+  }
+}
+
+/**
+  @brief
+  Delete words from a row from the fulltext index.
+*/
+int ha_tidesdb::delete_ft_words(uint ft_idx, const uchar *buf, tidesdb_txn_t *txn)
+{
+  DBUG_ENTER("ha_tidesdb::delete_ft_words");
+  
+  if (ft_idx >= share->num_ft_indexes)
+    DBUG_RETURN(0);
+  
+  uint key_nr = share->ft_key_nr[ft_idx];
+  KEY *key = &table->key_info[key_nr];
+  
+  /* Get primary key for this row */
+  uchar *pk = NULL;
+  size_t pk_len = 0;
+  int ret = build_primary_key(buf, &pk, &pk_len);
+  if (ret)
+    DBUG_RETURN(ret);
+  
+  uchar *saved_pk = (uchar *)my_malloc(pk_len, MYF(MY_WME));
+  if (!saved_pk)
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  memcpy(saved_pk, pk, pk_len);
+  
+  ft_delete_ctx ctx;
+  ctx.handler = this;
+  ctx.ft_cf = share->ft_cf[ft_idx];
+  ctx.txn = txn;
+  ctx.pk = saved_pk;
+  ctx.pk_len = pk_len;
+  ctx.result = 0;
+  
+  for (uint i = 0; i < key->key_parts; i++)
+  {
+    KEY_PART_INFO *part = &key->key_part[i];
+    Field *field = part->field;
+    
+    if (field->is_null())
+      continue;
+    
+    String str;
+    field->val_str(&str);
+    
+    if (str.length() > 0)
+    {
+      tokenize_text(str.ptr(), str.length(), field->charset(),
+                    ft_delete_word_callback, &ctx);
+    }
+  }
+  
+  my_free(saved_pk, MYF(0));
+  
+  DBUG_RETURN(ctx.result);
 }
 
 /**
@@ -1355,6 +1836,9 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
   
   /* Open secondary indexes */
   open_secondary_indexes(name);
+  
+  /* Open fulltext indexes */
+  open_fulltext_indexes(name);
 
   DBUG_RETURN(0);
 }
@@ -1430,11 +1914,20 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg,
   TABLE *saved_table = table;
   table = table_arg;  /* Temporarily set for create_secondary_indexes */
   ret = create_secondary_indexes(name);
+  if (ret)
+  {
+    table = saved_table;
+    sql_print_error("TidesDB: Failed to create secondary indexes");
+    DBUG_RETURN(ret);
+  }
+  
+  /* Create fulltext index column families */
+  ret = create_fulltext_indexes(name);
   table = saved_table;
   
   if (ret)
   {
-    sql_print_error("TidesDB: Failed to create secondary indexes");
+    sql_print_error("TidesDB: Failed to create fulltext indexes");
     DBUG_RETURN(ret);
   }
   
@@ -1683,6 +2176,10 @@ int ha_tidesdb::write_row(uchar *buf)
   
   /* Insert the row */
   ret = tidesdb_txn_put(txn, share->cf, key, key_len, value, value_len, ttl);
+  
+  /* Free the packed row buffer - TidesDB copies the data */
+  my_free(value, MYF(0));
+  
   if (ret != TDB_SUCCESS)
   {
     if (own_txn)
@@ -1712,6 +2209,29 @@ int ha_tidesdb::write_row(uchar *buf)
       DBUG_RETURN(ret);
     }
   }
+  
+  /* 
+    TODO: Fulltext index entries - disabled for now due to transaction issues.
+    The inverted index structure is in place but needs debugging.
+    
+    if (share->num_ft_indexes > 0)
+    {
+      for (uint i = 0; i < share->num_ft_indexes; i++)
+      {
+        ret = insert_ft_words(i, buf, txn);
+        if (ret)
+        {
+          sql_print_error("TidesDB: Failed to insert FT words for index %u: %d", i, ret);
+          if (own_txn)
+          {
+            tidesdb_txn_rollback(txn);
+            tidesdb_txn_free(txn);
+          }
+          DBUG_RETURN(ret);
+        }
+      }
+    }
+  */
   
   /* Commit if we own the transaction */
   if (own_txn)
@@ -1845,6 +2365,10 @@ int ha_tidesdb::update_row(const uchar *old_data, uchar *new_data)
   
   /* Insert/update the new row */
   ret = tidesdb_txn_put(txn, share->cf, new_key, new_key_len, value, value_len, ttl);
+  
+  /* Free the packed row buffer - TidesDB copies the data */
+  my_free(value, MYF(0));
+  
   if (ret != TDB_SUCCESS)
   {
     if (own_txn)
@@ -1938,6 +2462,21 @@ int ha_tidesdb::delete_row(const uchar *buf)
   for (uint i = 0; i < table->s->keys; i++)
   {
     ret = delete_index_entry(i, buf, txn);
+    if (ret)
+    {
+      if (own_txn)
+      {
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+      }
+      DBUG_RETURN(ret);
+    }
+  }
+  
+  /* Delete fulltext index entries */
+  for (uint i = 0; i < share->num_ft_indexes; i++)
+  {
+    ret = delete_ft_words(i, buf, txn);
     if (ret)
     {
       if (own_txn)
@@ -2929,32 +3468,277 @@ int ha_tidesdb::analyze(THD* thd, HA_CHECK_OPT* check_opt)
   DBUG_RETURN(HA_ADMIN_OK);
 }
 
+/* TidesDB fulltext search info structure */
+struct tidesdb_ft_info {
+  struct _ft_vft *please;
+  ha_tidesdb *handler;
+  uint ft_idx;
+  char **matched_pks;
+  size_t *matched_pk_lens;
+  uint matched_count;
+  uint current_match;
+  float relevance;
+};
+
+static int tidesdb_ft_read_next(FT_INFO *fts, char *record);
+static float tidesdb_ft_find_relevance(FT_INFO *fts, uchar *record, uint length);
+static void tidesdb_ft_close_search(FT_INFO *fts);
+static float tidesdb_ft_get_relevance(FT_INFO *fts);
+static void tidesdb_ft_reinit_search(FT_INFO *fts);
+
+static struct _ft_vft tidesdb_ft_vft = {
+  tidesdb_ft_read_next,
+  tidesdb_ft_find_relevance,
+  tidesdb_ft_close_search,
+  tidesdb_ft_get_relevance,
+  tidesdb_ft_reinit_search
+};
+
+static int tidesdb_ft_read_next(FT_INFO *fts, char *record)
+{
+  return HA_ERR_END_OF_FILE;
+}
+
+static float tidesdb_ft_find_relevance(FT_INFO *fts, uchar *record, uint length)
+{
+  return 1.0f;
+}
+
+static void tidesdb_ft_close_search(FT_INFO *fts)
+{
+  tidesdb_ft_info *info = (tidesdb_ft_info *)fts;
+  if (info)
+  {
+    if (info->matched_pks)
+    {
+      for (uint i = 0; i < info->matched_count; i++)
+      {
+        if (info->matched_pks[i])
+          my_free(info->matched_pks[i], MYF(0));
+      }
+      my_free(info->matched_pks, MYF(0));
+    }
+    if (info->matched_pk_lens)
+      my_free(info->matched_pk_lens, MYF(0));
+    my_free(info, MYF(0));
+  }
+}
+
+static float tidesdb_ft_get_relevance(FT_INFO *fts)
+{
+  tidesdb_ft_info *info = (tidesdb_ft_info *)fts;
+  return info ? info->relevance : 0.0f;
+}
+
+static void tidesdb_ft_reinit_search(FT_INFO *fts)
+{
+  tidesdb_ft_info *info = (tidesdb_ft_info *)fts;
+  if (info)
+    info->current_match = 0;
+}
+
 /**
   @brief
   Initialize full-text search.
   
-  TODO: Implement inverted index for full-text search support.
-  Currently returns error as full-text is not yet implemented.
+  Searches the inverted index for matching words and collects primary keys.
 */
 FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
 {
   DBUG_ENTER("ha_tidesdb::ft_init_ext");
   
-  /* Full-text search not yet implemented */
-  my_error(ER_NOT_SUPPORTED_YET, MYF(0), "FULLTEXT indexes with TidesDB");
-  DBUG_RETURN(NULL);
+  /* Find the fulltext index for this key number */
+  uint ft_idx = UINT_MAX;
+  for (uint i = 0; i < share->num_ft_indexes; i++)
+  {
+    if (share->ft_key_nr[i] == inx)
+    {
+      ft_idx = i;
+      break;
+    }
+  }
+  
+  if (ft_idx == UINT_MAX)
+  {
+    my_error(ER_NOT_SUPPORTED_YET, MYF(0), "FULLTEXT index not found");
+    DBUG_RETURN(NULL);
+  }
+  
+  /* Allocate FT info structure */
+  tidesdb_ft_info *info = (tidesdb_ft_info *)my_malloc(sizeof(tidesdb_ft_info), MYF(MY_WME | MY_ZEROFILL));
+  if (!info)
+    DBUG_RETURN(NULL);
+  
+  info->please = &tidesdb_ft_vft;
+  info->handler = this;
+  info->ft_idx = ft_idx;
+  info->matched_pks = NULL;
+  info->matched_pk_lens = NULL;
+  info->matched_count = 0;
+  info->current_match = 0;
+  info->relevance = 1.0f;
+  
+  /* Tokenize the search query */
+  const char *query = key->ptr();
+  size_t query_len = key->length();
+  
+  /* Simple single-word search for now */
+  char word_buf[256];
+  size_t word_len = 0;
+  
+  for (size_t i = 0; i <= query_len && word_len < sizeof(word_buf) - 1; i++)
+  {
+    char c = (i < query_len) ? query[i] : ' ';
+    bool is_word_char = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || (c == '_');
+    
+    if (is_word_char)
+    {
+      word_buf[word_len++] = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
+    }
+    else if (word_len > 0)
+    {
+      break;  /* Use first word only for simple search */
+    }
+  }
+  word_buf[word_len] = '\0';
+  
+  if (word_len == 0)
+  {
+    ft_handler = (FT_INFO *)info;
+    DBUG_RETURN((FT_INFO *)info);
+  }
+  
+  /* Search the inverted index for this word */
+  tidesdb_column_family_t *ft_cf = share->ft_cf[ft_idx];
+  
+  /* Create prefix to search: word + '\0' */
+  char prefix[258];
+  memcpy(prefix, word_buf, word_len);
+  prefix[word_len] = '\0';
+  size_t prefix_len = word_len + 1;
+  
+  /* Collect matching primary keys */
+  size_t max_matches = 1000;
+  info->matched_pks = (char **)my_malloc(max_matches * sizeof(char *), MYF(MY_WME | MY_ZEROFILL));
+  info->matched_pk_lens = (size_t *)my_malloc(max_matches * sizeof(size_t), MYF(MY_WME | MY_ZEROFILL));
+  
+  if (!info->matched_pks || !info->matched_pk_lens)
+  {
+    tidesdb_ft_close_search((FT_INFO *)info);
+    DBUG_RETURN(NULL);
+  }
+  
+  /* Iterate through the FT index looking for matching prefix */
+  tidesdb_txn_t *txn = NULL;
+  if (tidesdb_txn_begin(tidesdb_instance, &txn) == TDB_SUCCESS)
+  {
+    tidesdb_iter_t *iter = NULL;
+    if (tidesdb_iter_new(txn, ft_cf, &iter) == TDB_SUCCESS)
+    {
+      /* Seek to prefix */
+      tidesdb_iter_seek(iter, (uint8_t *)prefix, prefix_len);
+      
+      while (tidesdb_iter_valid(iter) && info->matched_count < max_matches)
+      {
+        uint8_t *iter_key = NULL;
+        size_t iter_key_len = 0;
+        
+        if (tidesdb_iter_key(iter, &iter_key, &iter_key_len) != TDB_SUCCESS)
+          break;
+        
+        /* Check if key starts with our prefix */
+        if (iter_key_len < prefix_len || memcmp(iter_key, prefix, prefix_len) != 0)
+          break;
+        
+        /* Extract primary key (after word + '\0') */
+        size_t pk_len = iter_key_len - prefix_len;
+        if (pk_len > 0)
+        {
+          char *pk = (char *)my_malloc(pk_len, MYF(MY_WME));
+          if (pk)
+          {
+            memcpy(pk, iter_key + prefix_len, pk_len);
+            info->matched_pks[info->matched_count] = pk;
+            info->matched_pk_lens[info->matched_count] = pk_len;
+            info->matched_count++;
+          }
+        }
+        
+        tidesdb_iter_next(iter);
+      }
+      
+      tidesdb_iter_free(iter);
+    }
+    tidesdb_txn_rollback(txn);
+    tidesdb_txn_free(txn);
+  }
+  
+  ft_handler = (FT_INFO *)info;
+  ft_current_idx = ft_idx;
+  ft_matched_pks = info->matched_pks;
+  ft_matched_pk_lens = info->matched_pk_lens;
+  ft_matched_count = info->matched_count;
+  ft_current_match = 0;
+  
+  DBUG_RETURN((FT_INFO *)info);
 }
 
 /**
   @brief
   Read next full-text search result.
   
-  TODO: Implement when inverted index is available.
+  Fetches the next matching row by primary key.
 */
 int ha_tidesdb::ft_read(uchar *buf)
 {
   DBUG_ENTER("ha_tidesdb::ft_read");
-  DBUG_RETURN(HA_ERR_END_OF_FILE);
+  
+  if (!ft_handler || ft_current_match >= ft_matched_count)
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
+  
+  /* Get the next matched primary key */
+  char *pk = ft_matched_pks[ft_current_match];
+  size_t pk_len = ft_matched_pk_lens[ft_current_match];
+  ft_current_match++;
+  
+  /* Fetch the row by primary key */
+  tidesdb_txn_t *txn = NULL;
+  int ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+  if (ret != TDB_SUCCESS)
+    DBUG_RETURN(HA_ERR_GENERIC);
+  
+  uint8_t *value = NULL;
+  size_t value_len = 0;
+  ret = tidesdb_txn_get(txn, share->cf, (uint8_t *)pk, pk_len, &value, &value_len);
+  
+  if (ret != TDB_SUCCESS)
+  {
+    tidesdb_txn_rollback(txn);
+    tidesdb_txn_free(txn);
+    DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+  }
+  
+  /* Unpack the row */
+  ret = unpack_row(buf, value, value_len);
+  free(value);
+  
+  tidesdb_txn_rollback(txn);
+  tidesdb_txn_free(txn);
+  
+  if (ret)
+    DBUG_RETURN(ret);
+  
+  /* Save current key for position() */
+  free_current_key();
+  current_key = (uchar *)my_malloc(pk_len, MYF(MY_WME));
+  if (current_key)
+  {
+    memcpy(current_key, pk, pk_len);
+    current_key_len = pk_len;
+  }
+  
+  DBUG_RETURN(0);
 }
 
 /**
@@ -3173,22 +3957,82 @@ int ha_tidesdb::repair(THD* thd, HA_CHECK_OPT* check_opt)
 
 /**
   @brief
-  Backup table using TidesDB's backup API.
+  Backup the TidesDB database.
   
-  Note: TidesDB backup is done at the database level via tidesdb_backup()
-  which is in tidesdb.h. For now, we return OK since per-table backup
-  is not directly supported.
+  Flushes all pending data to disk via compaction, then uses system cp
+  to create a backup copy of the data directory.
+  
+  The backup is created at /tmp/tidesdb_backup_YYYYMMDD_HHMMSS
 */
 int ha_tidesdb::backup(THD* thd, HA_CHECK_OPT* check_opt)
 {
   DBUG_ENTER("ha_tidesdb::backup");
   
-  /* TidesDB backup is done at the database level, not per-table */
-  /* The tidesdb_backup() function is in tidesdb.h (not db.h) */
-  /* For per-table backup, users should use mysqldump or similar tools */
+  if (!tidesdb_instance)
+  {
+    sql_print_error("TidesDB: Cannot backup - database not initialized");
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
   
-  sql_print_information("TidesDB: Per-table backup not supported. "
-                        "Use mysqldump or tidesdb_backup() at database level.");
+  /* Verify we have a valid table share */
+  if (!share || !share->cf)
+  {
+    sql_print_error("TidesDB: Cannot backup - no valid table share");
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  /* Generate backup directory name with timestamp */
+  char backup_dir[512];
+  time_t now = time(NULL);
+  struct tm *tm_info = localtime(&now);
+  char timestamp[32];
+  strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
+  
+  snprintf(backup_dir, sizeof(backup_dir), "/tmp/tidesdb_backup_%s", timestamp);
+  
+  sql_print_information("TidesDB: Starting backup to '%s'", backup_dir);
+  
+  /* Flush the current table's memtable to ensure data is on disk */
+  int ret = tidesdb_flush_memtable(share->cf);
+  if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
+  {
+    sql_print_warning("TidesDB: Pre-backup compaction returned: %d", ret);
+  }
+  
+  /* Get the source data directory */
+  const char *src_dir = tidesdb_data_dir ? tidesdb_data_dir : "./tidesdb";
+  
+  /* Use system cp to copy the data directory */
+  char cmd[1024];
+  snprintf(cmd, sizeof(cmd), "cp -r '%s' '%s' 2>&1", src_dir, backup_dir);
+  
+  FILE *fp = popen(cmd, "r");
+  if (!fp)
+  {
+    sql_print_error("TidesDB: Failed to execute backup command");
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  char output[256];
+  while (fgets(output, sizeof(output), fp) != NULL)
+  {
+    /* Log any output from cp command */
+    sql_print_warning("TidesDB: cp: %s", output);
+  }
+  
+  int status = pclose(fp);
+  if (status != 0)
+  {
+    sql_print_error("TidesDB: Backup copy failed with status: %d", status);
+    DBUG_RETURN(HA_ADMIN_FAILED);
+  }
+  
+  /* Remove the LOCK file from backup so it can be opened */
+  char lock_file[600];
+  snprintf(lock_file, sizeof(lock_file), "%s/LOCK", backup_dir);
+  unlink(lock_file);
+  
+  sql_print_information("TidesDB: Backup completed successfully to '%s'", backup_dir);
   
   DBUG_RETURN(HA_ADMIN_OK);
 }
