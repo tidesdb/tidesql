@@ -3138,42 +3138,54 @@ int ha_tidesdb::info(uint flag)
   /* Provide basic statistics */
   if (flag & HA_STATUS_VARIABLE)
   {
-    /* Use cached row count if available, otherwise estimate */
-    if (share && share->row_count_valid)
-    {
-      stats.records = share->row_count;
-    }
-    else
-    {
-      /* Estimate based on data size or use a reasonable default */
-      stats.records = 1000;
-    }
     stats.deleted = 0;
     
-    /* Get actual data size from TidesDB statistics if available */
+    /* Get accurate statistics from TidesDB */
     if (share && share->cf)
     {
       tidesdb_stats_t *tdb_stats = NULL;
       if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
       {
-        stats.data_file_length = 0;
-        for (int i = 0; i < tdb_stats->num_levels; i++)
+        /* Use total_keys for accurate row count */
+        stats.records = tdb_stats->total_keys;
+        
+        /* Use total_data_size for data file length */
+        stats.data_file_length = tdb_stats->total_data_size;
+        
+        /* Calculate mean record length from avg sizes */
+        if (tdb_stats->avg_key_size > 0 || tdb_stats->avg_value_size > 0)
         {
-          stats.data_file_length += tdb_stats->level_sizes[i];
+          stats.mean_rec_length = (ulong)(tdb_stats->avg_key_size + tdb_stats->avg_value_size);
         }
+        else
+        {
+          stats.mean_rec_length = table->s->reclength;
+        }
+        
         tidesdb_free_stats(tdb_stats);
       }
       else
       {
-        stats.data_file_length = 1024 * 1024;  /* Fallback estimate */
+        /* Fallback: use cached or default values */
+        if (share->row_count_valid)
+        {
+          stats.records = share->row_count;
+        }
+        else
+        {
+          stats.records = 1000;
+        }
+        stats.data_file_length = 1024 * 1024;
+        stats.mean_rec_length = table->s->reclength;
       }
     }
     else
     {
+      stats.records = 1000;
       stats.data_file_length = 1024 * 1024;
+      stats.mean_rec_length = table->s->reclength;
     }
     stats.index_file_length = 0;
-    stats.mean_rec_length = table->s->reclength;
   }
   
   if (flag & HA_STATUS_CONST)
@@ -3254,13 +3266,296 @@ int ha_tidesdb::delete_all_rows(void)
 
 /**
   @brief
+  Estimate the cost of a full table scan.
+  
+  LSM-tree scan cost model using TidesDB statistics:
+  - total_data_size: actual bytes to read (I/O cost)
+  - total_sstables: merge iterator overhead
+  - hit_rate: cache effectiveness (reduces I/O)
+  
+  Cost formula:
+    cost = (data_blocks * merge_overhead * cache_miss_rate) + cpu_cost
+  
+  The result should be comparable to read_time() so the optimizer
+  can correctly choose between table scan and index scan.
+*/
+double ha_tidesdb::scan_time()
+{
+  DBUG_ENTER("ha_tidesdb::scan_time");
+  
+  double cost = 1.0;  /* Minimum cost */
+  
+  if (share && share->cf)
+  {
+    tidesdb_stats_t *tdb_stats = NULL;
+    if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+    {
+      /* 
+        I/O cost: based on total data size
+        - 64KB block size
+        - Each block read has base cost of 1.0
+      */
+      double data_bytes = (double)tdb_stats->total_data_size;
+      double block_size = 65536.0;
+      double num_blocks = data_bytes / block_size;
+      if (num_blocks < 1.0)
+        num_blocks = 1.0;
+      
+      /* 
+        Merge overhead: LSM-tree scans must merge across SSTables
+        - Each SSTable in the scan path adds comparison overhead
+        - Memtable is also part of the merge
+      */
+      int total_sstables = 1;  /* Start with 1 for memtable */
+      for (int i = 0; i < tdb_stats->num_levels; i++)
+      {
+        total_sstables += tdb_stats->level_num_sstables[i];
+      }
+      /* Log-based overhead: merging N sources is O(N log N) per row */
+      double merge_overhead = 1.0 + (log2((double)total_sstables) * 0.1);
+      if (merge_overhead < 1.0)
+        merge_overhead = 1.0;
+      
+      /* 
+        Cache factor: hit_rate reduces I/O cost
+        - 0% hit rate = full I/O cost
+        - 100% hit rate = 10% of I/O cost (still need CPU for merge)
+      */
+      double cache_factor = 1.0 - (tdb_stats->hit_rate * 0.9);
+      if (cache_factor < 0.1)
+        cache_factor = 0.1;
+      
+      /* 
+        CPU cost: processing each row has a base cost
+        - Independent of I/O, represents deserialization + comparison
+      */
+      double cpu_cost = (double)tdb_stats->total_keys * 0.001;
+      
+      /* Total cost */
+      cost = (num_blocks * merge_overhead * cache_factor) + cpu_cost;
+      
+      tidesdb_free_stats(tdb_stats);
+    }
+    else
+    {
+      /* Fallback: estimate based on stats.records */
+      ha_rows rows = stats.records;
+      if (rows == 0)
+        rows = 100;
+      cost = (double)rows / 100.0 + 1.0;
+    }
+  }
+  
+  /* Minimum cost of 1.0 for any scan */
+  if (cost < 1.0)
+    cost = 1.0;
+  
+  DBUG_RETURN(cost);
+}
+
+/**
+  @brief
+  Estimate the cost of reading rows via index.
+  
+  LSM-tree index read cost model using TidesDB statistics:
+  - read_amp: average levels checked per point lookup (with bloom filters, ~1.0-1.5)
+  - hit_rate: cache effectiveness (reduces I/O cost)
+  - avg_key_size + avg_value_size: I/O per row
+  
+  Cost components:
+  1. Seek cost: cost to position iterator at start of each range
+  2. Row fetch cost: cost to read each row (index entry + data row lookup)
+*/
+double ha_tidesdb::read_time(uint index, uint ranges, ha_rows rows)
+{
+  DBUG_ENTER("ha_tidesdb::read_time");
+  
+  if (rows == 0)
+    DBUG_RETURN(0.0);
+  
+  double cost = 0.1;  /* Minimum cost */
+  
+  if (share && share->cf)
+  {
+    tidesdb_stats_t *tdb_stats = NULL;
+    if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+    {
+      /* Read amplification: average levels checked per point lookup */
+      double read_amp = tdb_stats->read_amp;
+      if (read_amp < 1.0)
+        read_amp = 1.0;
+      
+      /* 
+        Seek cost per range:
+        - Each seek requires checking bloom filters and potentially reading blocks
+        - With good bloom filters (read_amp ~1.0), seek is cheap
+        - Without bloom filters (read_amp = num_levels), seek is expensive
+      */
+      double seek_cost = 0.3 * read_amp;
+      
+      /* 
+        Row fetch cost:
+        - For primary key index: just read the row data
+        - For secondary index: read index entry + lookup primary key
+        - Base cost: fraction of a block read per row
+        - Amortized across block: multiple rows per block reduces per-row cost
+      */
+      double avg_row_size = tdb_stats->avg_key_size + tdb_stats->avg_value_size;
+      if (avg_row_size < 50)
+        avg_row_size = 50;
+      
+      /* Rows per block (64KB blocks) */
+      double rows_per_block = 65536.0 / avg_row_size;
+      if (rows_per_block < 1.0)
+        rows_per_block = 1.0;
+      
+      /* Cost per row: 1/rows_per_block of a block read */
+      /* Add read_amp factor for non-primary index lookups */
+      double row_fetch_cost = (1.0 / rows_per_block) * read_amp;
+      
+      /* Cache reduces I/O cost */
+      double cache_factor = 1.0 - (tdb_stats->hit_rate * 0.9);  /* Up to 90% reduction */
+      if (cache_factor < 0.1)
+        cache_factor = 0.1;  /* Minimum 10% cost */
+      
+      /* Total cost: range seeks + row reads */
+      cost = (ranges * seek_cost * cache_factor) + (rows * row_fetch_cost * cache_factor);
+      
+      tidesdb_free_stats(tdb_stats);
+    }
+    else
+    {
+      /* Fallback: simple estimate */
+      /* Assume moderate read_amp of 2.0 */
+      cost = (double)ranges * 0.6 + (double)rows * 0.02;
+    }
+  }
+  
+  /* Minimum cost to avoid optimizer choosing index for 0 rows */
+  if (cost < 0.1)
+    cost = 0.1;
+  
+  DBUG_RETURN(cost);
+}
+
+/**
+  @brief
   Estimate records in a range.
+  
+  Uses TidesDB statistics for accurate estimation:
+  - total_keys: actual key count for base estimate
+  - Selectivity heuristics based on key parts and condition type
+  
+  This is critical for optimizer decisions:
+  - Low estimate → optimizer prefers index scan
+  - High estimate → optimizer prefers table scan
 */
 ha_rows ha_tidesdb::records_in_range(uint inx, key_range *min_key,
                                      key_range *max_key)
 {
   DBUG_ENTER("ha_tidesdb::records_in_range");
-  DBUG_RETURN(10);  /* Low estimate to encourage index usage */
+  
+  /* Get accurate row count from TidesDB stats */
+  ha_rows total_rows = stats.records;
+  if (share && share->cf)
+  {
+    tidesdb_stats_t *tdb_stats = NULL;
+    if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+    {
+      total_rows = tdb_stats->total_keys;
+      tidesdb_free_stats(tdb_stats);
+    }
+  }
+  
+  if (total_rows == 0)
+    total_rows = 100;  /* Minimum estimate for empty tables */
+  
+  /* If no key bounds, return all rows (full index scan) */
+  if (!min_key && !max_key)
+    DBUG_RETURN(total_rows);
+  
+  /* Count key parts used in the condition */
+  KEY *key_info = &table->key_info[inx];
+  uint key_parts_used = 0;
+  
+  if (min_key)
+  {
+    for (uint i = 0; i < key_info->key_parts; i++)
+    {
+      if (min_key->keypart_map & (1 << i))
+        key_parts_used++;
+    }
+  }
+  
+  /* 
+    Selectivity estimation:
+    - First key part: assume 1/sqrt(total_rows) selectivity (moderate cardinality)
+    - Each additional key part: divide by 10 (compound key selectivity)
+    - This is a heuristic; real cardinality stats would be better
+  */
+  double selectivity = 1.0;
+  if (key_parts_used > 0)
+  {
+    /* First key part: assume moderate cardinality */
+    double first_part_sel = 1.0 / sqrt((double)total_rows);
+    if (first_part_sel > 0.1)
+      first_part_sel = 0.1;  /* Cap at 10% for first part */
+    selectivity = first_part_sel;
+    
+    /* Additional key parts increase selectivity */
+    for (uint i = 1; i < key_parts_used; i++)
+    {
+      selectivity /= 10.0;
+    }
+  }
+  
+  /* Check for equality condition (min_key == max_key) */
+  bool is_equality = (min_key && max_key && 
+                      min_key->length == max_key->length &&
+                      memcmp(min_key->key, max_key->key, min_key->length) == 0);
+  
+  if (is_equality)
+  {
+    /* Primary key equality: exactly 1 row */
+    if (inx == table->s->primary_key)
+    {
+      DBUG_RETURN(1);
+    }
+    
+    /* Unique secondary index: exactly 1 row */
+    if (key_info->flags & HA_NOSAME)
+    {
+      DBUG_RETURN(1);
+    }
+    
+    /* Non-unique secondary index: estimate based on selectivity */
+    ha_rows estimate = (ha_rows)(total_rows * selectivity);
+    if (estimate < 1)
+      estimate = 1;
+    /* Non-unique indexes can have many duplicates */
+    if (estimate > total_rows / 10)
+      estimate = total_rows / 10;
+    if (estimate < 1)
+      estimate = 1;
+    DBUG_RETURN(estimate);
+  }
+  
+  /* Range condition: use selectivity with range factor */
+  /* Ranges typically return more rows than equality */
+  double range_factor = 5.0;  /* Ranges return ~5x more than equality */
+  ha_rows estimate = (ha_rows)(total_rows * selectivity * range_factor);
+  
+  if (estimate < 1)
+    estimate = 1;
+  
+  /* Cap at 30% of table for range scans */
+  ha_rows max_estimate = total_rows * 3 / 10;
+  if (max_estimate < 10)
+    max_estimate = 10;
+  if (estimate > max_estimate)
+    estimate = max_estimate;
+  
+  DBUG_RETURN(estimate);
 }
 
 /**

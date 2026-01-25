@@ -232,10 +232,14 @@ public:
 
   /** @brief
     Cost estimates for the optimizer.
+    
+    LSM-tree cost model considerations:
+    - Point lookups: memtable check + bloom filter checks + level lookups
+    - Range scans: merge across multiple levels (more expensive than B-tree)
+    - Block cache hits are much faster than disk reads
   */
-  virtual double scan_time() { return (double)(stats.records + stats.deleted) / 20.0 + 10; }
-  virtual double read_time(uint index, uint ranges, ha_rows rows)
-  { return (double)rows / 20.0 + 1; }
+  virtual double scan_time();
+  virtual double read_time(uint index, uint ranges, ha_rows rows);
 
   /*
     Handler methods - implemented in ha_tidesdb.cc
