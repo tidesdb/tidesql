@@ -166,11 +166,10 @@ AM_V_AR = $(am__v_AR_@AM_V@)
 am__v_AR_ = $(am__v_AR_@AM_DEFAULT_V@)
 am__v_AR_0 = @echo "  AR      " $@;
 am__v_AR_1 = 
-libtidesdb_engine_a_AR = $(AR) $(ARFLAGS)
-libtidesdb_engine_a_LIBADD =
-am_libtidesdb_engine_a_OBJECTS =  \
-	libtidesdb_engine_a-ha_tidesdb.$(OBJEXT)
-libtidesdb_engine_a_OBJECTS = $(am_libtidesdb_engine_a_OBJECTS)
+libtidesdb_a_AR = $(AR) $(ARFLAGS)
+libtidesdb_a_LIBADD =
+am_libtidesdb_a_OBJECTS = libtidesdb_a-ha_tidesdb.$(OBJEXT)
+libtidesdb_a_OBJECTS = $(am_libtidesdb_a_OBJECTS)
 ha_tidesdb_la_LIBADD =
 am_ha_tidesdb_la_OBJECTS = ha_tidesdb_la-ha_tidesdb.lo
 ha_tidesdb_la_OBJECTS = $(am_ha_tidesdb_la_OBJECTS)
@@ -198,7 +197,7 @@ DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)/include
 depcomp = $(SHELL) $(top_srcdir)/depcomp
 am__maybe_remake_depfiles = depfiles
 am__depfiles_remade = ./$(DEPDIR)/ha_tidesdb_la-ha_tidesdb.Plo \
-	./$(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Po
+	./$(DEPDIR)/libtidesdb_a-ha_tidesdb.Po
 am__mv = mv -f
 CXXCOMPILE = $(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) \
 	$(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS)
@@ -218,8 +217,8 @@ AM_V_CXXLD = $(am__v_CXXLD_@AM_V@)
 am__v_CXXLD_ = $(am__v_CXXLD_@AM_DEFAULT_V@)
 am__v_CXXLD_0 = @echo "  CXXLD   " $@;
 am__v_CXXLD_1 = 
-SOURCES = $(libtidesdb_engine_a_SOURCES) $(ha_tidesdb_la_SOURCES)
-DIST_SOURCES = $(libtidesdb_engine_a_SOURCES) $(ha_tidesdb_la_SOURCES)
+SOURCES = $(libtidesdb_a_SOURCES) $(ha_tidesdb_la_SOURCES)
+DIST_SOURCES = $(libtidesdb_a_SOURCES) $(ha_tidesdb_la_SOURCES)
 am__can_run_installinfo = \
   case $$AM_UPDATE_INFO_DIR in \
     n|no|NO) false;; \
@@ -577,11 +576,11 @@ ha_tidesdb_la_LDFLAGS = -module -rpath $(pkgplugindir) -ltidesdb -lzstd -llz4 -l
 ha_tidesdb_la_CXXFLAGS = $(AM_CXXFLAGS) -DMYSQL_DYNAMIC_PLUGIN
 ha_tidesdb_la_CFLAGS = $(AM_CFLAGS) -DMYSQL_DYNAMIC_PLUGIN
 ha_tidesdb_la_SOURCES = ha_tidesdb.cc
-EXTRA_LIBRARIES = libtidesdb_engine.a
+EXTRA_LIBRARIES = libtidesdb.a
 noinst_LIBRARIES = @plugin_tidesdb_static_target@
-libtidesdb_engine_a_CXXFLAGS = $(AM_CXXFLAGS)
-libtidesdb_engine_a_CFLAGS = $(AM_CFLAGS)
-libtidesdb_engine_a_SOURCES = ha_tidesdb.cc
+libtidesdb_a_CXXFLAGS = $(AM_CXXFLAGS)
+libtidesdb_a_CFLAGS = $(AM_CFLAGS)
+libtidesdb_a_SOURCES = ha_tidesdb.cc
 EXTRA_DIST = CMakeLists.txt plug.in building.md c.md
 all: all-am
 
@@ -655,10 +654,10 @@ clean-pkgpluginLTLIBRARIES:
 	  rm -f $${locs}; \
 	}
 
-libtidesdb_engine.a: $(libtidesdb_engine_a_OBJECTS) $(libtidesdb_engine_a_DEPENDENCIES) $(EXTRA_libtidesdb_engine_a_DEPENDENCIES) 
-	$(AM_V_at)-rm -f libtidesdb_engine.a
-	$(AM_V_AR)$(libtidesdb_engine_a_AR) libtidesdb_engine.a $(libtidesdb_engine_a_OBJECTS) $(libtidesdb_engine_a_LIBADD)
-	$(AM_V_at)$(RANLIB) libtidesdb_engine.a
+libtidesdb.a: $(libtidesdb_a_OBJECTS) $(libtidesdb_a_DEPENDENCIES) $(EXTRA_libtidesdb_a_DEPENDENCIES) 
+	$(AM_V_at)-rm -f libtidesdb.a
+	$(AM_V_AR)$(libtidesdb_a_AR) libtidesdb.a $(libtidesdb_a_OBJECTS) $(libtidesdb_a_LIBADD)
+	$(AM_V_at)$(RANLIB) libtidesdb.a
 
 ha_tidesdb.la: $(ha_tidesdb_la_OBJECTS) $(ha_tidesdb_la_DEPENDENCIES) $(EXTRA_ha_tidesdb_la_DEPENDENCIES) 
 	$(AM_V_CXXLD)$(ha_tidesdb_la_LINK)  $(ha_tidesdb_la_OBJECTS) $(ha_tidesdb_la_LIBADD) $(LIBS)
@@ -670,7 +669,7 @@ distclean-compile:
 	-rm -f *.tab.c
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ha_tidesdb_la-ha_tidesdb.Plo@am__quote@ # am--include-marker
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Po@am__quote@ # am--include-marker
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libtidesdb_a-ha_tidesdb.Po@am__quote@ # am--include-marker
 
 $(am__depfiles_remade):
 	@$(MKDIR_P) $(@D)
@@ -699,19 +698,19 @@ am--depfiles: $(am__depfiles_remade)
 @AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCXX_FALSE@	$(AM_V_CXX@am__nodep@)$(LTCXXCOMPILE) -c -o $@ $<
 
-libtidesdb_engine_a-ha_tidesdb.o: ha_tidesdb.cc
-@am__fastdepCXX_TRUE@	$(AM_V_CXX)$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libtidesdb_engine_a_CXXFLAGS) $(CXXFLAGS) -MT libtidesdb_engine_a-ha_tidesdb.o -MD -MP -MF $(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Tpo -c -o libtidesdb_engine_a-ha_tidesdb.o `test -f 'ha_tidesdb.cc' || echo '$(srcdir)/'`ha_tidesdb.cc
-@am__fastdepCXX_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Tpo $(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Po
-@AMDEP_TRUE@@am__fastdepCXX_FALSE@	$(AM_V_CXX)source='ha_tidesdb.cc' object='libtidesdb_engine_a-ha_tidesdb.o' libtool=no @AMDEPBACKSLASH@
+libtidesdb_a-ha_tidesdb.o: ha_tidesdb.cc
+@am__fastdepCXX_TRUE@	$(AM_V_CXX)$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libtidesdb_a_CXXFLAGS) $(CXXFLAGS) -MT libtidesdb_a-ha_tidesdb.o -MD -MP -MF $(DEPDIR)/libtidesdb_a-ha_tidesdb.Tpo -c -o libtidesdb_a-ha_tidesdb.o `test -f 'ha_tidesdb.cc' || echo '$(srcdir)/'`ha_tidesdb.cc
+@am__fastdepCXX_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libtidesdb_a-ha_tidesdb.Tpo $(DEPDIR)/libtidesdb_a-ha_tidesdb.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	$(AM_V_CXX)source='ha_tidesdb.cc' object='libtidesdb_a-ha_tidesdb.o' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCXX_FALSE@	$(AM_V_CXX@am__nodep@)$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libtidesdb_engine_a_CXXFLAGS) $(CXXFLAGS) -c -o libtidesdb_engine_a-ha_tidesdb.o `test -f 'ha_tidesdb.cc' || echo '$(srcdir)/'`ha_tidesdb.cc
+@am__fastdepCXX_FALSE@	$(AM_V_CXX@am__nodep@)$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libtidesdb_a_CXXFLAGS) $(CXXFLAGS) -c -o libtidesdb_a-ha_tidesdb.o `test -f 'ha_tidesdb.cc' || echo '$(srcdir)/'`ha_tidesdb.cc
 
-libtidesdb_engine_a-ha_tidesdb.obj: ha_tidesdb.cc
-@am__fastdepCXX_TRUE@	$(AM_V_CXX)$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libtidesdb_engine_a_CXXFLAGS) $(CXXFLAGS) -MT libtidesdb_engine_a-ha_tidesdb.obj -MD -MP -MF $(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Tpo -c -o libtidesdb_engine_a-ha_tidesdb.obj `if test -f 'ha_tidesdb.cc'; then $(CYGPATH_W) 'ha_tidesdb.cc'; else $(CYGPATH_W) '$(srcdir)/ha_tidesdb.cc'; fi`
-@am__fastdepCXX_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Tpo $(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Po
-@AMDEP_TRUE@@am__fastdepCXX_FALSE@	$(AM_V_CXX)source='ha_tidesdb.cc' object='libtidesdb_engine_a-ha_tidesdb.obj' libtool=no @AMDEPBACKSLASH@
+libtidesdb_a-ha_tidesdb.obj: ha_tidesdb.cc
+@am__fastdepCXX_TRUE@	$(AM_V_CXX)$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libtidesdb_a_CXXFLAGS) $(CXXFLAGS) -MT libtidesdb_a-ha_tidesdb.obj -MD -MP -MF $(DEPDIR)/libtidesdb_a-ha_tidesdb.Tpo -c -o libtidesdb_a-ha_tidesdb.obj `if test -f 'ha_tidesdb.cc'; then $(CYGPATH_W) 'ha_tidesdb.cc'; else $(CYGPATH_W) '$(srcdir)/ha_tidesdb.cc'; fi`
+@am__fastdepCXX_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libtidesdb_a-ha_tidesdb.Tpo $(DEPDIR)/libtidesdb_a-ha_tidesdb.Po
+@AMDEP_TRUE@@am__fastdepCXX_FALSE@	$(AM_V_CXX)source='ha_tidesdb.cc' object='libtidesdb_a-ha_tidesdb.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCXX_FALSE@	$(AM_V_CXX@am__nodep@)$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libtidesdb_engine_a_CXXFLAGS) $(CXXFLAGS) -c -o libtidesdb_engine_a-ha_tidesdb.obj `if test -f 'ha_tidesdb.cc'; then $(CYGPATH_W) 'ha_tidesdb.cc'; else $(CYGPATH_W) '$(srcdir)/ha_tidesdb.cc'; fi`
+@am__fastdepCXX_FALSE@	$(AM_V_CXX@am__nodep@)$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(libtidesdb_a_CXXFLAGS) $(CXXFLAGS) -c -o libtidesdb_a-ha_tidesdb.obj `if test -f 'ha_tidesdb.cc'; then $(CYGPATH_W) 'ha_tidesdb.cc'; else $(CYGPATH_W) '$(srcdir)/ha_tidesdb.cc'; fi`
 
 ha_tidesdb_la-ha_tidesdb.lo: ha_tidesdb.cc
 @am__fastdepCXX_TRUE@	$(AM_V_CXX)$(LIBTOOL) $(AM_V_lt) --tag=CXX $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(ha_tidesdb_la_CXXFLAGS) $(CXXFLAGS) -MT ha_tidesdb_la-ha_tidesdb.lo -MD -MP -MF $(DEPDIR)/ha_tidesdb_la-ha_tidesdb.Tpo -c -o ha_tidesdb_la-ha_tidesdb.lo `test -f 'ha_tidesdb.cc' || echo '$(srcdir)/'`ha_tidesdb.cc
@@ -854,7 +853,7 @@ clean-am: clean-generic clean-libtool clean-noinstLIBRARIES \
 
 distclean: distclean-am
 		-rm -f ./$(DEPDIR)/ha_tidesdb_la-ha_tidesdb.Plo
-	-rm -f ./$(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Po
+	-rm -f ./$(DEPDIR)/libtidesdb_a-ha_tidesdb.Po
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
 	distclean-tags
@@ -901,7 +900,7 @@ installcheck-am:
 
 maintainer-clean: maintainer-clean-am
 		-rm -f ./$(DEPDIR)/ha_tidesdb_la-ha_tidesdb.Plo
-	-rm -f ./$(DEPDIR)/libtidesdb_engine_a-ha_tidesdb.Po
+	-rm -f ./$(DEPDIR)/libtidesdb_a-ha_tidesdb.Po
 	-rm -f Makefile
 maintainer-clean-am: distclean-am maintainer-clean-generic
 

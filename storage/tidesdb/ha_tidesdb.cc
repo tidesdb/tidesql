@@ -2129,26 +2129,21 @@ int ha_tidesdb::repair(THD* thd, HA_CHECK_OPT* check_opt)
 /**
   @brief
   Backup table using TidesDB's backup API.
+  
+  Note: TidesDB backup is done at the database level via tidesdb_backup()
+  which is in tidesdb.h. For now, we return OK since per-table backup
+  is not directly supported.
 */
 int ha_tidesdb::backup(THD* thd, HA_CHECK_OPT* check_opt)
 {
   DBUG_ENTER("ha_tidesdb::backup");
   
   /* TidesDB backup is done at the database level, not per-table */
-  /* For per-table backup, we would need to implement a custom solution */
+  /* The tidesdb_backup() function is in tidesdb.h (not db.h) */
+  /* For per-table backup, users should use mysqldump or similar tools */
   
-  char backup_path[FN_REFLEN];
-  snprintf(backup_path, sizeof(backup_path), "%s/tidesdb_backup_%lu",
-           mysql_data_home, (ulong)time(NULL));
-  
-  int ret = tidesdb_backup(tidesdb_instance, backup_path);
-  if (ret != TDB_SUCCESS)
-  {
-    sql_print_error("TidesDB: Backup failed: %d", ret);
-    DBUG_RETURN(HA_ADMIN_FAILED);
-  }
-  
-  sql_print_information("TidesDB: Backup completed to %s", backup_path);
+  sql_print_information("TidesDB: Per-table backup not supported. "
+                        "Use mysqldump or tidesdb_backup() at database level.");
   
   DBUG_RETURN(HA_ADMIN_OK);
 }
@@ -2204,118 +2199,6 @@ int ha_tidesdb::reset(void)
   
   /* Free current key */
   free_current_key();
-  
-  DBUG_RETURN(0);
-}
-
-/**
-  @brief
-  Rename a table by copying data to new column family.
-*/
-int ha_tidesdb::rename_table(const char *from, const char *to)
-{
-  DBUG_ENTER("ha_tidesdb::rename_table");
-  
-  char from_cf[256], to_cf[256];
-  get_cf_name(from, from_cf, sizeof(from_cf));
-  get_cf_name(to, to_cf, sizeof(to_cf));
-  
-  /* Get source column family */
-  tidesdb_column_family_t *src_cf = tidesdb_get_column_family(tidesdb_instance, from_cf);
-  if (!src_cf)
-  {
-    sql_print_error("TidesDB: Source table '%s' not found for rename", from);
-    DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
-  }
-  
-  /* Create destination column family with same config */
-  tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-  cf_config.write_buffer_size = tidesdb_write_buffer_size;
-  cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-  cf_config.bloom_fpr = tidesdb_bloom_fpr;
-  
-  if (tidesdb_enable_compression)
-  {
-    cf_config.compression_algo = tidesdb_compression_algo;
-  }
-  
-  int ret = tidesdb_create_column_family(tidesdb_instance, to_cf, &cf_config);
-  if (ret != TDB_SUCCESS)
-  {
-    sql_print_error("TidesDB: Failed to create destination CF '%s': %d", to_cf, ret);
-    DBUG_RETURN(HA_ERR_GENERIC);
-  }
-  
-  tidesdb_column_family_t *dst_cf = tidesdb_get_column_family(tidesdb_instance, to_cf);
-  if (!dst_cf)
-  {
-    DBUG_RETURN(HA_ERR_GENERIC);
-  }
-  
-  /* Copy all data from source to destination */
-  tidesdb_txn_t *txn = NULL;
-  ret = tidesdb_txn_begin(tidesdb_instance, &txn);
-  if (ret != TDB_SUCCESS)
-  {
-    tidesdb_drop_column_family(tidesdb_instance, to_cf);
-    DBUG_RETURN(HA_ERR_GENERIC);
-  }
-  
-  tidesdb_iter_t *iter = NULL;
-  ret = tidesdb_iter_new(txn, src_cf, &iter);
-  if (ret != TDB_SUCCESS)
-  {
-    tidesdb_txn_free(txn);
-    tidesdb_drop_column_family(tidesdb_instance, to_cf);
-    DBUG_RETURN(HA_ERR_GENERIC);
-  }
-  
-  tidesdb_iter_seek_to_first(iter);
-  
-  while (tidesdb_iter_valid(iter))
-  {
-    uint8_t *key = NULL;
-    size_t key_size = 0;
-    uint8_t *value = NULL;
-    size_t value_size = 0;
-    
-    if (tidesdb_iter_key(iter, &key, &key_size) == TDB_SUCCESS &&
-        tidesdb_iter_value(iter, &value, &value_size) == TDB_SUCCESS)
-    {
-      ret = tidesdb_txn_put(txn, dst_cf, key, key_size, value, value_size, -1);
-      if (ret != TDB_SUCCESS)
-      {
-        tidesdb_iter_free(iter);
-        tidesdb_txn_rollback(txn);
-        tidesdb_txn_free(txn);
-        tidesdb_drop_column_family(tidesdb_instance, to_cf);
-        DBUG_RETURN(HA_ERR_GENERIC);
-      }
-    }
-    
-    tidesdb_iter_next(iter);
-  }
-  
-  tidesdb_iter_free(iter);
-  
-  ret = tidesdb_txn_commit(txn);
-  tidesdb_txn_free(txn);
-  
-  if (ret != TDB_SUCCESS)
-  {
-    tidesdb_drop_column_family(tidesdb_instance, to_cf);
-    DBUG_RETURN(HA_ERR_GENERIC);
-  }
-  
-  /* Drop source column family */
-  ret = tidesdb_drop_column_family(tidesdb_instance, from_cf);
-  if (ret != TDB_SUCCESS)
-  {
-    sql_print_warning("TidesDB: Failed to drop source CF '%s' after rename: %d", 
-                      from_cf, ret);
-  }
-  
-  sql_print_information("TidesDB: Renamed table '%s' to '%s'", from, to);
   
   DBUG_RETURN(0);
 }

@@ -23,9 +23,9 @@ VERSION="5.1.63"
 COMPILATION_COMMENT="Source distribution"
 BUGmysql="mysql@lists.mysql.com"
 # This is set by configure
-COMP_CALL_INFO="CC='gcc'  CFLAGS='-Wno-narrowing'  CXX=''  CXXFLAGS='-I/usr/local/include -Wno-narrowing -fpermissive'  LDFLAGS='-L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy'  ASFLAGS=''"
-COMP_RUN_INFO="CC='gcc'  CFLAGS=' -Wno-narrowing   -DUNIV_LINUX -DUNIV_LINUX'  CXX='g++'  CXXFLAGS=' -I/usr/local/include -Wno-narrowing -fpermissive   -fno-exceptions -fno-rtti'  LDFLAGS='-L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy -rdynamic '  ASFLAGS=''"
-CONFIGURE_LINE="./configure  '--prefix=/usr/local/tidesql' '--with-plugins=tidesdb,myisam,heap,csv' 'CXXFLAGS=-I/usr/local/include -Wno-narrowing -fpermissive' 'CFLAGS=-Wno-narrowing' 'LDFLAGS=-L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy'"
+COMP_CALL_INFO="CC='gcc'  CFLAGS='-g -O2'  CXX=''  CXXFLAGS='-I/usr/local/include -Wno-narrowing -fpermissive'  LDFLAGS='-L/usr/local/lib'  ASFLAGS=''"
+COMP_RUN_INFO="CC='gcc'  CFLAGS=' -g -O2   -DUNIV_LINUX -DUNIV_LINUX'  CXX='g++'  CXXFLAGS=' -I/usr/local/include -Wno-narrowing -fpermissive   -fno-exceptions -fno-rtti'  LDFLAGS='-L/usr/local/lib -rdynamic '  ASFLAGS=''"
+CONFIGURE_LINE="./configure  '--prefix=/tmp/mysql-test' '--with-plugins=tidesdb' 'LDFLAGS=-L/usr/local/lib' 'CXXFLAGS=-I/usr/local/include -Wno-narrowing -fpermissive'"
 
 LIBC_INFO=""
 for pat in /lib/libc.* /lib/libc-* /usr/lib/libc.* /usr/lib/libc-*

@@ -28,8 +28,8 @@ my @defaults_options;   #  Leading --no-defaults, --defaults-file, etc.
 $opt_example       = 0;
 $opt_help          = 0;
 $opt_log           = undef();
-$opt_mysqladmin    = "/usr/local/tidesql/bin/mysqladmin";
-$opt_mysqld        = "/usr/local/tidesql/libexec/mysqld";
+$opt_mysqladmin    = "/tmp/mysql-test/bin/mysqladmin";
+$opt_mysqld        = "/tmp/mysql-test/libexec/mysqld";
 $opt_no_log        = 0;
 $opt_password      = undef();
 $opt_tcp_ip        = 0;
@@ -212,7 +212,7 @@ sub defaults_for_group
 
 ####
 #### Init log file. Check for appropriate place for log file, in the following
-#### order:  my_print_defaults mysqld datadir, /usr/local/tidesql/share
+#### order:  my_print_defaults mysqld datadir, /tmp/mysql-test/share
 ####
 
 sub init_log
@@ -226,7 +226,7 @@ sub init_log
   }
   if (!defined($logdir))
   {
-    $logdir= "/usr/local/tidesql/share" if (-d "/usr/local/tidesql/share" && -w "/usr/local/tidesql/share");
+    $logdir= "/tmp/mysql-test/share" if (-d "/tmp/mysql-test/share" && -w "/tmp/mysql-test/share");
   }
   if (!defined($logdir))
   {
@@ -481,7 +481,7 @@ sub list_defaults_files
   return grep { defined $_ and not $seen{$_}++ and -f $_ and -r $_ }
               ('/etc/my.cnf',
                '/etc/mysql/my.cnf',
-               '/usr/local/tidesql/etc/my.cnf',
+               '/tmp/mysql-test/etc/my.cnf',
                ($ENV{MYSQL_HOME} ? "$ENV{MYSQL_HOME}/my.cnf" : undef),
                $opt{'extra-file'},
                ($ENV{HOME} ? "$ENV{HOME}/.my.cnf" : undef));
@@ -685,7 +685,7 @@ sub example
 #   (as per Linux/Unix standard). You may even replace the
 #   /etc/init.d/mysql.server script with it.
 #
-#   Before using, you must create a my.cnf file either in /usr/local/tidesql/etc/my.cnf
+#   Before using, you must create a my.cnf file either in /tmp/mysql-test/etc/my.cnf
 #   or /root/.my.cnf and add the [mysqld_multi] and [mysqld#] groups.
 #
 #   The script can be found from support-files/mysqld_multi.server.sh
@@ -693,17 +693,17 @@ sub example
 #
 
 [mysqld_multi]
-mysqld     = /usr/local/tidesql/bin/mysqld_safe
-mysqladmin = /usr/local/tidesql/bin/mysqladmin
+mysqld     = /tmp/mysql-test/bin/mysqld_safe
+mysqladmin = /tmp/mysql-test/bin/mysqladmin
 user       = multi_admin
 password   = my_password
 
 [mysqld2]
 socket     = /tmp/mysql.sock2
 port       = 3307
-pid-file   = /usr/local/tidesql/var2/hostname.pid2
-datadir    = /usr/local/tidesql/var2
-language   = /usr/local/tidesql/share/mysql/english
+pid-file   = /tmp/mysql-test/var2/hostname.pid2
+datadir    = /tmp/mysql-test/var2
+language   = /tmp/mysql-test/share/mysql/english
 user       = unix_user1
 
 [mysqld3]
@@ -712,25 +712,25 @@ ledir      = /path/to/mysqld-binary/
 mysqladmin = /path/to/mysqladmin
 socket     = /tmp/mysql.sock3
 port       = 3308
-pid-file   = /usr/local/tidesql/var3/hostname.pid3
-datadir    = /usr/local/tidesql/var3
-language   = /usr/local/tidesql/share/mysql/swedish
+pid-file   = /tmp/mysql-test/var3/hostname.pid3
+datadir    = /tmp/mysql-test/var3
+language   = /tmp/mysql-test/share/mysql/swedish
 user       = unix_user2
 
 [mysqld4]
 socket     = /tmp/mysql.sock4
 port       = 3309
-pid-file   = /usr/local/tidesql/var4/hostname.pid4
-datadir    = /usr/local/tidesql/var4
-language   = /usr/local/tidesql/share/mysql/estonia
+pid-file   = /tmp/mysql-test/var4/hostname.pid4
+datadir    = /tmp/mysql-test/var4
+language   = /tmp/mysql-test/share/mysql/estonia
 user       = unix_user3
  
 [mysqld6]
 socket     = /tmp/mysql.sock6
 port       = 3311
-pid-file   = /usr/local/tidesql/var6/hostname.pid6
-datadir    = /usr/local/tidesql/var6
-language   = /usr/local/tidesql/share/mysql/japanese
+pid-file   = /tmp/mysql-test/var6/hostname.pid6
+datadir    = /tmp/mysql-test/var6
+language   = /tmp/mysql-test/share/mysql/japanese
 user       = unix_user4
 EOF
   exit(0);

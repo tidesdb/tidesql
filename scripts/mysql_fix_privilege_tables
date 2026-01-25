@@ -22,7 +22,7 @@ password=""
 host="localhost"
 user="root"
 sql_only=0
-basedir="/usr/local/tidesql"
+basedir="/tmp/mysql-test"
 verbose=0
 args=""
 # no elaborate fallback here; with no argument, it will happen in "mysql"
@@ -30,7 +30,7 @@ port=""
 socket=""
 database="mysql"
 bindir=""
-pkgdatadir="/usr/local/tidesql/share/mysql"
+pkgdatadir="/tmp/mysql-test/share/mysql"
 print_defaults_bindir="."
 
 file=mysql_fix_privilege_tables.sql
@@ -94,7 +94,7 @@ parse_arguments() {
 # [mysql_install_db], and then merge with the command line arguments
 
 print_defaults=my_print_defaults
-for dir in ./bin /usr/local/tidesql/bin /usr/local/tidesql/bin extra $print_defaults_bindir/../bin $print_defaults_bindir/../extra
+for dir in ./bin /tmp/mysql-test/bin /tmp/mysql-test/bin extra $print_defaults_bindir/../bin $print_defaults_bindir/../extra
 do
   if test -x $dir/my_print_defaults
   then
@@ -117,7 +117,7 @@ dirname=`dirname "$0"`
 
 if test -z "$bindir"
 then
-  for i in /usr/local/tidesql/bin $basedir/bin "$dirname/../client"
+  for i in /tmp/mysql-test/bin $basedir/bin "$dirname/../client"
   do
     if test -f $i/mysql
     then

@@ -1249,7 +1249,7 @@
 	STACK_DIRECTION > 0 => grows toward higher addresses
 	STACK_DIRECTION < 0 => grows toward lower addresses
 	STACK_DIRECTION = 0 => direction of growth unknown */
-#define STACK_DIRECTION -1
+#define STACK_DIRECTION 1
 
 /* Define to 1 if the `S_IS*' macros in <sys/stat.h> do not work properly. */
 /* #undef STAT_MACROS_BROKEN */
@@ -1357,7 +1357,7 @@
 /* #undef WITH_PARTITION_STORAGE_ENGINE */
 
 /* Include LSM-based storage engine with ACID transactions into mysqld */
-/* #undef WITH_TIDESDB_STORAGE_ENGINE */
+#define WITH_TIDESDB_STORAGE_ENGINE 1
 
 /* Define WORDS_BIGENDIAN to 1 if your processor stores words with the most
    significant byte first (like Motorola and SPARC, unlike Intel). */

@@ -32,7 +32,7 @@
 #    "pkgincludedir" is set to the same as "includedir"
 #    "pkgdatadir"    is set to the same as "datadir"
 #    "pkgplugindir"  is set to "$pkglibdir/plugin"
-#    "pkgsuppdir"    is set to "/usr/local/tidesql/support-files",
+#    "pkgsuppdir"    is set to "/tmp/mysql-test/support-files",
 #                    normally the same as "datadir"
 #
 #  The temporary directory path given to "--tmp=<path>" has to be
@@ -257,7 +257,7 @@ if [ x"$BASE_SYSTEM" != x"netware" ] ; then
     sbindir=./bin \
     scriptdir=./bin \
     libexecdir=./bin \
-    pkgdatadir=/usr/local/tidesql/share/mysql
+    pkgdatadir=/tmp/mysql-test/share/mysql
   cd ..
 
   # ----------------------------------------------------------------------
@@ -265,18 +265,18 @@ if [ x"$BASE_SYSTEM" != x"netware" ] ; then
   # the build for the relevant directories.
   # ----------------------------------------------------------------------
   make DESTDIR=$BASE install \
-    pkglibdir=/usr/local/tidesql/lib/mysql \
-    pkgincludedir=/usr/local/tidesql/include/mysql \
-    pkgdatadir=/usr/local/tidesql/share/mysql \
-    pkgplugindir=/usr/local/tidesql/lib/mysql/plugin \
-    pkgsuppdir=/usr/local/tidesql/share/mysql \
-    mandir=/usr/local/tidesql/share/man \
-    infodir=/usr/local/tidesql/share/info
+    pkglibdir=/tmp/mysql-test/lib/mysql \
+    pkgincludedir=/tmp/mysql-test/include/mysql \
+    pkgdatadir=/tmp/mysql-test/share/mysql \
+    pkgplugindir=/tmp/mysql-test/lib/mysql/plugin \
+    pkgsuppdir=/tmp/mysql-test/share/mysql \
+    mandir=/tmp/mysql-test/share/man \
+    infodir=/tmp/mysql-test/share/info
 
   # ----------------------------------------------------------------------
   # Rename top directory, and set DEST to the new directory
   # ----------------------------------------------------------------------
-  mv $BASE/usr/local/tidesql $BASE/$NEW_NAME
+  mv $BASE/tmp/mysql-test $BASE/$NEW_NAME
   DEST=$BASE/$NEW_NAME
 
   # ----------------------------------------------------------------------

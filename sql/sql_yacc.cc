@@ -67,7 +67,7 @@
 /* Substitute the variable and function names.  */
 #define yyparse         MYSQLparse
 #define yylex           MYSQLlex
-#define yyerror(ctx, msg) MYSQLerror_impl(msg)
+#define yyerror         MYSQLerror
 #define yydebug         MYSQLdebug
 #define yynerrs         MYSQLnerrs
 
@@ -700,7 +700,1256 @@ static bool add_create_index (LEX *lex, Key::Keytype type, const char *name,
 #  endif
 # endif
 
-#include "sql_yacc.h"
+/* Use api.header.include to #include this header
+   instead of duplicating it here.  */
+#ifndef YY_MYSQL_SQL_YACC_HH_INCLUDED
+# define YY_MYSQL_SQL_YACC_HH_INCLUDED
+/* Debug traces.  */
+#ifndef YYDEBUG
+# define YYDEBUG 0
+#endif
+#if YYDEBUG
+extern int MYSQLdebug;
+#endif
+
+/* Token kinds.  */
+#ifndef YYTOKENTYPE
+# define YYTOKENTYPE
+  enum yytokentype
+  {
+    YYEMPTY = -2,
+    YYEOF = 0,                     /* "end of file"  */
+    YYerror = 256,                 /* error  */
+    YYUNDEF = 257,                 /* "invalid token"  */
+    ABORT_SYM = 258,               /* ABORT_SYM  */
+    ACCESSIBLE_SYM = 259,          /* ACCESSIBLE_SYM  */
+    ACTION = 260,                  /* ACTION  */
+    ADD = 261,                     /* ADD  */
+    ADDDATE_SYM = 262,             /* ADDDATE_SYM  */
+    AFTER_SYM = 263,               /* AFTER_SYM  */
+    AGAINST = 264,                 /* AGAINST  */
+    AGGREGATE_SYM = 265,           /* AGGREGATE_SYM  */
+    ALGORITHM_SYM = 266,           /* ALGORITHM_SYM  */
+    ALL = 267,                     /* ALL  */
+    ALTER = 268,                   /* ALTER  */
+    ANALYZE_SYM = 269,             /* ANALYZE_SYM  */
+    AND_AND_SYM = 270,             /* AND_AND_SYM  */
+    AND_SYM = 271,                 /* AND_SYM  */
+    ANY_SYM = 272,                 /* ANY_SYM  */
+    AS = 273,                      /* AS  */
+    ASC = 274,                     /* ASC  */
+    ASCII_SYM = 275,               /* ASCII_SYM  */
+    ASENSITIVE_SYM = 276,          /* ASENSITIVE_SYM  */
+    ASYNC_COMMIT_SYM = 277,        /* ASYNC_COMMIT_SYM  */
+    AT_SYM = 278,                  /* AT_SYM  */
+    AUTHORS_SYM = 279,             /* AUTHORS_SYM  */
+    AUTOEXTEND_SIZE_SYM = 280,     /* AUTOEXTEND_SIZE_SYM  */
+    AUTO_INC = 281,                /* AUTO_INC  */
+    AVG_ROW_LENGTH = 282,          /* AVG_ROW_LENGTH  */
+    AVG_SYM = 283,                 /* AVG_SYM  */
+    BACKUP_SYM = 284,              /* BACKUP_SYM  */
+    BEFORE_SYM = 285,              /* BEFORE_SYM  */
+    BEGIN_SYM = 286,               /* BEGIN_SYM  */
+    BETWEEN_SYM = 287,             /* BETWEEN_SYM  */
+    BIGINT = 288,                  /* BIGINT  */
+    BINARY = 289,                  /* BINARY  */
+    BINLOG_SYM = 290,              /* BINLOG_SYM  */
+    BIN_NUM = 291,                 /* BIN_NUM  */
+    BIT_AND = 292,                 /* BIT_AND  */
+    BIT_OR = 293,                  /* BIT_OR  */
+    BIT_SYM = 294,                 /* BIT_SYM  */
+    BIT_XOR = 295,                 /* BIT_XOR  */
+    BLOB_SYM = 296,                /* BLOB_SYM  */
+    BLOCK_SYM = 297,               /* BLOCK_SYM  */
+    BOOLEAN_SYM = 298,             /* BOOLEAN_SYM  */
+    BOOL_SYM = 299,                /* BOOL_SYM  */
+    BOTH = 300,                    /* BOTH  */
+    BTREE_SYM = 301,               /* BTREE_SYM  */
+    BY = 302,                      /* BY  */
+    BYTE_SYM = 303,                /* BYTE_SYM  */
+    CACHE_SYM = 304,               /* CACHE_SYM  */
+    CALL_SYM = 305,                /* CALL_SYM  */
+    CASCADE = 306,                 /* CASCADE  */
+    CASCADED = 307,                /* CASCADED  */
+    CASE_SYM = 308,                /* CASE_SYM  */
+    CAST_SYM = 309,                /* CAST_SYM  */
+    CHAIN_SYM = 310,               /* CHAIN_SYM  */
+    CHANGE = 311,                  /* CHANGE  */
+    CHANGED = 312,                 /* CHANGED  */
+    CHARSET = 313,                 /* CHARSET  */
+    CHAR_SYM = 314,                /* CHAR_SYM  */
+    CHECKSUM_SYM = 315,            /* CHECKSUM_SYM  */
+    CHECK_SYM = 316,               /* CHECK_SYM  */
+    CIPHER_SYM = 317,              /* CIPHER_SYM  */
+    CLIENT_SYM = 318,              /* CLIENT_SYM  */
+    CLOSE_SYM = 319,               /* CLOSE_SYM  */
+    COALESCE = 320,                /* COALESCE  */
+    CODE_SYM = 321,                /* CODE_SYM  */
+    COLLATE_SYM = 322,             /* COLLATE_SYM  */
+    COLLATION_SYM = 323,           /* COLLATION_SYM  */
+    COLUMNS = 324,                 /* COLUMNS  */
+    COLUMN_SYM = 325,              /* COLUMN_SYM  */
+    COMMENT_SYM = 326,             /* COMMENT_SYM  */
+    COMMITTED_SYM = 327,           /* COMMITTED_SYM  */
+    COMMIT_SYM = 328,              /* COMMIT_SYM  */
+    COMPACT_SYM = 329,             /* COMPACT_SYM  */
+    COMPLETION_SYM = 330,          /* COMPLETION_SYM  */
+    COMPRESSED_SYM = 331,          /* COMPRESSED_SYM  */
+    CONCURRENT = 332,              /* CONCURRENT  */
+    CONDITION_SYM = 333,           /* CONDITION_SYM  */
+    CONNECTION_SYM = 334,          /* CONNECTION_SYM  */
+    CONSISTENT_SYM = 335,          /* CONSISTENT_SYM  */
+    CONSTRAINT = 336,              /* CONSTRAINT  */
+    CONTAINS_SYM = 337,            /* CONTAINS_SYM  */
+    CONTEXT_SYM = 338,             /* CONTEXT_SYM  */
+    CONTINUE_SYM = 339,            /* CONTINUE_SYM  */
+    CONTRIBUTORS_SYM = 340,        /* CONTRIBUTORS_SYM  */
+    CONVERT_SYM = 341,             /* CONVERT_SYM  */
+    COUNT_SYM = 342,               /* COUNT_SYM  */
+    CPU_SYM = 343,                 /* CPU_SYM  */
+    CREATE = 344,                  /* CREATE  */
+    CROSS = 345,                   /* CROSS  */
+    CUBE_SYM = 346,                /* CUBE_SYM  */
+    CURDATE = 347,                 /* CURDATE  */
+    CURRENT_USER = 348,            /* CURRENT_USER  */
+    CURSOR_SYM = 349,              /* CURSOR_SYM  */
+    CURTIME = 350,                 /* CURTIME  */
+    DATABASE = 351,                /* DATABASE  */
+    DATABASES = 352,               /* DATABASES  */
+    DATAFILE_SYM = 353,            /* DATAFILE_SYM  */
+    DATA_SYM = 354,                /* DATA_SYM  */
+    DATETIME = 355,                /* DATETIME  */
+    DATE_ADD_INTERVAL = 356,       /* DATE_ADD_INTERVAL  */
+    DATE_SUB_INTERVAL = 357,       /* DATE_SUB_INTERVAL  */
+    DATE_SYM = 358,                /* DATE_SYM  */
+    DAY_HOUR_SYM = 359,            /* DAY_HOUR_SYM  */
+    DAY_MICROSECOND_SYM = 360,     /* DAY_MICROSECOND_SYM  */
+    DAY_MINUTE_SYM = 361,          /* DAY_MINUTE_SYM  */
+    DAY_SECOND_SYM = 362,          /* DAY_SECOND_SYM  */
+    DAY_SYM = 363,                 /* DAY_SYM  */
+    DEALLOCATE_SYM = 364,          /* DEALLOCATE_SYM  */
+    DECIMAL_NUM = 365,             /* DECIMAL_NUM  */
+    DECIMAL_SYM = 366,             /* DECIMAL_SYM  */
+    DECLARE_SYM = 367,             /* DECLARE_SYM  */
+    DEFAULT = 368,                 /* DEFAULT  */
+    DEFINER_SYM = 369,             /* DEFINER_SYM  */
+    DELAYED_SYM = 370,             /* DELAYED_SYM  */
+    DELAY_KEY_WRITE_SYM = 371,     /* DELAY_KEY_WRITE_SYM  */
+    DELETE_SYM = 372,              /* DELETE_SYM  */
+    DESC = 373,                    /* DESC  */
+    DESCRIBE = 374,                /* DESCRIBE  */
+    DES_KEY_FILE = 375,            /* DES_KEY_FILE  */
+    DETERMINISTIC_SYM = 376,       /* DETERMINISTIC_SYM  */
+    DIRECTORY_SYM = 377,           /* DIRECTORY_SYM  */
+    DISABLE_SYM = 378,             /* DISABLE_SYM  */
+    DISCARD = 379,                 /* DISCARD  */
+    DISK_SYM = 380,                /* DISK_SYM  */
+    DISTINCT = 381,                /* DISTINCT  */
+    DIV_SYM = 382,                 /* DIV_SYM  */
+    DOUBLE_SYM = 383,              /* DOUBLE_SYM  */
+    DO_SYM = 384,                  /* DO_SYM  */
+    DROP = 385,                    /* DROP  */
+    DUAL_SYM = 386,                /* DUAL_SYM  */
+    DUMPFILE = 387,                /* DUMPFILE  */
+    DUPLICATE_SYM = 388,           /* DUPLICATE_SYM  */
+    DYNAMIC_SYM = 389,             /* DYNAMIC_SYM  */
+    EACH_SYM = 390,                /* EACH_SYM  */
+    ELSE = 391,                    /* ELSE  */
+    ELSEIF_SYM = 392,              /* ELSEIF_SYM  */
+    ENABLE_SYM = 393,              /* ENABLE_SYM  */
+    ENCLOSED = 394,                /* ENCLOSED  */
+    END = 395,                     /* END  */
+    ENDS_SYM = 396,                /* ENDS_SYM  */
+    END_OF_INPUT = 397,            /* END_OF_INPUT  */
+    ENGINES_SYM = 398,             /* ENGINES_SYM  */
+    ENGINE_SYM = 399,              /* ENGINE_SYM  */
+    ENUM = 400,                    /* ENUM  */
+    EQ = 401,                      /* EQ  */
+    EQUAL_SYM = 402,               /* EQUAL_SYM  */
+    ERRORS = 403,                  /* ERRORS  */
+    ESCAPED = 404,                 /* ESCAPED  */
+    ESCAPE_SYM = 405,              /* ESCAPE_SYM  */
+    EVENTS_SYM = 406,              /* EVENTS_SYM  */
+    EVENT_SYM = 407,               /* EVENT_SYM  */
+    EVERY_SYM = 408,               /* EVERY_SYM  */
+    EXECUTE_SYM = 409,             /* EXECUTE_SYM  */
+    EXISTS = 410,                  /* EXISTS  */
+    EXIT_SYM = 411,                /* EXIT_SYM  */
+    EXPANSION_SYM = 412,           /* EXPANSION_SYM  */
+    EXTENDED_SYM = 413,            /* EXTENDED_SYM  */
+    EXTENT_SIZE_SYM = 414,         /* EXTENT_SIZE_SYM  */
+    EXTRACT_SYM = 415,             /* EXTRACT_SYM  */
+    FALSE_SYM = 416,               /* FALSE_SYM  */
+    FAST_SYM = 417,                /* FAST_SYM  */
+    FAULTS_SYM = 418,              /* FAULTS_SYM  */
+    FETCH_SYM = 419,               /* FETCH_SYM  */
+    FILE_SYM = 420,                /* FILE_SYM  */
+    FIRST_SYM = 421,               /* FIRST_SYM  */
+    FIXED_SYM = 422,               /* FIXED_SYM  */
+    FLOAT_NUM = 423,               /* FLOAT_NUM  */
+    FLOAT_SYM = 424,               /* FLOAT_SYM  */
+    FLUSH_SYM = 425,               /* FLUSH_SYM  */
+    FORCE_SYM = 426,               /* FORCE_SYM  */
+    FOREIGN = 427,                 /* FOREIGN  */
+    FOR_SYM = 428,                 /* FOR_SYM  */
+    FOUND_SYM = 429,               /* FOUND_SYM  */
+    FRAC_SECOND_SYM = 430,         /* FRAC_SECOND_SYM  */
+    FROM = 431,                    /* FROM  */
+    FULL = 432,                    /* FULL  */
+    FULLTEXT_SYM = 433,            /* FULLTEXT_SYM  */
+    FUNCTION_SYM = 434,            /* FUNCTION_SYM  */
+    GE = 435,                      /* GE  */
+    GEOMETRYCOLLECTION = 436,      /* GEOMETRYCOLLECTION  */
+    GEOMETRY_SYM = 437,            /* GEOMETRY_SYM  */
+    GET_FORMAT = 438,              /* GET_FORMAT  */
+    GLOBAL_SYM = 439,              /* GLOBAL_SYM  */
+    GRANT = 440,                   /* GRANT  */
+    GRANTS = 441,                  /* GRANTS  */
+    GROUP_SYM = 442,               /* GROUP_SYM  */
+    GROUP_CONCAT_SYM = 443,        /* GROUP_CONCAT_SYM  */
+    GT_SYM = 444,                  /* GT_SYM  */
+    HANDLER_SYM = 445,             /* HANDLER_SYM  */
+    HASH_SYM = 446,                /* HASH_SYM  */
+    HAVING = 447,                  /* HAVING  */
+    HELP_SYM = 448,                /* HELP_SYM  */
+    HEX_NUM = 449,                 /* HEX_NUM  */
+    HIGH_PRIORITY = 450,           /* HIGH_PRIORITY  */
+    HOST_SYM = 451,                /* HOST_SYM  */
+    HOSTS_SYM = 452,               /* HOSTS_SYM  */
+    HOUR_MICROSECOND_SYM = 453,    /* HOUR_MICROSECOND_SYM  */
+    HOUR_MINUTE_SYM = 454,         /* HOUR_MINUTE_SYM  */
+    HOUR_SECOND_SYM = 455,         /* HOUR_SECOND_SYM  */
+    HOUR_SYM = 456,                /* HOUR_SYM  */
+    IDENT = 457,                   /* IDENT  */
+    IDENTIFIED_SYM = 458,          /* IDENTIFIED_SYM  */
+    IDENT_QUOTED = 459,            /* IDENT_QUOTED  */
+    IF = 460,                      /* IF  */
+    IGNORE_SYM = 461,              /* IGNORE_SYM  */
+    IMPORT = 462,                  /* IMPORT  */
+    INDEXES = 463,                 /* INDEXES  */
+    INDEX_SYM = 464,               /* INDEX_SYM  */
+    INFILE = 465,                  /* INFILE  */
+    INITIAL_SIZE_SYM = 466,        /* INITIAL_SIZE_SYM  */
+    INNER_SYM = 467,               /* INNER_SYM  */
+    INNOBASE_SYM = 468,            /* INNOBASE_SYM  */
+    INOUT_SYM = 469,               /* INOUT_SYM  */
+    INSENSITIVE_SYM = 470,         /* INSENSITIVE_SYM  */
+    INSERT = 471,                  /* INSERT  */
+    INSERT_METHOD = 472,           /* INSERT_METHOD  */
+    INSTALL_SYM = 473,             /* INSTALL_SYM  */
+    INTERVAL_SYM = 474,            /* INTERVAL_SYM  */
+    INTO = 475,                    /* INTO  */
+    INT_SYM = 476,                 /* INT_SYM  */
+    INVOKER_SYM = 477,             /* INVOKER_SYM  */
+    IN_SYM = 478,                  /* IN_SYM  */
+    IO_SYM = 479,                  /* IO_SYM  */
+    IPC_SYM = 480,                 /* IPC_SYM  */
+    IS = 481,                      /* IS  */
+    ISOLATION = 482,               /* ISOLATION  */
+    ISSUER_SYM = 483,              /* ISSUER_SYM  */
+    ITERATE_SYM = 484,             /* ITERATE_SYM  */
+    JOIN_SYM = 485,                /* JOIN_SYM  */
+    KEYS = 486,                    /* KEYS  */
+    KEY_BLOCK_SIZE = 487,          /* KEY_BLOCK_SIZE  */
+    KEY_SYM = 488,                 /* KEY_SYM  */
+    KILL_SYM = 489,                /* KILL_SYM  */
+    LANGUAGE_SYM = 490,            /* LANGUAGE_SYM  */
+    LAST_SYM = 491,                /* LAST_SYM  */
+    LE = 492,                      /* LE  */
+    LEADING = 493,                 /* LEADING  */
+    LEAVES = 494,                  /* LEAVES  */
+    LEAVE_SYM = 495,               /* LEAVE_SYM  */
+    LEFT = 496,                    /* LEFT  */
+    LESS_SYM = 497,                /* LESS_SYM  */
+    LEVEL_SYM = 498,               /* LEVEL_SYM  */
+    LEX_HOSTNAME = 499,            /* LEX_HOSTNAME  */
+    LIKE = 500,                    /* LIKE  */
+    LIMIT = 501,                   /* LIMIT  */
+    LINEAR_SYM = 502,              /* LINEAR_SYM  */
+    LINES = 503,                   /* LINES  */
+    LINESTRING = 504,              /* LINESTRING  */
+    LIST_SYM = 505,                /* LIST_SYM  */
+    LOAD = 506,                    /* LOAD  */
+    LOCAL_SYM = 507,               /* LOCAL_SYM  */
+    LOCATOR_SYM = 508,             /* LOCATOR_SYM  */
+    LOCKS_SYM = 509,               /* LOCKS_SYM  */
+    LOCK_SYM = 510,                /* LOCK_SYM  */
+    LOGFILE_SYM = 511,             /* LOGFILE_SYM  */
+    LOGS_SYM = 512,                /* LOGS_SYM  */
+    LONGBLOB = 513,                /* LONGBLOB  */
+    LONGTEXT = 514,                /* LONGTEXT  */
+    LONG_NUM = 515,                /* LONG_NUM  */
+    LONG_SYM = 516,                /* LONG_SYM  */
+    LOOP_SYM = 517,                /* LOOP_SYM  */
+    LOW_PRIORITY = 518,            /* LOW_PRIORITY  */
+    LT = 519,                      /* LT  */
+    MASTER_CONNECT_RETRY_SYM = 520, /* MASTER_CONNECT_RETRY_SYM  */
+    MASTER_HOST_SYM = 521,         /* MASTER_HOST_SYM  */
+    MASTER_LOG_FILE_SYM = 522,     /* MASTER_LOG_FILE_SYM  */
+    MASTER_LOG_POS_SYM = 523,      /* MASTER_LOG_POS_SYM  */
+    MASTER_PASSWORD_SYM = 524,     /* MASTER_PASSWORD_SYM  */
+    MASTER_PORT_SYM = 525,         /* MASTER_PORT_SYM  */
+    MASTER_SERVER_ID_SYM = 526,    /* MASTER_SERVER_ID_SYM  */
+    MASTER_SSL_CAPATH_SYM = 527,   /* MASTER_SSL_CAPATH_SYM  */
+    MASTER_SSL_CA_SYM = 528,       /* MASTER_SSL_CA_SYM  */
+    MASTER_SSL_CERT_SYM = 529,     /* MASTER_SSL_CERT_SYM  */
+    MASTER_SSL_CIPHER_SYM = 530,   /* MASTER_SSL_CIPHER_SYM  */
+    MASTER_SSL_KEY_SYM = 531,      /* MASTER_SSL_KEY_SYM  */
+    MASTER_SSL_SYM = 532,          /* MASTER_SSL_SYM  */
+    MASTER_SSL_VERIFY_SERVER_CERT_SYM = 533, /* MASTER_SSL_VERIFY_SERVER_CERT_SYM  */
+    MASTER_SYM = 534,              /* MASTER_SYM  */
+    MASTER_USER_SYM = 535,         /* MASTER_USER_SYM  */
+    MATCH = 536,                   /* MATCH  */
+    MAX_CONCURRENT_QUERIES = 537,  /* MAX_CONCURRENT_QUERIES  */
+    MAX_CONCURRENT_TRANSACTIONS = 538, /* MAX_CONCURRENT_TRANSACTIONS  */
+    MAX_CONNECTIONS_PER_HOUR = 539, /* MAX_CONNECTIONS_PER_HOUR  */
+    MAX_QUERIES_PER_HOUR = 540,    /* MAX_QUERIES_PER_HOUR  */
+    MAX_ROWS = 541,                /* MAX_ROWS  */
+    MAX_SIZE_SYM = 542,            /* MAX_SIZE_SYM  */
+    MAX_SYM = 543,                 /* MAX_SYM  */
+    MAX_UPDATES_PER_HOUR = 544,    /* MAX_UPDATES_PER_HOUR  */
+    MAX_USER_CONNECTIONS_SYM = 545, /* MAX_USER_CONNECTIONS_SYM  */
+    MAX_VALUE_SYM = 546,           /* MAX_VALUE_SYM  */
+    MEDIUMBLOB = 547,              /* MEDIUMBLOB  */
+    MEDIUMINT = 548,               /* MEDIUMINT  */
+    MEDIUMTEXT = 549,              /* MEDIUMTEXT  */
+    MEDIUM_SYM = 550,              /* MEDIUM_SYM  */
+    MEMCACHE_DIRTY = 551,          /* MEMCACHE_DIRTY  */
+    MEMORY_SYM = 552,              /* MEMORY_SYM  */
+    MERGE_SYM = 553,               /* MERGE_SYM  */
+    MICROSECOND_SYM = 554,         /* MICROSECOND_SYM  */
+    MIGRATE_SYM = 555,             /* MIGRATE_SYM  */
+    MINUTE_MICROSECOND_SYM = 556,  /* MINUTE_MICROSECOND_SYM  */
+    MINUTE_SECOND_SYM = 557,       /* MINUTE_SECOND_SYM  */
+    MINUTE_SYM = 558,              /* MINUTE_SYM  */
+    MIN_ROWS = 559,                /* MIN_ROWS  */
+    MIN_SYM = 560,                 /* MIN_SYM  */
+    MODE_SYM = 561,                /* MODE_SYM  */
+    MODIFIES_SYM = 562,            /* MODIFIES_SYM  */
+    MODIFY_SYM = 563,              /* MODIFY_SYM  */
+    MOD_SYM = 564,                 /* MOD_SYM  */
+    MONTH_SYM = 565,               /* MONTH_SYM  */
+    MULTILINESTRING = 566,         /* MULTILINESTRING  */
+    MULTIPOINT = 567,              /* MULTIPOINT  */
+    MULTIPOLYGON = 568,            /* MULTIPOLYGON  */
+    MUTEX_SYM = 569,               /* MUTEX_SYM  */
+    NAMES_SYM = 570,               /* NAMES_SYM  */
+    NAME_SYM = 571,                /* NAME_SYM  */
+    NATIONAL_SYM = 572,            /* NATIONAL_SYM  */
+    NATURAL = 573,                 /* NATURAL  */
+    NCHAR_STRING = 574,            /* NCHAR_STRING  */
+    NCHAR_SYM = 575,               /* NCHAR_SYM  */
+    NDBCLUSTER_SYM = 576,          /* NDBCLUSTER_SYM  */
+    NE = 577,                      /* NE  */
+    NEG = 578,                     /* NEG  */
+    NEW_SYM = 579,                 /* NEW_SYM  */
+    NEXT_SYM = 580,                /* NEXT_SYM  */
+    NODEGROUP_SYM = 581,           /* NODEGROUP_SYM  */
+    NONE_SYM = 582,                /* NONE_SYM  */
+    NOT2_SYM = 583,                /* NOT2_SYM  */
+    NOT_SYM = 584,                 /* NOT_SYM  */
+    NOW_SYM = 585,                 /* NOW_SYM  */
+    NO_SLAVE_EXEC_SYM = 586,       /* NO_SLAVE_EXEC_SYM  */
+    NO_SYM = 587,                  /* NO_SYM  */
+    NO_WAIT_SYM = 588,             /* NO_WAIT_SYM  */
+    NO_WRITE_TO_BINLOG = 589,      /* NO_WRITE_TO_BINLOG  */
+    NULL_SYM = 590,                /* NULL_SYM  */
+    NUM = 591,                     /* NUM  */
+    NUMERIC_SYM = 592,             /* NUMERIC_SYM  */
+    NVARCHAR_SYM = 593,            /* NVARCHAR_SYM  */
+    OFFSET_SYM = 594,              /* OFFSET_SYM  */
+    OLD_PASSWORD = 595,            /* OLD_PASSWORD  */
+    ON = 596,                      /* ON  */
+    ONE_SHOT_SYM = 597,            /* ONE_SHOT_SYM  */
+    ONE_SYM = 598,                 /* ONE_SYM  */
+    OPEN_SYM = 599,                /* OPEN_SYM  */
+    OPEN_READ_CLOSE_SYM = 600,     /* OPEN_READ_CLOSE_SYM  */
+    OPTIMIZE = 601,                /* OPTIMIZE  */
+    OPTIONS_SYM = 602,             /* OPTIONS_SYM  */
+    OPTION = 603,                  /* OPTION  */
+    OPTIONALLY = 604,              /* OPTIONALLY  */
+    OR2_SYM = 605,                 /* OR2_SYM  */
+    ORDER_SYM = 606,               /* ORDER_SYM  */
+    OR_OR_SYM = 607,               /* OR_OR_SYM  */
+    OR_SYM = 608,                  /* OR_SYM  */
+    OUTER = 609,                   /* OUTER  */
+    OUTFILE = 610,                 /* OUTFILE  */
+    OUT_SYM = 611,                 /* OUT_SYM  */
+    OWNER_SYM = 612,               /* OWNER_SYM  */
+    PACK_KEYS_SYM = 613,           /* PACK_KEYS_SYM  */
+    PAGE_SYM = 614,                /* PAGE_SYM  */
+    PARAM_MARKER = 615,            /* PARAM_MARKER  */
+    PARSER_SYM = 616,              /* PARSER_SYM  */
+    PARTIAL = 617,                 /* PARTIAL  */
+    PARTITIONING_SYM = 618,        /* PARTITIONING_SYM  */
+    PARTITIONS_SYM = 619,          /* PARTITIONS_SYM  */
+    PARTITION_SYM = 620,           /* PARTITION_SYM  */
+    PASSWORD = 621,                /* PASSWORD  */
+    PHASE_SYM = 622,               /* PHASE_SYM  */
+    PLUGINS_SYM = 623,             /* PLUGINS_SYM  */
+    PLUGIN_SYM = 624,              /* PLUGIN_SYM  */
+    POINT_SYM = 625,               /* POINT_SYM  */
+    POLYGON = 626,                 /* POLYGON  */
+    PORT_SYM = 627,                /* PORT_SYM  */
+    POSITION_SYM = 628,            /* POSITION_SYM  */
+    PRECISION = 629,               /* PRECISION  */
+    PREPARE_SYM = 630,             /* PREPARE_SYM  */
+    PRESERVE_SYM = 631,            /* PRESERVE_SYM  */
+    PREV_SYM = 632,                /* PREV_SYM  */
+    PRIMARY_SYM = 633,             /* PRIMARY_SYM  */
+    PRIVILEGES = 634,              /* PRIVILEGES  */
+    PROCEDURE = 635,               /* PROCEDURE  */
+    PROCESS = 636,                 /* PROCESS  */
+    PROCESSLIST_SYM = 637,         /* PROCESSLIST_SYM  */
+    PROFILE_SYM = 638,             /* PROFILE_SYM  */
+    PROFILES_SYM = 639,            /* PROFILES_SYM  */
+    PURGE = 640,                   /* PURGE  */
+    QUARTER_SYM = 641,             /* QUARTER_SYM  */
+    QUERY_SYM = 642,               /* QUERY_SYM  */
+    QUICK = 643,                   /* QUICK  */
+    RANGE_SYM = 644,               /* RANGE_SYM  */
+    READS_SYM = 645,               /* READS_SYM  */
+    READ_ONLY_SYM = 646,           /* READ_ONLY_SYM  */
+    READ_SYM = 647,                /* READ_SYM  */
+    READ_WRITE_SYM = 648,          /* READ_WRITE_SYM  */
+    REAL = 649,                    /* REAL  */
+    REBUILD_SYM = 650,             /* REBUILD_SYM  */
+    RECOVER_SYM = 651,             /* RECOVER_SYM  */
+    REDOFILE_SYM = 652,            /* REDOFILE_SYM  */
+    REDO_BUFFER_SIZE_SYM = 653,    /* REDO_BUFFER_SIZE_SYM  */
+    REDUNDANT_SYM = 654,           /* REDUNDANT_SYM  */
+    REFERENCES = 655,              /* REFERENCES  */
+    REGEXP = 656,                  /* REGEXP  */
+    RELAY_LOG_FILE_SYM = 657,      /* RELAY_LOG_FILE_SYM  */
+    RELAY_LOG_POS_SYM = 658,       /* RELAY_LOG_POS_SYM  */
+    RELAY_THREAD = 659,            /* RELAY_THREAD  */
+    RELEASE_SYM = 660,             /* RELEASE_SYM  */
+    RELOAD = 661,                  /* RELOAD  */
+    REMOVE_SYM = 662,              /* REMOVE_SYM  */
+    RENAME = 663,                  /* RENAME  */
+    REORGANIZE_SYM = 664,          /* REORGANIZE_SYM  */
+    REPAIR = 665,                  /* REPAIR  */
+    REPEATABLE_SYM = 666,          /* REPEATABLE_SYM  */
+    REPEAT_SYM = 667,              /* REPEAT_SYM  */
+    REPLACE = 668,                 /* REPLACE  */
+    REPLICATION = 669,             /* REPLICATION  */
+    REQUIRE_SYM = 670,             /* REQUIRE_SYM  */
+    RESET_SYM = 671,               /* RESET_SYM  */
+    RESOURCES = 672,               /* RESOURCES  */
+    RESTORE_SYM = 673,             /* RESTORE_SYM  */
+    RESTRICT = 674,                /* RESTRICT  */
+    RESUME_SYM = 675,              /* RESUME_SYM  */
+    RETURNS_SYM = 676,             /* RETURNS_SYM  */
+    RETURN_SYM = 677,              /* RETURN_SYM  */
+    REVOKE = 678,                  /* REVOKE  */
+    RIGHT = 679,                   /* RIGHT  */
+    ROLLBACK_SYM = 680,            /* ROLLBACK_SYM  */
+    ROLLUP_SYM = 681,              /* ROLLUP_SYM  */
+    ROUTINE_SYM = 682,             /* ROUTINE_SYM  */
+    ROWS_SYM = 683,                /* ROWS_SYM  */
+    ROW_FORMAT_SYM = 684,          /* ROW_FORMAT_SYM  */
+    ROW_SYM = 685,                 /* ROW_SYM  */
+    RTREE_SYM = 686,               /* RTREE_SYM  */
+    SAVEPOINT_SYM = 687,           /* SAVEPOINT_SYM  */
+    SCHEDULE_SYM = 688,            /* SCHEDULE_SYM  */
+    SECOND_MICROSECOND_SYM = 689,  /* SECOND_MICROSECOND_SYM  */
+    SECOND_SYM = 690,              /* SECOND_SYM  */
+    SECURITY_SYM = 691,            /* SECURITY_SYM  */
+    SELECT_SYM = 692,              /* SELECT_SYM  */
+    SENSITIVE_SYM = 693,           /* SENSITIVE_SYM  */
+    SEPARATOR_SYM = 694,           /* SEPARATOR_SYM  */
+    SERIALIZABLE_SYM = 695,        /* SERIALIZABLE_SYM  */
+    SERIAL_SYM = 696,              /* SERIAL_SYM  */
+    SESSION_SYM = 697,             /* SESSION_SYM  */
+    SERVER_SYM = 698,              /* SERVER_SYM  */
+    SERVER_OPTIONS = 699,          /* SERVER_OPTIONS  */
+    SET = 700,                     /* SET  */
+    SET_VAR = 701,                 /* SET_VAR  */
+    SHARE_SYM = 702,               /* SHARE_SYM  */
+    SHIFT_LEFT = 703,              /* SHIFT_LEFT  */
+    SHIFT_RIGHT = 704,             /* SHIFT_RIGHT  */
+    SHOW = 705,                    /* SHOW  */
+    SHUTDOWN = 706,                /* SHUTDOWN  */
+    SIGNED_SYM = 707,              /* SIGNED_SYM  */
+    SIMPLE_SYM = 708,              /* SIMPLE_SYM  */
+    SLAVE = 709,                   /* SLAVE  */
+    SMALLINT = 710,                /* SMALLINT  */
+    SNAPSHOT_SYM = 711,            /* SNAPSHOT_SYM  */
+    SOCKET_SYM = 712,              /* SOCKET_SYM  */
+    SONAME_SYM = 713,              /* SONAME_SYM  */
+    SOUNDS_SYM = 714,              /* SOUNDS_SYM  */
+    SOURCE_SYM = 715,              /* SOURCE_SYM  */
+    SPATIAL_SYM = 716,             /* SPATIAL_SYM  */
+    SPECIFIC_SYM = 717,            /* SPECIFIC_SYM  */
+    SQLEXCEPTION_SYM = 718,        /* SQLEXCEPTION_SYM  */
+    SQLSTATE_SYM = 719,            /* SQLSTATE_SYM  */
+    SQLWARNING_SYM = 720,          /* SQLWARNING_SYM  */
+    SQL_BIG_RESULT = 721,          /* SQL_BIG_RESULT  */
+    SQL_BUFFER_RESULT = 722,       /* SQL_BUFFER_RESULT  */
+    SQL_CACHE_SYM = 723,           /* SQL_CACHE_SYM  */
+    SQL_CALC_FOUND_ROWS = 724,     /* SQL_CALC_FOUND_ROWS  */
+    SQL_NO_CACHE_SYM = 725,        /* SQL_NO_CACHE_SYM  */
+    SQL_NO_FCACHE_SYM = 726,       /* SQL_NO_FCACHE_SYM  */
+    SQL_SMALL_RESULT = 727,        /* SQL_SMALL_RESULT  */
+    SQL_SYM = 728,                 /* SQL_SYM  */
+    SQL_THREAD = 729,              /* SQL_THREAD  */
+    SSL_SYM = 730,                 /* SSL_SYM  */
+    STARTING = 731,                /* STARTING  */
+    STARTS_SYM = 732,              /* STARTS_SYM  */
+    START_SYM = 733,               /* START_SYM  */
+    STATUS_SYM = 734,              /* STATUS_SYM  */
+    STDDEV_SAMP_SYM = 735,         /* STDDEV_SAMP_SYM  */
+    STD_SYM = 736,                 /* STD_SYM  */
+    STOP_SYM = 737,                /* STOP_SYM  */
+    STORAGE_SYM = 738,             /* STORAGE_SYM  */
+    STRAIGHT_JOIN = 739,           /* STRAIGHT_JOIN  */
+    STRING_SYM = 740,              /* STRING_SYM  */
+    SUBDATE_SYM = 741,             /* SUBDATE_SYM  */
+    SUBJECT_SYM = 742,             /* SUBJECT_SYM  */
+    SUBPARTITIONS_SYM = 743,       /* SUBPARTITIONS_SYM  */
+    SUBPARTITION_SYM = 744,        /* SUBPARTITION_SYM  */
+    SUBSTRING = 745,               /* SUBSTRING  */
+    SUM_SYM = 746,                 /* SUM_SYM  */
+    SUPER_SYM = 747,               /* SUPER_SYM  */
+    SUSPEND_SYM = 748,             /* SUSPEND_SYM  */
+    SWAPS_SYM = 749,               /* SWAPS_SYM  */
+    SWITCHES_SYM = 750,            /* SWITCHES_SYM  */
+    SYSDATE = 751,                 /* SYSDATE  */
+    TABLES = 752,                  /* TABLES  */
+    TABLESPACE = 753,              /* TABLESPACE  */
+    TABLE_REF_PRIORITY = 754,      /* TABLE_REF_PRIORITY  */
+    TABLE_SYM = 755,               /* TABLE_SYM  */
+    STATISTICS_SYM = 756,          /* STATISTICS_SYM  */
+    TABLE_CHECKSUM_SYM = 757,      /* TABLE_CHECKSUM_SYM  */
+    TEMPORARY = 758,               /* TEMPORARY  */
+    TEMPTABLE_SYM = 759,           /* TEMPTABLE_SYM  */
+    TERMINATED = 760,              /* TERMINATED  */
+    TEXT_STRING = 761,             /* TEXT_STRING  */
+    TEXT_SYM = 762,                /* TEXT_SYM  */
+    THAN_SYM = 763,                /* THAN_SYM  */
+    THEN_SYM = 764,                /* THEN_SYM  */
+    TIMESTAMP = 765,               /* TIMESTAMP  */
+    TIMESTAMP_ADD = 766,           /* TIMESTAMP_ADD  */
+    TIMESTAMP_DIFF = 767,          /* TIMESTAMP_DIFF  */
+    TIME_SYM = 768,                /* TIME_SYM  */
+    TINYBLOB = 769,                /* TINYBLOB  */
+    TINYINT = 770,                 /* TINYINT  */
+    TINYTEXT = 771,                /* TINYTEXT  */
+    TO_SYM = 772,                  /* TO_SYM  */
+    TRAILING = 773,                /* TRAILING  */
+    TRANSACTION_SYM = 774,         /* TRANSACTION_SYM  */
+    TRIGGERS_SYM = 775,            /* TRIGGERS_SYM  */
+    TRIGGER_SYM = 776,             /* TRIGGER_SYM  */
+    TRIM = 777,                    /* TRIM  */
+    TRUE_SYM = 778,                /* TRUE_SYM  */
+    TRUNCATE_SYM = 779,            /* TRUNCATE_SYM  */
+    TYPES_SYM = 780,               /* TYPES_SYM  */
+    TYPE_SYM = 781,                /* TYPE_SYM  */
+    UDF_RETURNS_SYM = 782,         /* UDF_RETURNS_SYM  */
+    ULONGLONG_NUM = 783,           /* ULONGLONG_NUM  */
+    UNCOMMITTED_SYM = 784,         /* UNCOMMITTED_SYM  */
+    UNDEFINED_SYM = 785,           /* UNDEFINED_SYM  */
+    UNDERSCORE_CHARSET = 786,      /* UNDERSCORE_CHARSET  */
+    UNDOFILE_SYM = 787,            /* UNDOFILE_SYM  */
+    UNDO_BUFFER_SIZE_SYM = 788,    /* UNDO_BUFFER_SIZE_SYM  */
+    UNDO_SYM = 789,                /* UNDO_SYM  */
+    UNICODE_SYM = 790,             /* UNICODE_SYM  */
+    UNINSTALL_SYM = 791,           /* UNINSTALL_SYM  */
+    UNION_SYM = 792,               /* UNION_SYM  */
+    UNIQUE_SYM = 793,              /* UNIQUE_SYM  */
+    UNKNOWN_SYM = 794,             /* UNKNOWN_SYM  */
+    UNLOCK_SYM = 795,              /* UNLOCK_SYM  */
+    UNSIGNED = 796,                /* UNSIGNED  */
+    UNTIL_SYM = 797,               /* UNTIL_SYM  */
+    UPDATE_SYM = 798,              /* UPDATE_SYM  */
+    UPGRADE_SYM = 799,             /* UPGRADE_SYM  */
+    USAGE = 800,                   /* USAGE  */
+    USER = 801,                    /* USER  */
+    USE_FRM = 802,                 /* USE_FRM  */
+    USE_SYM = 803,                 /* USE_SYM  */
+    USING = 804,                   /* USING  */
+    UTC_DATE_SYM = 805,            /* UTC_DATE_SYM  */
+    UTC_TIMESTAMP_SYM = 806,       /* UTC_TIMESTAMP_SYM  */
+    UTC_TIME_SYM = 807,            /* UTC_TIME_SYM  */
+    VALUES = 808,                  /* VALUES  */
+    VALUE_SYM = 809,               /* VALUE_SYM  */
+    VARBINARY = 810,               /* VARBINARY  */
+    VARCHAR = 811,                 /* VARCHAR  */
+    VARIABLES = 812,               /* VARIABLES  */
+    VARIANCE_SYM = 813,            /* VARIANCE_SYM  */
+    VARYING = 814,                 /* VARYING  */
+    VAR_SAMP_SYM = 815,            /* VAR_SAMP_SYM  */
+    VIEW_SYM = 816,                /* VIEW_SYM  */
+    WAIT_SYM = 817,                /* WAIT_SYM  */
+    WARNINGS = 818,                /* WARNINGS  */
+    WEEK_SYM = 819,                /* WEEK_SYM  */
+    WHEN_SYM = 820,                /* WHEN_SYM  */
+    WHERE = 821,                   /* WHERE  */
+    WHILE_SYM = 822,               /* WHILE_SYM  */
+    WITH = 823,                    /* WITH  */
+    WORK_SYM = 824,                /* WORK_SYM  */
+    WRAPPER_SYM = 825,             /* WRAPPER_SYM  */
+    WRITE_SYM = 826,               /* WRITE_SYM  */
+    X509_SYM = 827,                /* X509_SYM  */
+    XA_SYM = 828,                  /* XA_SYM  */
+    XOR = 829,                     /* XOR  */
+    YEAR_MONTH_SYM = 830,          /* YEAR_MONTH_SYM  */
+    YEAR_SYM = 831,                /* YEAR_SYM  */
+    ZEROFILL = 832                 /* ZEROFILL  */
+  };
+  typedef enum yytokentype yytoken_kind_t;
+#endif
+/* Token kinds.  */
+#define YYEMPTY -2
+#define YYEOF 0
+#define YYerror 256
+#define YYUNDEF 257
+#define ABORT_SYM 258
+#define ACCESSIBLE_SYM 259
+#define ACTION 260
+#define ADD 261
+#define ADDDATE_SYM 262
+#define AFTER_SYM 263
+#define AGAINST 264
+#define AGGREGATE_SYM 265
+#define ALGORITHM_SYM 266
+#define ALL 267
+#define ALTER 268
+#define ANALYZE_SYM 269
+#define AND_AND_SYM 270
+#define AND_SYM 271
+#define ANY_SYM 272
+#define AS 273
+#define ASC 274
+#define ASCII_SYM 275
+#define ASENSITIVE_SYM 276
+#define ASYNC_COMMIT_SYM 277
+#define AT_SYM 278
+#define AUTHORS_SYM 279
+#define AUTOEXTEND_SIZE_SYM 280
+#define AUTO_INC 281
+#define AVG_ROW_LENGTH 282
+#define AVG_SYM 283
+#define BACKUP_SYM 284
+#define BEFORE_SYM 285
+#define BEGIN_SYM 286
+#define BETWEEN_SYM 287
+#define BIGINT 288
+#define BINARY 289
+#define BINLOG_SYM 290
+#define BIN_NUM 291
+#define BIT_AND 292
+#define BIT_OR 293
+#define BIT_SYM 294
+#define BIT_XOR 295
+#define BLOB_SYM 296
+#define BLOCK_SYM 297
+#define BOOLEAN_SYM 298
+#define BOOL_SYM 299
+#define BOTH 300
+#define BTREE_SYM 301
+#define BY 302
+#define BYTE_SYM 303
+#define CACHE_SYM 304
+#define CALL_SYM 305
+#define CASCADE 306
+#define CASCADED 307
+#define CASE_SYM 308
+#define CAST_SYM 309
+#define CHAIN_SYM 310
+#define CHANGE 311
+#define CHANGED 312
+#define CHARSET 313
+#define CHAR_SYM 314
+#define CHECKSUM_SYM 315
+#define CHECK_SYM 316
+#define CIPHER_SYM 317
+#define CLIENT_SYM 318
+#define CLOSE_SYM 319
+#define COALESCE 320
+#define CODE_SYM 321
+#define COLLATE_SYM 322
+#define COLLATION_SYM 323
+#define COLUMNS 324
+#define COLUMN_SYM 325
+#define COMMENT_SYM 326
+#define COMMITTED_SYM 327
+#define COMMIT_SYM 328
+#define COMPACT_SYM 329
+#define COMPLETION_SYM 330
+#define COMPRESSED_SYM 331
+#define CONCURRENT 332
+#define CONDITION_SYM 333
+#define CONNECTION_SYM 334
+#define CONSISTENT_SYM 335
+#define CONSTRAINT 336
+#define CONTAINS_SYM 337
+#define CONTEXT_SYM 338
+#define CONTINUE_SYM 339
+#define CONTRIBUTORS_SYM 340
+#define CONVERT_SYM 341
+#define COUNT_SYM 342
+#define CPU_SYM 343
+#define CREATE 344
+#define CROSS 345
+#define CUBE_SYM 346
+#define CURDATE 347
+#define CURRENT_USER 348
+#define CURSOR_SYM 349
+#define CURTIME 350
+#define DATABASE 351
+#define DATABASES 352
+#define DATAFILE_SYM 353
+#define DATA_SYM 354
+#define DATETIME 355
+#define DATE_ADD_INTERVAL 356
+#define DATE_SUB_INTERVAL 357
+#define DATE_SYM 358
+#define DAY_HOUR_SYM 359
+#define DAY_MICROSECOND_SYM 360
+#define DAY_MINUTE_SYM 361
+#define DAY_SECOND_SYM 362
+#define DAY_SYM 363
+#define DEALLOCATE_SYM 364
+#define DECIMAL_NUM 365
+#define DECIMAL_SYM 366
+#define DECLARE_SYM 367
+#define DEFAULT 368
+#define DEFINER_SYM 369
+#define DELAYED_SYM 370
+#define DELAY_KEY_WRITE_SYM 371
+#define DELETE_SYM 372
+#define DESC 373
+#define DESCRIBE 374
+#define DES_KEY_FILE 375
+#define DETERMINISTIC_SYM 376
+#define DIRECTORY_SYM 377
+#define DISABLE_SYM 378
+#define DISCARD 379
+#define DISK_SYM 380
+#define DISTINCT 381
+#define DIV_SYM 382
+#define DOUBLE_SYM 383
+#define DO_SYM 384
+#define DROP 385
+#define DUAL_SYM 386
+#define DUMPFILE 387
+#define DUPLICATE_SYM 388
+#define DYNAMIC_SYM 389
+#define EACH_SYM 390
+#define ELSE 391
+#define ELSEIF_SYM 392
+#define ENABLE_SYM 393
+#define ENCLOSED 394
+#define END 395
+#define ENDS_SYM 396
+#define END_OF_INPUT 397
+#define ENGINES_SYM 398
+#define ENGINE_SYM 399
+#define ENUM 400
+#define EQ 401
+#define EQUAL_SYM 402
+#define ERRORS 403
+#define ESCAPED 404
+#define ESCAPE_SYM 405
+#define EVENTS_SYM 406
+#define EVENT_SYM 407
+#define EVERY_SYM 408
+#define EXECUTE_SYM 409
+#define EXISTS 410
+#define EXIT_SYM 411
+#define EXPANSION_SYM 412
+#define EXTENDED_SYM 413
+#define EXTENT_SIZE_SYM 414
+#define EXTRACT_SYM 415
+#define FALSE_SYM 416
+#define FAST_SYM 417
+#define FAULTS_SYM 418
+#define FETCH_SYM 419
+#define FILE_SYM 420
+#define FIRST_SYM 421
+#define FIXED_SYM 422
+#define FLOAT_NUM 423
+#define FLOAT_SYM 424
+#define FLUSH_SYM 425
+#define FORCE_SYM 426
+#define FOREIGN 427
+#define FOR_SYM 428
+#define FOUND_SYM 429
+#define FRAC_SECOND_SYM 430
+#define FROM 431
+#define FULL 432
+#define FULLTEXT_SYM 433
+#define FUNCTION_SYM 434
+#define GE 435
+#define GEOMETRYCOLLECTION 436
+#define GEOMETRY_SYM 437
+#define GET_FORMAT 438
+#define GLOBAL_SYM 439
+#define GRANT 440
+#define GRANTS 441
+#define GROUP_SYM 442
+#define GROUP_CONCAT_SYM 443
+#define GT_SYM 444
+#define HANDLER_SYM 445
+#define HASH_SYM 446
+#define HAVING 447
+#define HELP_SYM 448
+#define HEX_NUM 449
+#define HIGH_PRIORITY 450
+#define HOST_SYM 451
+#define HOSTS_SYM 452
+#define HOUR_MICROSECOND_SYM 453
+#define HOUR_MINUTE_SYM 454
+#define HOUR_SECOND_SYM 455
+#define HOUR_SYM 456
+#define IDENT 457
+#define IDENTIFIED_SYM 458
+#define IDENT_QUOTED 459
+#define IF 460
+#define IGNORE_SYM 461
+#define IMPORT 462
+#define INDEXES 463
+#define INDEX_SYM 464
+#define INFILE 465
+#define INITIAL_SIZE_SYM 466
+#define INNER_SYM 467
+#define INNOBASE_SYM 468
+#define INOUT_SYM 469
+#define INSENSITIVE_SYM 470
+#define INSERT 471
+#define INSERT_METHOD 472
+#define INSTALL_SYM 473
+#define INTERVAL_SYM 474
+#define INTO 475
+#define INT_SYM 476
+#define INVOKER_SYM 477
+#define IN_SYM 478
+#define IO_SYM 479
+#define IPC_SYM 480
+#define IS 481
+#define ISOLATION 482
+#define ISSUER_SYM 483
+#define ITERATE_SYM 484
+#define JOIN_SYM 485
+#define KEYS 486
+#define KEY_BLOCK_SIZE 487
+#define KEY_SYM 488
+#define KILL_SYM 489
+#define LANGUAGE_SYM 490
+#define LAST_SYM 491
+#define LE 492
+#define LEADING 493
+#define LEAVES 494
+#define LEAVE_SYM 495
+#define LEFT 496
+#define LESS_SYM 497
+#define LEVEL_SYM 498
+#define LEX_HOSTNAME 499
+#define LIKE 500
+#define LIMIT 501
+#define LINEAR_SYM 502
+#define LINES 503
+#define LINESTRING 504
+#define LIST_SYM 505
+#define LOAD 506
+#define LOCAL_SYM 507
+#define LOCATOR_SYM 508
+#define LOCKS_SYM 509
+#define LOCK_SYM 510
+#define LOGFILE_SYM 511
+#define LOGS_SYM 512
+#define LONGBLOB 513
+#define LONGTEXT 514
+#define LONG_NUM 515
+#define LONG_SYM 516
+#define LOOP_SYM 517
+#define LOW_PRIORITY 518
+#define LT 519
+#define MASTER_CONNECT_RETRY_SYM 520
+#define MASTER_HOST_SYM 521
+#define MASTER_LOG_FILE_SYM 522
+#define MASTER_LOG_POS_SYM 523
+#define MASTER_PASSWORD_SYM 524
+#define MASTER_PORT_SYM 525
+#define MASTER_SERVER_ID_SYM 526
+#define MASTER_SSL_CAPATH_SYM 527
+#define MASTER_SSL_CA_SYM 528
+#define MASTER_SSL_CERT_SYM 529
+#define MASTER_SSL_CIPHER_SYM 530
+#define MASTER_SSL_KEY_SYM 531
+#define MASTER_SSL_SYM 532
+#define MASTER_SSL_VERIFY_SERVER_CERT_SYM 533
+#define MASTER_SYM 534
+#define MASTER_USER_SYM 535
+#define MATCH 536
+#define MAX_CONCURRENT_QUERIES 537
+#define MAX_CONCURRENT_TRANSACTIONS 538
+#define MAX_CONNECTIONS_PER_HOUR 539
+#define MAX_QUERIES_PER_HOUR 540
+#define MAX_ROWS 541
+#define MAX_SIZE_SYM 542
+#define MAX_SYM 543
+#define MAX_UPDATES_PER_HOUR 544
+#define MAX_USER_CONNECTIONS_SYM 545
+#define MAX_VALUE_SYM 546
+#define MEDIUMBLOB 547
+#define MEDIUMINT 548
+#define MEDIUMTEXT 549
+#define MEDIUM_SYM 550
+#define MEMCACHE_DIRTY 551
+#define MEMORY_SYM 552
+#define MERGE_SYM 553
+#define MICROSECOND_SYM 554
+#define MIGRATE_SYM 555
+#define MINUTE_MICROSECOND_SYM 556
+#define MINUTE_SECOND_SYM 557
+#define MINUTE_SYM 558
+#define MIN_ROWS 559
+#define MIN_SYM 560
+#define MODE_SYM 561
+#define MODIFIES_SYM 562
+#define MODIFY_SYM 563
+#define MOD_SYM 564
+#define MONTH_SYM 565
+#define MULTILINESTRING 566
+#define MULTIPOINT 567
+#define MULTIPOLYGON 568
+#define MUTEX_SYM 569
+#define NAMES_SYM 570
+#define NAME_SYM 571
+#define NATIONAL_SYM 572
+#define NATURAL 573
+#define NCHAR_STRING 574
+#define NCHAR_SYM 575
+#define NDBCLUSTER_SYM 576
+#define NE 577
+#define NEG 578
+#define NEW_SYM 579
+#define NEXT_SYM 580
+#define NODEGROUP_SYM 581
+#define NONE_SYM 582
+#define NOT2_SYM 583
+#define NOT_SYM 584
+#define NOW_SYM 585
+#define NO_SLAVE_EXEC_SYM 586
+#define NO_SYM 587
+#define NO_WAIT_SYM 588
+#define NO_WRITE_TO_BINLOG 589
+#define NULL_SYM 590
+#define NUM 591
+#define NUMERIC_SYM 592
+#define NVARCHAR_SYM 593
+#define OFFSET_SYM 594
+#define OLD_PASSWORD 595
+#define ON 596
+#define ONE_SHOT_SYM 597
+#define ONE_SYM 598
+#define OPEN_SYM 599
+#define OPEN_READ_CLOSE_SYM 600
+#define OPTIMIZE 601
+#define OPTIONS_SYM 602
+#define OPTION 603
+#define OPTIONALLY 604
+#define OR2_SYM 605
+#define ORDER_SYM 606
+#define OR_OR_SYM 607
+#define OR_SYM 608
+#define OUTER 609
+#define OUTFILE 610
+#define OUT_SYM 611
+#define OWNER_SYM 612
+#define PACK_KEYS_SYM 613
+#define PAGE_SYM 614
+#define PARAM_MARKER 615
+#define PARSER_SYM 616
+#define PARTIAL 617
+#define PARTITIONING_SYM 618
+#define PARTITIONS_SYM 619
+#define PARTITION_SYM 620
+#define PASSWORD 621
+#define PHASE_SYM 622
+#define PLUGINS_SYM 623
+#define PLUGIN_SYM 624
+#define POINT_SYM 625
+#define POLYGON 626
+#define PORT_SYM 627
+#define POSITION_SYM 628
+#define PRECISION 629
+#define PREPARE_SYM 630
+#define PRESERVE_SYM 631
+#define PREV_SYM 632
+#define PRIMARY_SYM 633
+#define PRIVILEGES 634
+#define PROCEDURE 635
+#define PROCESS 636
+#define PROCESSLIST_SYM 637
+#define PROFILE_SYM 638
+#define PROFILES_SYM 639
+#define PURGE 640
+#define QUARTER_SYM 641
+#define QUERY_SYM 642
+#define QUICK 643
+#define RANGE_SYM 644
+#define READS_SYM 645
+#define READ_ONLY_SYM 646
+#define READ_SYM 647
+#define READ_WRITE_SYM 648
+#define REAL 649
+#define REBUILD_SYM 650
+#define RECOVER_SYM 651
+#define REDOFILE_SYM 652
+#define REDO_BUFFER_SIZE_SYM 653
+#define REDUNDANT_SYM 654
+#define REFERENCES 655
+#define REGEXP 656
+#define RELAY_LOG_FILE_SYM 657
+#define RELAY_LOG_POS_SYM 658
+#define RELAY_THREAD 659
+#define RELEASE_SYM 660
+#define RELOAD 661
+#define REMOVE_SYM 662
+#define RENAME 663
+#define REORGANIZE_SYM 664
+#define REPAIR 665
+#define REPEATABLE_SYM 666
+#define REPEAT_SYM 667
+#define REPLACE 668
+#define REPLICATION 669
+#define REQUIRE_SYM 670
+#define RESET_SYM 671
+#define RESOURCES 672
+#define RESTORE_SYM 673
+#define RESTRICT 674
+#define RESUME_SYM 675
+#define RETURNS_SYM 676
+#define RETURN_SYM 677
+#define REVOKE 678
+#define RIGHT 679
+#define ROLLBACK_SYM 680
+#define ROLLUP_SYM 681
+#define ROUTINE_SYM 682
+#define ROWS_SYM 683
+#define ROW_FORMAT_SYM 684
+#define ROW_SYM 685
+#define RTREE_SYM 686
+#define SAVEPOINT_SYM 687
+#define SCHEDULE_SYM 688
+#define SECOND_MICROSECOND_SYM 689
+#define SECOND_SYM 690
+#define SECURITY_SYM 691
+#define SELECT_SYM 692
+#define SENSITIVE_SYM 693
+#define SEPARATOR_SYM 694
+#define SERIALIZABLE_SYM 695
+#define SERIAL_SYM 696
+#define SESSION_SYM 697
+#define SERVER_SYM 698
+#define SERVER_OPTIONS 699
+#define SET 700
+#define SET_VAR 701
+#define SHARE_SYM 702
+#define SHIFT_LEFT 703
+#define SHIFT_RIGHT 704
+#define SHOW 705
+#define SHUTDOWN 706
+#define SIGNED_SYM 707
+#define SIMPLE_SYM 708
+#define SLAVE 709
+#define SMALLINT 710
+#define SNAPSHOT_SYM 711
+#define SOCKET_SYM 712
+#define SONAME_SYM 713
+#define SOUNDS_SYM 714
+#define SOURCE_SYM 715
+#define SPATIAL_SYM 716
+#define SPECIFIC_SYM 717
+#define SQLEXCEPTION_SYM 718
+#define SQLSTATE_SYM 719
+#define SQLWARNING_SYM 720
+#define SQL_BIG_RESULT 721
+#define SQL_BUFFER_RESULT 722
+#define SQL_CACHE_SYM 723
+#define SQL_CALC_FOUND_ROWS 724
+#define SQL_NO_CACHE_SYM 725
+#define SQL_NO_FCACHE_SYM 726
+#define SQL_SMALL_RESULT 727
+#define SQL_SYM 728
+#define SQL_THREAD 729
+#define SSL_SYM 730
+#define STARTING 731
+#define STARTS_SYM 732
+#define START_SYM 733
+#define STATUS_SYM 734
+#define STDDEV_SAMP_SYM 735
+#define STD_SYM 736
+#define STOP_SYM 737
+#define STORAGE_SYM 738
+#define STRAIGHT_JOIN 739
+#define STRING_SYM 740
+#define SUBDATE_SYM 741
+#define SUBJECT_SYM 742
+#define SUBPARTITIONS_SYM 743
+#define SUBPARTITION_SYM 744
+#define SUBSTRING 745
+#define SUM_SYM 746
+#define SUPER_SYM 747
+#define SUSPEND_SYM 748
+#define SWAPS_SYM 749
+#define SWITCHES_SYM 750
+#define SYSDATE 751
+#define TABLES 752
+#define TABLESPACE 753
+#define TABLE_REF_PRIORITY 754
+#define TABLE_SYM 755
+#define STATISTICS_SYM 756
+#define TABLE_CHECKSUM_SYM 757
+#define TEMPORARY 758
+#define TEMPTABLE_SYM 759
+#define TERMINATED 760
+#define TEXT_STRING 761
+#define TEXT_SYM 762
+#define THAN_SYM 763
+#define THEN_SYM 764
+#define TIMESTAMP 765
+#define TIMESTAMP_ADD 766
+#define TIMESTAMP_DIFF 767
+#define TIME_SYM 768
+#define TINYBLOB 769
+#define TINYINT 770
+#define TINYTEXT 771
+#define TO_SYM 772
+#define TRAILING 773
+#define TRANSACTION_SYM 774
+#define TRIGGERS_SYM 775
+#define TRIGGER_SYM 776
+#define TRIM 777
+#define TRUE_SYM 778
+#define TRUNCATE_SYM 779
+#define TYPES_SYM 780
+#define TYPE_SYM 781
+#define UDF_RETURNS_SYM 782
+#define ULONGLONG_NUM 783
+#define UNCOMMITTED_SYM 784
+#define UNDEFINED_SYM 785
+#define UNDERSCORE_CHARSET 786
+#define UNDOFILE_SYM 787
+#define UNDO_BUFFER_SIZE_SYM 788
+#define UNDO_SYM 789
+#define UNICODE_SYM 790
+#define UNINSTALL_SYM 791
+#define UNION_SYM 792
+#define UNIQUE_SYM 793
+#define UNKNOWN_SYM 794
+#define UNLOCK_SYM 795
+#define UNSIGNED 796
+#define UNTIL_SYM 797
+#define UPDATE_SYM 798
+#define UPGRADE_SYM 799
+#define USAGE 800
+#define USER 801
+#define USE_FRM 802
+#define USE_SYM 803
+#define USING 804
+#define UTC_DATE_SYM 805
+#define UTC_TIMESTAMP_SYM 806
+#define UTC_TIME_SYM 807
+#define VALUES 808
+#define VALUE_SYM 809
+#define VARBINARY 810
+#define VARCHAR 811
+#define VARIABLES 812
+#define VARIANCE_SYM 813
+#define VARYING 814
+#define VAR_SAMP_SYM 815
+#define VIEW_SYM 816
+#define WAIT_SYM 817
+#define WARNINGS 818
+#define WEEK_SYM 819
+#define WHEN_SYM 820
+#define WHERE 821
+#define WHILE_SYM 822
+#define WITH 823
+#define WORK_SYM 824
+#define WRAPPER_SYM 825
+#define WRITE_SYM 826
+#define X509_SYM 827
+#define XA_SYM 828
+#define XOR 829
+#define YEAR_MONTH_SYM 830
+#define YEAR_SYM 831
+#define ZEROFILL 832
+
+/* Value type.  */
+#if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
+union YYSTYPE
+{
+#line 637 "sql_yacc.yy"
+
+  int  num;
+  ulong ulong_num;
+  ulonglong ulonglong_number;
+  longlong longlong_number;
+  LEX_STRING lex_str;
+  LEX_STRING *lex_str_ptr;
+  LEX_SYMBOL symbol;
+  Table_ident *table;
+  char *simple_string;
+  Item *item;
+  Item_num *item_num;
+  List<Item> *item_list;
+  List<String> *string_list;
+  String *string;
+  Key_part_spec *key_part;
+  TABLE_LIST *table_list;
+  udf_func *udf;
+  LEX_USER *lex_user;
+  struct sys_var_with_base variable;
+  enum enum_var_type var_type;
+  Key::Keytype key_type;
+  enum ha_key_alg key_alg;
+  handlerton *db_type;
+  enum row_type row_type;
+  enum ha_rkey_function ha_rkey_mode;
+  enum enum_tx_isolation tx_isolation;
+  enum Cast_target cast_type;
+  enum Item_udftype udf_type;
+  CHARSET_INFO *charset;
+  thr_lock_type lock_type;
+  interval_type interval, interval_time_st;
+  timestamp_type date_time_type;
+  st_select_lex *select_lex;
+  chooser_compare_func_creator boolfunc2creator;
+  struct sp_cond_type *spcondtype;
+  struct { int vars, conds, hndlrs, curs; } spblock;
+  sp_name *spname;
+  struct st_lex *lex;
+  sp_head *sphead;
+  struct p_elem_val *p_elem_value;
+  enum index_hint_type index_hint;
+
+#line 1932 "sql_yacc.cc"
+
+};
+typedef union YYSTYPE YYSTYPE;
+# define YYSTYPE_IS_TRIVIAL 1
+# define YYSTYPE_IS_DECLARED 1
+#endif
+
+
+
+
+int MYSQLparse (void *yythd);
+
+/* "%code provides" blocks.  */
+#line 28 "sql_yacc.yy"
+
+  /* Bison 3.x generates yyerror with parse-param, provide wrapper */
+  #define MYSQLerror(ctx, msg) MYSQLerror_impl(msg)
+
+#line 1951 "sql_yacc.cc"
+
+#endif /* !YY_MYSQL_SQL_YACC_HH_INCLUDED  */
 /* Symbol kind.  */
 enum yysymbol_kind_t
 {
@@ -2156,7 +3405,7 @@ typedef enum yysymbol_kind_t yysymbol_kind_t;
 
 bool my_yyoverflow(short **a, YYSTYPE **b, ulong *yystacksize);
 
-#line 2160 "sql_yacc.cc"
+#line 3409 "sql_yacc.cc"
 
 
 #ifdef short
@@ -15104,7 +16353,7 @@ yyreduce:
             thd->lex->sql_command= SQLCOM_EMPTY_QUERY;
             YYLIP->found_semicolon= NULL;
           }
-#line 15108 "sql_yacc.cc"
+#line 16357 "sql_yacc.cc"
     break;
 
   case 3: /* $@1: %empty  */
@@ -15131,7 +16380,7 @@ yyreduce:
               lip->found_semicolon= NULL;
             }
           }
-#line 15135 "sql_yacc.cc"
+#line 16384 "sql_yacc.cc"
     break;
 
   case 5: /* query: verb_clause mc_dirty END_OF_INPUT  */
@@ -15140,25 +16389,25 @@ yyreduce:
             /* Single query, not terminated. */
             YYLIP->found_semicolon= NULL;
           }
-#line 15144 "sql_yacc.cc"
+#line 16393 "sql_yacc.cc"
     break;
 
   case 8: /* mc_dirty: %empty  */
 #line 1585 "sql_yacc.yy"
                     { }
-#line 15150 "sql_yacc.cc"
+#line 16399 "sql_yacc.cc"
     break;
 
   case 10: /* mc_key_list: mc_key_list ',' text_string  */
 #line 1590 "sql_yacc.yy"
                                     { Lex->mc_key_list.push_back((yyvsp[0].string)); }
-#line 15156 "sql_yacc.cc"
+#line 16405 "sql_yacc.cc"
     break;
 
   case 11: /* mc_key_list: text_string  */
 #line 1591 "sql_yacc.yy"
                       { Lex->mc_key_list.push_back((yyvsp[0].string)); }
-#line 15162 "sql_yacc.cc"
+#line 16411 "sql_yacc.cc"
     break;
 
   case 65: /* deallocate: deallocate_or_drop PREPARE_SYM ident  */
@@ -15169,7 +16418,7 @@ yyreduce:
             lex->sql_command= SQLCOM_DEALLOCATE_PREPARE;
             lex->prepared_stmt_name= (yyvsp[0].lex_str);
           }
-#line 15173 "sql_yacc.cc"
+#line 16422 "sql_yacc.cc"
     break;
 
   case 68: /* prepare: PREPARE_SYM ident FROM prepare_src  */
@@ -15180,7 +16429,7 @@ yyreduce:
             lex->sql_command= SQLCOM_PREPARE;
             lex->prepared_stmt_name= (yyvsp[-2].lex_str);
           }
-#line 15184 "sql_yacc.cc"
+#line 16433 "sql_yacc.cc"
     break;
 
   case 69: /* prepare_src: TEXT_STRING_sys  */
@@ -15191,7 +16440,7 @@ yyreduce:
             lex->prepared_stmt_code= (yyvsp[0].lex_str);
             lex->prepared_stmt_code_is_varref= FALSE;
           }
-#line 15195 "sql_yacc.cc"
+#line 16444 "sql_yacc.cc"
     break;
 
   case 70: /* prepare_src: '@' ident_or_text  */
@@ -15202,7 +16451,7 @@ yyreduce:
             lex->prepared_stmt_code= (yyvsp[0].lex_str);
             lex->prepared_stmt_code_is_varref= TRUE;
           }
-#line 15206 "sql_yacc.cc"
+#line 16455 "sql_yacc.cc"
     break;
 
   case 71: /* $@2: %empty  */
@@ -15213,13 +16462,13 @@ yyreduce:
             lex->sql_command= SQLCOM_EXECUTE;
             lex->prepared_stmt_name= (yyvsp[0].lex_str);
           }
-#line 15217 "sql_yacc.cc"
+#line 16466 "sql_yacc.cc"
     break;
 
   case 72: /* execute: EXECUTE_SYM ident $@2 execute_using  */
 #line 1705 "sql_yacc.yy"
           {}
-#line 15223 "sql_yacc.cc"
+#line 16472 "sql_yacc.cc"
     break;
 
   case 77: /* execute_var_ident: '@' ident_or_text  */
@@ -15230,7 +16479,7 @@ yyreduce:
             if (!lexstr || lex->prepared_stmt_params.push_back(lexstr))
               MYSQL_YYABORT;
           }
-#line 15234 "sql_yacc.cc"
+#line 16483 "sql_yacc.cc"
     break;
 
   case 78: /* $@3: %empty  */
@@ -15242,7 +16491,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 15246 "sql_yacc.cc"
+#line 16495 "sql_yacc.cc"
     break;
 
   case 79: /* help: HELP_SYM $@3 ident_or_text  */
@@ -15252,7 +16501,7 @@ yyreduce:
             lex->sql_command= SQLCOM_HELP;
             lex->help_arg= (yyvsp[0].lex_str).str;
           }
-#line 15256 "sql_yacc.cc"
+#line 16505 "sql_yacc.cc"
     break;
 
   case 80: /* $@4: %empty  */
@@ -15262,13 +16511,13 @@ yyreduce:
             lex->sql_command = SQLCOM_CHANGE_MASTER;
             bzero((char*) &lex->mi, sizeof(lex->mi));
           }
-#line 15266 "sql_yacc.cc"
+#line 16515 "sql_yacc.cc"
     break;
 
   case 81: /* change: CHANGE MASTER_SYM TO_SYM $@4 master_defs  */
 #line 1757 "sql_yacc.yy"
           {}
-#line 15272 "sql_yacc.cc"
+#line 16521 "sql_yacc.cc"
     break;
 
   case 84: /* master_def: MASTER_HOST_SYM EQ TEXT_STRING_sys  */
@@ -15276,7 +16525,7 @@ yyreduce:
           {
             Lex->mi.host = (yyvsp[0].lex_str).str;
           }
-#line 15280 "sql_yacc.cc"
+#line 16529 "sql_yacc.cc"
     break;
 
   case 85: /* master_def: MASTER_USER_SYM EQ TEXT_STRING_sys  */
@@ -15284,7 +16533,7 @@ yyreduce:
           {
             Lex->mi.user = (yyvsp[0].lex_str).str;
           }
-#line 15288 "sql_yacc.cc"
+#line 16537 "sql_yacc.cc"
     break;
 
   case 86: /* master_def: MASTER_PASSWORD_SYM EQ TEXT_STRING_sys  */
@@ -15292,7 +16541,7 @@ yyreduce:
           {
             Lex->mi.password = (yyvsp[0].lex_str).str;
           }
-#line 15296 "sql_yacc.cc"
+#line 16545 "sql_yacc.cc"
     break;
 
   case 87: /* master_def: MASTER_PORT_SYM EQ ulong_num  */
@@ -15300,7 +16549,7 @@ yyreduce:
           {
             Lex->mi.port = (yyvsp[0].ulong_num);
           }
-#line 15304 "sql_yacc.cc"
+#line 16553 "sql_yacc.cc"
     break;
 
   case 88: /* master_def: MASTER_CONNECT_RETRY_SYM EQ ulong_num  */
@@ -15308,7 +16557,7 @@ yyreduce:
           {
             Lex->mi.connect_retry = (yyvsp[0].ulong_num);
           }
-#line 15312 "sql_yacc.cc"
+#line 16561 "sql_yacc.cc"
     break;
 
   case 89: /* master_def: MASTER_SSL_SYM EQ ulong_num  */
@@ -15317,7 +16566,7 @@ yyreduce:
             Lex->mi.ssl= (yyvsp[0].ulong_num) ? 
               LEX_MASTER_INFO::SSL_ENABLE : LEX_MASTER_INFO::SSL_DISABLE;
           }
-#line 15321 "sql_yacc.cc"
+#line 16570 "sql_yacc.cc"
     break;
 
   case 90: /* master_def: MASTER_SSL_CA_SYM EQ TEXT_STRING_sys  */
@@ -15325,7 +16574,7 @@ yyreduce:
           {
             Lex->mi.ssl_ca= (yyvsp[0].lex_str).str;
           }
-#line 15329 "sql_yacc.cc"
+#line 16578 "sql_yacc.cc"
     break;
 
   case 91: /* master_def: MASTER_SSL_CAPATH_SYM EQ TEXT_STRING_sys  */
@@ -15333,7 +16582,7 @@ yyreduce:
           {
             Lex->mi.ssl_capath= (yyvsp[0].lex_str).str;
           }
-#line 15337 "sql_yacc.cc"
+#line 16586 "sql_yacc.cc"
     break;
 
   case 92: /* master_def: MASTER_SSL_CERT_SYM EQ TEXT_STRING_sys  */
@@ -15341,7 +16590,7 @@ yyreduce:
           {
             Lex->mi.ssl_cert= (yyvsp[0].lex_str).str;
           }
-#line 15345 "sql_yacc.cc"
+#line 16594 "sql_yacc.cc"
     break;
 
   case 93: /* master_def: MASTER_SSL_CIPHER_SYM EQ TEXT_STRING_sys  */
@@ -15349,7 +16598,7 @@ yyreduce:
           {
             Lex->mi.ssl_cipher= (yyvsp[0].lex_str).str;
           }
-#line 15353 "sql_yacc.cc"
+#line 16602 "sql_yacc.cc"
     break;
 
   case 94: /* master_def: MASTER_SSL_KEY_SYM EQ TEXT_STRING_sys  */
@@ -15357,7 +16606,7 @@ yyreduce:
           {
             Lex->mi.ssl_key= (yyvsp[0].lex_str).str;
           }
-#line 15361 "sql_yacc.cc"
+#line 16610 "sql_yacc.cc"
     break;
 
   case 95: /* master_def: MASTER_SSL_VERIFY_SERVER_CERT_SYM EQ ulong_num  */
@@ -15366,7 +16615,7 @@ yyreduce:
             Lex->mi.ssl_verify_server_cert= (yyvsp[0].ulong_num) ?
               LEX_MASTER_INFO::SSL_ENABLE : LEX_MASTER_INFO::SSL_DISABLE;
           }
-#line 15370 "sql_yacc.cc"
+#line 16619 "sql_yacc.cc"
     break;
 
   case 97: /* master_file_def: MASTER_LOG_FILE_SYM EQ TEXT_STRING_sys  */
@@ -15374,7 +16623,7 @@ yyreduce:
           {
             Lex->mi.log_file_name = (yyvsp[0].lex_str).str;
           }
-#line 15378 "sql_yacc.cc"
+#line 16627 "sql_yacc.cc"
     break;
 
   case 98: /* master_file_def: MASTER_LOG_POS_SYM EQ ulonglong_num  */
@@ -15394,7 +16643,7 @@ yyreduce:
             */
             Lex->mi.pos = max(BIN_LOG_HEADER_SIZE, Lex->mi.pos);
           }
-#line 15398 "sql_yacc.cc"
+#line 16647 "sql_yacc.cc"
     break;
 
   case 99: /* master_file_def: RELAY_LOG_FILE_SYM EQ TEXT_STRING_sys  */
@@ -15402,7 +16651,7 @@ yyreduce:
           {
             Lex->mi.relay_log_name = (yyvsp[0].lex_str).str;
           }
-#line 15406 "sql_yacc.cc"
+#line 16655 "sql_yacc.cc"
     break;
 
   case 100: /* master_file_def: RELAY_LOG_POS_SYM EQ ulong_num  */
@@ -15412,7 +16661,7 @@ yyreduce:
             /* Adjust if < BIN_LOG_HEADER_SIZE (same comment as Lex->mi.pos) */
             Lex->mi.relay_log_pos = max(BIN_LOG_HEADER_SIZE, Lex->mi.relay_log_pos);
           }
-#line 15416 "sql_yacc.cc"
+#line 16665 "sql_yacc.cc"
     break;
 
   case 101: /* $@5: %empty  */
@@ -15434,7 +16683,7 @@ yyreduce:
             lex->name.str= 0;
             lex->name.length= 0;
           }
-#line 15438 "sql_yacc.cc"
+#line 16687 "sql_yacc.cc"
     break;
 
   case 102: /* create: CREATE opt_table_options TABLE_SYM opt_if_not_exists table_ident $@5 create2  */
@@ -15453,7 +16702,7 @@ yyreduce:
                                   (yyvsp[-2].table)->table.str);
             }
           }
-#line 15457 "sql_yacc.cc"
+#line 16706 "sql_yacc.cc"
     break;
 
   case 103: /* $@6: %empty  */
@@ -15462,7 +16711,7 @@ yyreduce:
             if (add_create_index_prepare(Lex, (yyvsp[0].table)))
               MYSQL_YYABORT;
           }
-#line 15466 "sql_yacc.cc"
+#line 16715 "sql_yacc.cc"
     break;
 
   case 104: /* create: CREATE opt_unique INDEX_SYM ident key_alg ON table_ident $@6 '(' key_list ')' normal_key_options  */
@@ -15471,7 +16720,7 @@ yyreduce:
             if (add_create_index(Lex, (yyvsp[-10].key_type), (yyvsp[-8].lex_str).str))
               MYSQL_YYABORT;
           }
-#line 15475 "sql_yacc.cc"
+#line 16724 "sql_yacc.cc"
     break;
 
   case 105: /* $@7: %empty  */
@@ -15480,7 +16729,7 @@ yyreduce:
             if (add_create_index_prepare(Lex, (yyvsp[0].table)))
               MYSQL_YYABORT;
           }
-#line 15484 "sql_yacc.cc"
+#line 16733 "sql_yacc.cc"
     break;
 
   case 106: /* create: CREATE fulltext INDEX_SYM ident init_key_options ON table_ident $@7 '(' key_list ')' fulltext_key_options  */
@@ -15489,7 +16738,7 @@ yyreduce:
             if (add_create_index(Lex, (yyvsp[-10].key_type), (yyvsp[-8].lex_str).str))
               MYSQL_YYABORT;
           }
-#line 15493 "sql_yacc.cc"
+#line 16742 "sql_yacc.cc"
     break;
 
   case 107: /* $@8: %empty  */
@@ -15498,7 +16747,7 @@ yyreduce:
             if (add_create_index_prepare(Lex, (yyvsp[0].table)))
               MYSQL_YYABORT;
           }
-#line 15502 "sql_yacc.cc"
+#line 16751 "sql_yacc.cc"
     break;
 
   case 108: /* create: CREATE spatial INDEX_SYM ident init_key_options ON table_ident $@8 '(' key_list ')' spatial_key_options  */
@@ -15507,7 +16756,7 @@ yyreduce:
             if (add_create_index(Lex, (yyvsp[-10].key_type), (yyvsp[-8].lex_str).str))
               MYSQL_YYABORT;
           }
-#line 15511 "sql_yacc.cc"
+#line 16760 "sql_yacc.cc"
     break;
 
   case 109: /* $@9: %empty  */
@@ -15516,7 +16765,7 @@ yyreduce:
             Lex->create_info.default_table_charset= NULL;
             Lex->create_info.used_fields= 0;
           }
-#line 15520 "sql_yacc.cc"
+#line 16769 "sql_yacc.cc"
     break;
 
   case 110: /* create: CREATE DATABASE opt_if_not_exists ident $@9 opt_create_database_options  */
@@ -15527,7 +16776,7 @@ yyreduce:
             lex->name= (yyvsp[-2].lex_str);
             lex->create_info.options=(yyvsp[-3].num);
           }
-#line 15531 "sql_yacc.cc"
+#line 16780 "sql_yacc.cc"
     break;
 
   case 111: /* $@10: %empty  */
@@ -15537,13 +16786,13 @@ yyreduce:
             Lex->create_view_algorithm= VIEW_ALGORITHM_UNDEFINED;
             Lex->create_view_suid= TRUE;
           }
-#line 15541 "sql_yacc.cc"
+#line 16790 "sql_yacc.cc"
     break;
 
   case 112: /* create: CREATE $@10 view_or_trigger_or_sp_or_event  */
 #line 1939 "sql_yacc.yy"
           {}
-#line 15547 "sql_yacc.cc"
+#line 16796 "sql_yacc.cc"
     break;
 
   case 113: /* create: CREATE USER clear_privileges grant_list  */
@@ -15551,7 +16800,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_CREATE_USER;
           }
-#line 15555 "sql_yacc.cc"
+#line 16804 "sql_yacc.cc"
     break;
 
   case 114: /* create: CREATE LOGFILE_SYM GROUP_SYM logfile_group_info  */
@@ -15559,7 +16808,7 @@ yyreduce:
           {
             Lex->alter_tablespace_info->ts_cmd_type= CREATE_LOGFILE_GROUP;
           }
-#line 15563 "sql_yacc.cc"
+#line 16812 "sql_yacc.cc"
     break;
 
   case 115: /* create: CREATE TABLESPACE tablespace_info  */
@@ -15567,7 +16816,7 @@ yyreduce:
           {
             Lex->alter_tablespace_info->ts_cmd_type= CREATE_TABLESPACE;
           }
-#line 15571 "sql_yacc.cc"
+#line 16820 "sql_yacc.cc"
     break;
 
   case 116: /* create: CREATE server_def  */
@@ -15575,7 +16824,7 @@ yyreduce:
           {
             Lex->sql_command= SQLCOM_CREATE_SERVER;
           }
-#line 15579 "sql_yacc.cc"
+#line 16828 "sql_yacc.cc"
     break;
 
   case 117: /* server_def: SERVER_SYM ident_or_text FOREIGN DATA_SYM WRAPPER_SYM ident_or_text OPTIONS_SYM '(' server_options_list ')'  */
@@ -15585,7 +16834,7 @@ yyreduce:
             Lex->server_options.server_name_length= (yyvsp[-8].lex_str).length;
             Lex->server_options.scheme= (yyvsp[-4].lex_str).str;
           }
-#line 15589 "sql_yacc.cc"
+#line 16838 "sql_yacc.cc"
     break;
 
   case 120: /* server_option: USER TEXT_STRING_sys  */
@@ -15593,7 +16842,7 @@ yyreduce:
           {
             Lex->server_options.username= (yyvsp[0].lex_str).str;
           }
-#line 15597 "sql_yacc.cc"
+#line 16846 "sql_yacc.cc"
     break;
 
   case 121: /* server_option: HOST_SYM TEXT_STRING_sys  */
@@ -15601,7 +16850,7 @@ yyreduce:
           {
             Lex->server_options.host= (yyvsp[0].lex_str).str;
           }
-#line 15605 "sql_yacc.cc"
+#line 16854 "sql_yacc.cc"
     break;
 
   case 122: /* server_option: DATABASE TEXT_STRING_sys  */
@@ -15609,7 +16858,7 @@ yyreduce:
           {
             Lex->server_options.db= (yyvsp[0].lex_str).str;
           }
-#line 15613 "sql_yacc.cc"
+#line 16862 "sql_yacc.cc"
     break;
 
   case 123: /* server_option: OWNER_SYM TEXT_STRING_sys  */
@@ -15617,7 +16866,7 @@ yyreduce:
           {
             Lex->server_options.owner= (yyvsp[0].lex_str).str;
           }
-#line 15621 "sql_yacc.cc"
+#line 16870 "sql_yacc.cc"
     break;
 
   case 124: /* server_option: PASSWORD TEXT_STRING_sys  */
@@ -15625,7 +16874,7 @@ yyreduce:
           {
             Lex->server_options.password= (yyvsp[0].lex_str).str;
           }
-#line 15629 "sql_yacc.cc"
+#line 16878 "sql_yacc.cc"
     break;
 
   case 125: /* server_option: SOCKET_SYM TEXT_STRING_sys  */
@@ -15633,7 +16882,7 @@ yyreduce:
           {
             Lex->server_options.socket= (yyvsp[0].lex_str).str;
           }
-#line 15637 "sql_yacc.cc"
+#line 16886 "sql_yacc.cc"
     break;
 
   case 126: /* server_option: PORT_SYM ulong_num  */
@@ -15641,7 +16890,7 @@ yyreduce:
           {
             Lex->server_options.port= (yyvsp[0].ulong_num);
           }
-#line 15645 "sql_yacc.cc"
+#line 16894 "sql_yacc.cc"
     break;
 
   case 127: /* $@11: %empty  */
@@ -15661,7 +16910,7 @@ yyreduce:
             lex->sql_command= SQLCOM_CREATE_EVENT;
             /* We need that for disallowing subqueries */
           }
-#line 15665 "sql_yacc.cc"
+#line 16914 "sql_yacc.cc"
     break;
 
   case 128: /* event_tail: remember_name EVENT_SYM opt_if_not_exists sp_name $@11 ON SCHEDULE_SYM ev_schedule_time opt_ev_on_completion opt_ev_status opt_ev_comment DO_SYM ev_sql_stmt  */
@@ -15673,7 +16922,7 @@ yyreduce:
             */
             Lex->sql_command= SQLCOM_CREATE_EVENT;
           }
-#line 15677 "sql_yacc.cc"
+#line 16926 "sql_yacc.cc"
     break;
 
   case 129: /* $@12: %empty  */
@@ -15682,7 +16931,7 @@ yyreduce:
             Lex->event_parse_data->item_expression= (yyvsp[-1].item);
             Lex->event_parse_data->interval= (yyvsp[0].interval);
           }
-#line 15686 "sql_yacc.cc"
+#line 16935 "sql_yacc.cc"
     break;
 
   case 131: /* ev_schedule_time: AT_SYM expr  */
@@ -15690,13 +16939,13 @@ yyreduce:
           {
             Lex->event_parse_data->item_execute_at= (yyvsp[0].item);
           }
-#line 15694 "sql_yacc.cc"
+#line 16943 "sql_yacc.cc"
     break;
 
   case 132: /* opt_ev_status: %empty  */
 #line 2053 "sql_yacc.yy"
                       { (yyval.num)= 0; }
-#line 15700 "sql_yacc.cc"
+#line 16949 "sql_yacc.cc"
     break;
 
   case 133: /* opt_ev_status: ENABLE_SYM  */
@@ -15706,7 +16955,7 @@ yyreduce:
             Lex->event_parse_data->status_changed= true;
             (yyval.num)= 1;
           }
-#line 15710 "sql_yacc.cc"
+#line 16959 "sql_yacc.cc"
     break;
 
   case 134: /* opt_ev_status: DISABLE_SYM ON SLAVE  */
@@ -15716,7 +16965,7 @@ yyreduce:
             Lex->event_parse_data->status_changed= true; 
             (yyval.num)= 1;
           }
-#line 15720 "sql_yacc.cc"
+#line 16969 "sql_yacc.cc"
     break;
 
   case 135: /* opt_ev_status: DISABLE_SYM  */
@@ -15726,7 +16975,7 @@ yyreduce:
             Lex->event_parse_data->status_changed= true;
             (yyval.num)= 1;
           }
-#line 15730 "sql_yacc.cc"
+#line 16979 "sql_yacc.cc"
     break;
 
   case 136: /* ev_starts: %empty  */
@@ -15737,7 +16986,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->event_parse_data->item_starts= item;
           }
-#line 15741 "sql_yacc.cc"
+#line 16990 "sql_yacc.cc"
     break;
 
   case 137: /* ev_starts: STARTS_SYM expr  */
@@ -15745,7 +16994,7 @@ yyreduce:
           {
             Lex->event_parse_data->item_starts= (yyvsp[0].item);
           }
-#line 15749 "sql_yacc.cc"
+#line 16998 "sql_yacc.cc"
     break;
 
   case 139: /* ev_ends: ENDS_SYM expr  */
@@ -15753,13 +17002,13 @@ yyreduce:
           {
             Lex->event_parse_data->item_ends= (yyvsp[0].item);
           }
-#line 15757 "sql_yacc.cc"
+#line 17006 "sql_yacc.cc"
     break;
 
   case 140: /* opt_ev_on_completion: %empty  */
 #line 2097 "sql_yacc.yy"
                       { (yyval.num)= 0; }
-#line 15763 "sql_yacc.cc"
+#line 17012 "sql_yacc.cc"
     break;
 
   case 142: /* ev_on_completion: ON COMPLETION_SYM PRESERVE_SYM  */
@@ -15769,7 +17018,7 @@ yyreduce:
                                   Event_parse_data::ON_COMPLETION_PRESERVE;
             (yyval.num)= 1;
           }
-#line 15773 "sql_yacc.cc"
+#line 17022 "sql_yacc.cc"
     break;
 
   case 143: /* ev_on_completion: ON COMPLETION_SYM NOT_SYM PRESERVE_SYM  */
@@ -15779,13 +17028,13 @@ yyreduce:
                                   Event_parse_data::ON_COMPLETION_DROP;
             (yyval.num)= 1;
           }
-#line 15783 "sql_yacc.cc"
+#line 17032 "sql_yacc.cc"
     break;
 
   case 144: /* opt_ev_comment: %empty  */
 #line 2117 "sql_yacc.yy"
                       { (yyval.num)= 0; }
-#line 15789 "sql_yacc.cc"
+#line 17038 "sql_yacc.cc"
     break;
 
   case 145: /* opt_ev_comment: COMMENT_SYM TEXT_STRING_sys  */
@@ -15794,7 +17043,7 @@ yyreduce:
             Lex->comment= Lex->event_parse_data->comment= (yyvsp[0].lex_str);
             (yyval.num)= 1;
           }
-#line 15798 "sql_yacc.cc"
+#line 17047 "sql_yacc.cc"
     break;
 
   case 146: /* $@13: %empty  */
@@ -15841,7 +17090,7 @@ yyreduce:
 
             lex->sphead->set_body_start(thd, lip->get_cpp_ptr());
           }
-#line 15845 "sql_yacc.cc"
+#line 17094 "sql_yacc.cc"
     break;
 
   case 147: /* ev_sql_stmt: $@13 ev_sql_stmt_inner  */
@@ -15858,7 +17107,7 @@ yyreduce:
 
             lex->event_parse_data->body_changed= TRUE;
           }
-#line 15862 "sql_yacc.cc"
+#line 17111 "sql_yacc.cc"
     break;
 
   case 161: /* clear_privileges: %empty  */
@@ -15874,7 +17123,7 @@ yyreduce:
            lex->ssl_cipher= lex->x509_subject= lex->x509_issuer= 0;
            bzero((char *)&(lex->mqh),sizeof(lex->mqh));
          }
-#line 15878 "sql_yacc.cc"
+#line 17127 "sql_yacc.cc"
     break;
 
   case 162: /* sp_name: ident '.' ident  */
@@ -15894,7 +17143,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.spname)->init_qname(YYTHD);
           }
-#line 15898 "sql_yacc.cc"
+#line 17147 "sql_yacc.cc"
     break;
 
   case 163: /* sp_name: ident  */
@@ -15914,91 +17163,91 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.spname)->init_qname(thd);
           }
-#line 15918 "sql_yacc.cc"
+#line 17167 "sql_yacc.cc"
     break;
 
   case 164: /* sp_a_chistics: %empty  */
 #line 2250 "sql_yacc.yy"
                       {}
-#line 15924 "sql_yacc.cc"
+#line 17173 "sql_yacc.cc"
     break;
 
   case 165: /* sp_a_chistics: sp_a_chistics sp_chistic  */
 #line 2251 "sql_yacc.yy"
                                    {}
-#line 15930 "sql_yacc.cc"
+#line 17179 "sql_yacc.cc"
     break;
 
   case 166: /* sp_c_chistics: %empty  */
 #line 2255 "sql_yacc.yy"
                       {}
-#line 15936 "sql_yacc.cc"
+#line 17185 "sql_yacc.cc"
     break;
 
   case 167: /* sp_c_chistics: sp_c_chistics sp_c_chistic  */
 #line 2256 "sql_yacc.yy"
                                      {}
-#line 15942 "sql_yacc.cc"
+#line 17191 "sql_yacc.cc"
     break;
 
   case 168: /* sp_chistic: COMMENT_SYM TEXT_STRING_sys  */
 #line 2262 "sql_yacc.yy"
           { Lex->sp_chistics.comment= (yyvsp[0].lex_str); }
-#line 15948 "sql_yacc.cc"
+#line 17197 "sql_yacc.cc"
     break;
 
   case 169: /* sp_chistic: LANGUAGE_SYM SQL_SYM  */
 #line 2264 "sql_yacc.yy"
           { /* Just parse it, we only have one language for now. */ }
-#line 15954 "sql_yacc.cc"
+#line 17203 "sql_yacc.cc"
     break;
 
   case 170: /* sp_chistic: NO_SYM SQL_SYM  */
 #line 2266 "sql_yacc.yy"
           { Lex->sp_chistics.daccess= SP_NO_SQL; }
-#line 15960 "sql_yacc.cc"
+#line 17209 "sql_yacc.cc"
     break;
 
   case 171: /* sp_chistic: CONTAINS_SYM SQL_SYM  */
 #line 2268 "sql_yacc.yy"
           { Lex->sp_chistics.daccess= SP_CONTAINS_SQL; }
-#line 15966 "sql_yacc.cc"
+#line 17215 "sql_yacc.cc"
     break;
 
   case 172: /* sp_chistic: READS_SYM SQL_SYM DATA_SYM  */
 #line 2270 "sql_yacc.yy"
           { Lex->sp_chistics.daccess= SP_READS_SQL_DATA; }
-#line 15972 "sql_yacc.cc"
+#line 17221 "sql_yacc.cc"
     break;
 
   case 173: /* sp_chistic: MODIFIES_SYM SQL_SYM DATA_SYM  */
 #line 2272 "sql_yacc.yy"
           { Lex->sp_chistics.daccess= SP_MODIFIES_SQL_DATA; }
-#line 15978 "sql_yacc.cc"
+#line 17227 "sql_yacc.cc"
     break;
 
   case 174: /* sp_chistic: sp_suid  */
 #line 2274 "sql_yacc.yy"
           {}
-#line 15984 "sql_yacc.cc"
+#line 17233 "sql_yacc.cc"
     break;
 
   case 175: /* sp_c_chistic: sp_chistic  */
 #line 2279 "sql_yacc.yy"
                                 { }
-#line 15990 "sql_yacc.cc"
+#line 17239 "sql_yacc.cc"
     break;
 
   case 176: /* sp_c_chistic: DETERMINISTIC_SYM  */
 #line 2280 "sql_yacc.yy"
                                 { Lex->sp_chistics.detistic= TRUE; }
-#line 15996 "sql_yacc.cc"
+#line 17245 "sql_yacc.cc"
     break;
 
   case 177: /* sp_c_chistic: not DETERMINISTIC_SYM  */
 #line 2281 "sql_yacc.yy"
                                 { Lex->sp_chistics.detistic= FALSE; }
-#line 16002 "sql_yacc.cc"
+#line 17251 "sql_yacc.cc"
     break;
 
   case 178: /* sp_suid: SQL_SYM SECURITY_SYM DEFINER_SYM  */
@@ -16006,7 +17255,7 @@ yyreduce:
           {
             Lex->sp_chistics.suid= SP_IS_SUID;
           }
-#line 16010 "sql_yacc.cc"
+#line 17259 "sql_yacc.cc"
     break;
 
   case 179: /* sp_suid: SQL_SYM SECURITY_SYM INVOKER_SYM  */
@@ -16014,7 +17263,7 @@ yyreduce:
           {
             Lex->sp_chistics.suid= SP_IS_NOT_SUID;
           }
-#line 16018 "sql_yacc.cc"
+#line 17267 "sql_yacc.cc"
     break;
 
   case 180: /* $@14: %empty  */
@@ -16027,13 +17276,13 @@ yyreduce:
             lex->value_list.empty();
             sp_add_used_routine(lex, YYTHD, (yyvsp[0].spname), TYPE_ENUM_PROCEDURE);
           }
-#line 16031 "sql_yacc.cc"
+#line 17280 "sql_yacc.cc"
     break;
 
   case 181: /* call: CALL_SYM sp_name $@14 opt_sp_cparam_list  */
 #line 2305 "sql_yacc.yy"
                              {}
-#line 16037 "sql_yacc.cc"
+#line 17286 "sql_yacc.cc"
     break;
 
   case 186: /* sp_cparams: sp_cparams ',' expr  */
@@ -16041,7 +17290,7 @@ yyreduce:
           {
            Lex->value_list.push_back((yyvsp[0].item));
           }
-#line 16045 "sql_yacc.cc"
+#line 17294 "sql_yacc.cc"
     break;
 
   case 187: /* sp_cparams: expr  */
@@ -16049,7 +17298,7 @@ yyreduce:
           {
             Lex->value_list.push_back((yyvsp[0].item));
           }
-#line 16053 "sql_yacc.cc"
+#line 17302 "sql_yacc.cc"
     break;
 
   case 192: /* sp_init_param: %empty  */
@@ -16070,7 +17319,7 @@ yyreduce:
             lex->interval_list.empty();
             lex->uint_geom_type= 0;
           }
-#line 16074 "sql_yacc.cc"
+#line 17323 "sql_yacc.cc"
     break;
 
   case 193: /* sp_fdparam: ident sp_init_param type  */
@@ -16097,7 +17346,7 @@ yyreduce:
             spvar->field_def.field_name= spvar->name.str;
             spvar->field_def.pack_flag |= FIELDFLAG_MAYBE_NULL;
           }
-#line 16101 "sql_yacc.cc"
+#line 17350 "sql_yacc.cc"
     break;
 
   case 198: /* sp_pdparam: sp_opt_inout sp_init_param ident type  */
@@ -16124,43 +17373,43 @@ yyreduce:
             spvar->field_def.field_name= spvar->name.str;
             spvar->field_def.pack_flag |= FIELDFLAG_MAYBE_NULL;
           }
-#line 16128 "sql_yacc.cc"
+#line 17377 "sql_yacc.cc"
     break;
 
   case 199: /* sp_opt_inout: %empty  */
 #line 2425 "sql_yacc.yy"
                       { (yyval.num)= sp_param_in; }
-#line 16134 "sql_yacc.cc"
+#line 17383 "sql_yacc.cc"
     break;
 
   case 200: /* sp_opt_inout: IN_SYM  */
 #line 2426 "sql_yacc.yy"
                       { (yyval.num)= sp_param_in; }
-#line 16140 "sql_yacc.cc"
+#line 17389 "sql_yacc.cc"
     break;
 
   case 201: /* sp_opt_inout: OUT_SYM  */
 #line 2427 "sql_yacc.yy"
                       { (yyval.num)= sp_param_out; }
-#line 16146 "sql_yacc.cc"
+#line 17395 "sql_yacc.cc"
     break;
 
   case 202: /* sp_opt_inout: INOUT_SYM  */
 #line 2428 "sql_yacc.yy"
                       { (yyval.num)= sp_param_inout; }
-#line 16152 "sql_yacc.cc"
+#line 17401 "sql_yacc.cc"
     break;
 
   case 203: /* sp_proc_stmts: %empty  */
 #line 2432 "sql_yacc.yy"
                       {}
-#line 16158 "sql_yacc.cc"
+#line 17407 "sql_yacc.cc"
     break;
 
   case 205: /* sp_proc_stmts1: sp_proc_stmt ';'  */
 #line 2437 "sql_yacc.yy"
                            {}
-#line 16164 "sql_yacc.cc"
+#line 17413 "sql_yacc.cc"
     break;
 
   case 207: /* sp_decls: %empty  */
@@ -16168,7 +17417,7 @@ yyreduce:
           {
             (yyval.spblock).vars= (yyval.spblock).conds= (yyval.spblock).hndlrs= (yyval.spblock).curs= 0;
           }
-#line 16172 "sql_yacc.cc"
+#line 17421 "sql_yacc.cc"
     break;
 
   case 208: /* sp_decls: sp_decls sp_decl ';'  */
@@ -16195,7 +17444,7 @@ yyreduce:
             (yyval.spblock).hndlrs= (yyvsp[-2].spblock).hndlrs + (yyvsp[-1].spblock).hndlrs;
             (yyval.spblock).curs= (yyvsp[-2].spblock).curs + (yyvsp[-1].spblock).curs;
           }
-#line 16199 "sql_yacc.cc"
+#line 17448 "sql_yacc.cc"
     break;
 
   case 209: /* $@15: %empty  */
@@ -16206,7 +17455,7 @@ yyreduce:
             lex->sphead->reset_lex(YYTHD);
             lex->spcont->declare_var_boundary((yyvsp[0].num));
           }
-#line 16210 "sql_yacc.cc"
+#line 17459 "sql_yacc.cc"
     break;
 
   case 210: /* sp_decl: DECLARE_SYM sp_decl_idents $@15 type sp_opt_default  */
@@ -16267,7 +17516,7 @@ yyreduce:
             (yyval.spblock).vars= (yyvsp[-3].num);
             (yyval.spblock).conds= (yyval.spblock).hndlrs= (yyval.spblock).curs= 0;
           }
-#line 16271 "sql_yacc.cc"
+#line 17520 "sql_yacc.cc"
     break;
 
   case 211: /* sp_decl: DECLARE_SYM ident CONDITION_SYM FOR_SYM sp_cond  */
@@ -16286,7 +17535,7 @@ yyreduce:
             (yyval.spblock).vars= (yyval.spblock).hndlrs= (yyval.spblock).curs= 0;
             (yyval.spblock).conds= 1;
           }
-#line 16290 "sql_yacc.cc"
+#line 17539 "sql_yacc.cc"
     break;
 
   case 212: /* $@16: %empty  */
@@ -16312,7 +17561,7 @@ yyreduce:
             if (sp->push_backpatch(i, ctx->push_label(empty_c_string, 0)))
               MYSQL_YYABORT;
           }
-#line 16316 "sql_yacc.cc"
+#line 17565 "sql_yacc.cc"
     break;
 
   case 213: /* sp_decl: DECLARE_SYM sp_handler_type HANDLER_SYM FOR_SYM $@16 sp_hcond_list sp_proc_stmt  */
@@ -16348,7 +17597,7 @@ yyreduce:
             (yyval.spblock).hndlrs= (yyvsp[-1].num);
             lex->spcont->add_handlers((yyvsp[-1].num));
           }
-#line 16352 "sql_yacc.cc"
+#line 17601 "sql_yacc.cc"
     break;
 
   case 214: /* sp_decl: DECLARE_SYM ident CURSOR_SYM FOR_SYM sp_cursor_stmt  */
@@ -16375,7 +17624,7 @@ yyreduce:
             (yyval.spblock).vars= (yyval.spblock).conds= (yyval.spblock).hndlrs= 0;
             (yyval.spblock).curs= 1;
           }
-#line 16379 "sql_yacc.cc"
+#line 17628 "sql_yacc.cc"
     break;
 
   case 215: /* $@17: %empty  */
@@ -16383,7 +17632,7 @@ yyreduce:
           {
             Lex->sphead->reset_lex(YYTHD);
           }
-#line 16387 "sql_yacc.cc"
+#line 17636 "sql_yacc.cc"
     break;
 
   case 216: /* sp_cursor_stmt: $@17 select  */
@@ -16404,31 +17653,31 @@ yyreduce:
             if (lex->sphead->restore_lex(YYTHD))
               MYSQL_YYABORT;
           }
-#line 16408 "sql_yacc.cc"
+#line 17657 "sql_yacc.cc"
     break;
 
   case 217: /* sp_handler_type: EXIT_SYM  */
 #line 2655 "sql_yacc.yy"
                         { (yyval.num)= SP_HANDLER_EXIT; }
-#line 16414 "sql_yacc.cc"
+#line 17663 "sql_yacc.cc"
     break;
 
   case 218: /* sp_handler_type: CONTINUE_SYM  */
 #line 2656 "sql_yacc.yy"
                         { (yyval.num)= SP_HANDLER_CONTINUE; }
-#line 16420 "sql_yacc.cc"
+#line 17669 "sql_yacc.cc"
     break;
 
   case 219: /* sp_hcond_list: sp_hcond_element  */
 #line 2662 "sql_yacc.yy"
           { (yyval.num)= 1; }
-#line 16426 "sql_yacc.cc"
+#line 17675 "sql_yacc.cc"
     break;
 
   case 220: /* sp_hcond_list: sp_hcond_list ',' sp_hcond_element  */
 #line 2664 "sql_yacc.yy"
           { (yyval.num)+= 1; }
-#line 16432 "sql_yacc.cc"
+#line 17681 "sql_yacc.cc"
     break;
 
   case 221: /* sp_hcond_element: sp_hcond  */
@@ -16452,7 +17701,7 @@ yyreduce:
               ctx->push_handler((yyvsp[0].spcondtype));
             }
           }
-#line 16456 "sql_yacc.cc"
+#line 17705 "sql_yacc.cc"
     break;
 
   case 222: /* sp_cond: ulong_num  */
@@ -16464,7 +17713,7 @@ yyreduce:
             (yyval.spcondtype)->type= sp_cond_type_t::number;
             (yyval.spcondtype)->mysqlerr= (yyvsp[0].ulong_num);
           }
-#line 16468 "sql_yacc.cc"
+#line 17717 "sql_yacc.cc"
     break;
 
   case 223: /* sp_cond: SQLSTATE_SYM opt_value TEXT_STRING_literal  */
@@ -16482,19 +17731,19 @@ yyreduce:
             memcpy((yyval.spcondtype)->sqlstate, (yyvsp[0].lex_str).str, 5);
             (yyval.spcondtype)->sqlstate[5]= '\0';
           }
-#line 16486 "sql_yacc.cc"
+#line 17735 "sql_yacc.cc"
     break;
 
   case 224: /* opt_value: %empty  */
 #line 2716 "sql_yacc.yy"
                        {}
-#line 16492 "sql_yacc.cc"
+#line 17741 "sql_yacc.cc"
     break;
 
   case 225: /* opt_value: VALUE_SYM  */
 #line 2717 "sql_yacc.yy"
                        {}
-#line 16498 "sql_yacc.cc"
+#line 17747 "sql_yacc.cc"
     break;
 
   case 226: /* sp_hcond: sp_cond  */
@@ -16502,7 +17751,7 @@ yyreduce:
           {
             (yyval.spcondtype)= (yyvsp[0].spcondtype);
           }
-#line 16506 "sql_yacc.cc"
+#line 17755 "sql_yacc.cc"
     break;
 
   case 227: /* sp_hcond: ident  */
@@ -16515,7 +17764,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 16519 "sql_yacc.cc"
+#line 17768 "sql_yacc.cc"
     break;
 
   case 228: /* sp_hcond: SQLWARNING_SYM  */
@@ -16526,7 +17775,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.spcondtype)->type= sp_cond_type_t::warning;
           }
-#line 16530 "sql_yacc.cc"
+#line 17779 "sql_yacc.cc"
     break;
 
   case 229: /* sp_hcond: not FOUND_SYM  */
@@ -16537,7 +17786,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.spcondtype)->type= sp_cond_type_t::notfound;
           }
-#line 16541 "sql_yacc.cc"
+#line 17790 "sql_yacc.cc"
     break;
 
   case 230: /* sp_hcond: SQLEXCEPTION_SYM  */
@@ -16548,7 +17797,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.spcondtype)->type= sp_cond_type_t::exception;
           }
-#line 16552 "sql_yacc.cc"
+#line 17801 "sql_yacc.cc"
     break;
 
   case 231: /* sp_decl_idents: ident  */
@@ -16567,7 +17816,7 @@ yyreduce:
             spc->push_variable(&(yyvsp[0].lex_str), (enum_field_types)0, sp_param_in);
             (yyval.num)= 1;
           }
-#line 16571 "sql_yacc.cc"
+#line 17820 "sql_yacc.cc"
     break;
 
   case 232: /* sp_decl_idents: sp_decl_idents ',' ident  */
@@ -16586,31 +17835,31 @@ yyreduce:
             spc->push_variable(&(yyvsp[0].lex_str), (enum_field_types)0, sp_param_in);
             (yyval.num)= (yyvsp[-2].num) + 1;
           }
-#line 16590 "sql_yacc.cc"
+#line 17839 "sql_yacc.cc"
     break;
 
   case 233: /* sp_opt_default: %empty  */
 #line 2791 "sql_yacc.yy"
                       { (yyval.item) = NULL; }
-#line 16596 "sql_yacc.cc"
+#line 17845 "sql_yacc.cc"
     break;
 
   case 234: /* sp_opt_default: DEFAULT expr  */
 #line 2792 "sql_yacc.yy"
                        { (yyval.item) = (yyvsp[0].item); }
-#line 16602 "sql_yacc.cc"
+#line 17851 "sql_yacc.cc"
     break;
 
   case 248: /* $@18: %empty  */
 #line 2813 "sql_yacc.yy"
           { Lex->sphead->new_cont_backpatch(NULL); }
-#line 16608 "sql_yacc.cc"
+#line 17857 "sql_yacc.cc"
     break;
 
   case 249: /* sp_proc_stmt_if: IF $@18 sp_if END IF  */
 #line 2815 "sql_yacc.yy"
           { Lex->sphead->do_cont_backpatch(); }
-#line 16614 "sql_yacc.cc"
+#line 17863 "sql_yacc.cc"
     break;
 
   case 250: /* $@19: %empty  */
@@ -16623,7 +17872,7 @@ yyreduce:
             lex->sphead->reset_lex(thd);
             lex->sphead->m_tmp_query= lip->get_tok_start();
           }
-#line 16627 "sql_yacc.cc"
+#line 17876 "sql_yacc.cc"
     break;
 
   case 251: /* sp_proc_stmt_statement: $@19 statement  */
@@ -16672,13 +17921,13 @@ yyreduce:
             if (sp->restore_lex(thd))
               MYSQL_YYABORT;
           }
-#line 16676 "sql_yacc.cc"
+#line 17925 "sql_yacc.cc"
     break;
 
   case 252: /* $@20: %empty  */
 #line 2876 "sql_yacc.yy"
           { Lex->sphead->reset_lex(YYTHD); }
-#line 16682 "sql_yacc.cc"
+#line 17931 "sql_yacc.cc"
     break;
 
   case 253: /* sp_proc_stmt_return: RETURN_SYM $@20 expr  */
@@ -16706,7 +17955,7 @@ yyreduce:
             if (sp->restore_lex(YYTHD))
               MYSQL_YYABORT;
           }
-#line 16710 "sql_yacc.cc"
+#line 17959 "sql_yacc.cc"
     break;
 
   case 254: /* $@21: %empty  */
@@ -16716,7 +17965,7 @@ yyreduce:
 
             lex->spcont->push_label((char *)"", lex->sphead->instructions());
           }
-#line 16720 "sql_yacc.cc"
+#line 17969 "sql_yacc.cc"
     break;
 
   case 255: /* sp_proc_stmt_unlabeled: $@21 sp_unlabeled_control  */
@@ -16726,7 +17975,7 @@ yyreduce:
 
             lex->sphead->backpatch(lex->spcont->pop_label());
           }
-#line 16730 "sql_yacc.cc"
+#line 17979 "sql_yacc.cc"
     break;
 
   case 256: /* sp_proc_stmt_leave: LEAVE_SYM label_ident  */
@@ -16780,7 +18029,7 @@ yyreduce:
               sp->add_instr(i);
             }
           }
-#line 16784 "sql_yacc.cc"
+#line 18033 "sql_yacc.cc"
     break;
 
   case 257: /* sp_proc_stmt_iterate: ITERATE_SYM label_ident  */
@@ -16824,7 +18073,7 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 16828 "sql_yacc.cc"
+#line 18077 "sql_yacc.cc"
     break;
 
   case 258: /* sp_proc_stmt_open: OPEN_SYM ident  */
@@ -16845,7 +18094,7 @@ yyreduce:
                 sp->add_instr(i))
               MYSQL_YYABORT;
           }
-#line 16849 "sql_yacc.cc"
+#line 18098 "sql_yacc.cc"
     break;
 
   case 259: /* $@22: %empty  */
@@ -16866,13 +18115,13 @@ yyreduce:
                 sp->add_instr(i))
               MYSQL_YYABORT;
           }
-#line 16870 "sql_yacc.cc"
+#line 18119 "sql_yacc.cc"
     break;
 
   case 260: /* sp_proc_stmt_fetch: FETCH_SYM sp_opt_fetch_noise ident INTO $@22 sp_fetch_list  */
 #line 3052 "sql_yacc.yy"
           {}
-#line 16876 "sql_yacc.cc"
+#line 18125 "sql_yacc.cc"
     break;
 
   case 261: /* sp_proc_stmt_close: CLOSE_SYM ident  */
@@ -16893,7 +18142,7 @@ yyreduce:
                 sp->add_instr(i))
               MYSQL_YYABORT;
           }
-#line 16897 "sql_yacc.cc"
+#line 18146 "sql_yacc.cc"
     break;
 
   case 265: /* sp_fetch_list: ident  */
@@ -16917,7 +18166,7 @@ yyreduce:
               i->add_to_varlist(spv);
             }
           }
-#line 16921 "sql_yacc.cc"
+#line 18170 "sql_yacc.cc"
     break;
 
   case 266: /* sp_fetch_list: sp_fetch_list ',' ident  */
@@ -16941,13 +18190,13 @@ yyreduce:
               i->add_to_varlist(spv);
             }
           }
-#line 16945 "sql_yacc.cc"
+#line 18194 "sql_yacc.cc"
     break;
 
   case 267: /* $@23: %empty  */
 #line 3125 "sql_yacc.yy"
           { Lex->sphead->reset_lex(YYTHD); }
-#line 16951 "sql_yacc.cc"
+#line 18200 "sql_yacc.cc"
     break;
 
   case 268: /* $@24: %empty  */
@@ -16967,7 +18216,7 @@ yyreduce:
             if (sp->restore_lex(YYTHD))
               MYSQL_YYABORT;
           }
-#line 16971 "sql_yacc.cc"
+#line 18220 "sql_yacc.cc"
     break;
 
   case 269: /* $@25: %empty  */
@@ -16983,7 +18232,7 @@ yyreduce:
             sp->backpatch(ctx->pop_label());
             sp->push_backpatch(i, ctx->push_label((char *)"", 0));
           }
-#line 16987 "sql_yacc.cc"
+#line 18236 "sql_yacc.cc"
     break;
 
   case 270: /* sp_if: $@23 expr THEN_SYM $@24 sp_proc_stmts1 $@25 sp_elseifs  */
@@ -16993,7 +18242,7 @@ yyreduce:
 
             lex->sphead->backpatch(lex->spcont->pop_label());
           }
-#line 16997 "sql_yacc.cc"
+#line 18246 "sql_yacc.cc"
     break;
 
   case 276: /* $@26: %empty  */
@@ -17003,7 +18252,7 @@ yyreduce:
             case_stmt_action_case(lex);
             lex->sphead->reset_lex(YYTHD); /* For expr $3 */
           }
-#line 17007 "sql_yacc.cc"
+#line 18256 "sql_yacc.cc"
     break;
 
   case 277: /* $@27: %empty  */
@@ -17017,7 +18266,7 @@ yyreduce:
             if (lex->sphead->restore_lex(YYTHD))
               MYSQL_YYABORT;
           }
-#line 17021 "sql_yacc.cc"
+#line 18270 "sql_yacc.cc"
     break;
 
   case 278: /* simple_case_stmt: CASE_SYM $@26 expr $@27 simple_when_clause_list else_clause_opt END CASE_SYM  */
@@ -17026,7 +18275,7 @@ yyreduce:
             LEX *lex= Lex;
             case_stmt_action_end_case(lex, true);
           }
-#line 17030 "sql_yacc.cc"
+#line 18279 "sql_yacc.cc"
     break;
 
   case 279: /* $@28: %empty  */
@@ -17035,7 +18284,7 @@ yyreduce:
             LEX *lex= Lex;
             case_stmt_action_case(lex);
           }
-#line 17039 "sql_yacc.cc"
+#line 18288 "sql_yacc.cc"
     break;
 
   case 280: /* searched_case_stmt: CASE_SYM $@28 searched_when_clause_list else_clause_opt END CASE_SYM  */
@@ -17044,7 +18293,7 @@ yyreduce:
             LEX *lex= Lex;
             case_stmt_action_end_case(lex, false);
           }
-#line 17048 "sql_yacc.cc"
+#line 18297 "sql_yacc.cc"
     break;
 
   case 285: /* $@29: %empty  */
@@ -17052,7 +18301,7 @@ yyreduce:
           {
             Lex->sphead->reset_lex(YYTHD); /* For expr $3 */
           }
-#line 17056 "sql_yacc.cc"
+#line 18305 "sql_yacc.cc"
     break;
 
   case 286: /* $@30: %empty  */
@@ -17067,7 +18316,7 @@ yyreduce:
             if (lex->sphead->restore_lex(YYTHD))
               MYSQL_YYABORT;
           }
-#line 17071 "sql_yacc.cc"
+#line 18320 "sql_yacc.cc"
     break;
 
   case 287: /* simple_when_clause: WHEN_SYM $@29 expr $@30 THEN_SYM sp_proc_stmts1  */
@@ -17077,7 +18326,7 @@ yyreduce:
             if (case_stmt_action_then(lex))
               MYSQL_YYABORT;
           }
-#line 17081 "sql_yacc.cc"
+#line 18330 "sql_yacc.cc"
     break;
 
   case 288: /* $@31: %empty  */
@@ -17085,7 +18334,7 @@ yyreduce:
           {
             Lex->sphead->reset_lex(YYTHD); /* For expr $3 */
           }
-#line 17089 "sql_yacc.cc"
+#line 18338 "sql_yacc.cc"
     break;
 
   case 289: /* $@32: %empty  */
@@ -17098,7 +18347,7 @@ yyreduce:
             if (lex->sphead->restore_lex(YYTHD))
               MYSQL_YYABORT;
           }
-#line 17102 "sql_yacc.cc"
+#line 18351 "sql_yacc.cc"
     break;
 
   case 290: /* searched_when_clause: WHEN_SYM $@31 expr $@32 THEN_SYM sp_proc_stmts1  */
@@ -17108,7 +18357,7 @@ yyreduce:
             if (case_stmt_action_then(lex))
               MYSQL_YYABORT;
           }
-#line 17112 "sql_yacc.cc"
+#line 18361 "sql_yacc.cc"
     break;
 
   case 291: /* else_clause_opt: %empty  */
@@ -17123,7 +18372,7 @@ yyreduce:
                 sp->add_instr(i))
               MYSQL_YYABORT;
           }
-#line 17127 "sql_yacc.cc"
+#line 18376 "sql_yacc.cc"
     break;
 
   case 293: /* $@33: %empty  */
@@ -17145,7 +18394,7 @@ yyreduce:
               lab->type= SP_LAB_ITER;
             }
           }
-#line 17149 "sql_yacc.cc"
+#line 18398 "sql_yacc.cc"
     break;
 
   case 294: /* sp_labeled_control: label_ident ':' $@33 sp_unlabeled_control sp_opt_label  */
@@ -17164,19 +18413,19 @@ yyreduce:
             }
             lex->sphead->backpatch(lab);
           }
-#line 17168 "sql_yacc.cc"
+#line 18417 "sql_yacc.cc"
     break;
 
   case 295: /* sp_opt_label: %empty  */
 #line 3326 "sql_yacc.yy"
                         { (yyval.lex_str)= null_lex_str; }
-#line 17174 "sql_yacc.cc"
+#line 18423 "sql_yacc.cc"
     break;
 
   case 296: /* sp_opt_label: label_ident  */
 #line 3327 "sql_yacc.yy"
                         { (yyval.lex_str)= (yyvsp[0].lex_str); }
-#line 17180 "sql_yacc.cc"
+#line 18429 "sql_yacc.cc"
     break;
 
   case 297: /* $@34: %empty  */
@@ -17196,7 +18445,7 @@ yyreduce:
                                          lex->sphead->instructions());
             lab->type= SP_LAB_BEGIN;
           }
-#line 17200 "sql_yacc.cc"
+#line 18449 "sql_yacc.cc"
     break;
 
   case 298: /* sp_labeled_block: label_ident ':' $@34 sp_block_content sp_opt_label  */
@@ -17214,7 +18463,7 @@ yyreduce:
               }
             }
           }
-#line 17218 "sql_yacc.cc"
+#line 18467 "sql_yacc.cc"
     break;
 
   case 299: /* $@35: %empty  */
@@ -17225,7 +18474,7 @@ yyreduce:
             sp_label_t *lab= lex->spcont->push_label((char *)"", ip);
             lab->type= SP_LAB_BEGIN;
           }
-#line 17229 "sql_yacc.cc"
+#line 18478 "sql_yacc.cc"
     break;
 
   case 300: /* sp_unlabeled_block: $@35 sp_block_content  */
@@ -17234,7 +18483,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->spcont->pop_label();
           }
-#line 17238 "sql_yacc.cc"
+#line 18487 "sql_yacc.cc"
     break;
 
   case 301: /* $@36: %empty  */
@@ -17245,7 +18494,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->spcont= lex->spcont->push_context(LABEL_DEFAULT_SCOPE);
           }
-#line 17249 "sql_yacc.cc"
+#line 18498 "sql_yacc.cc"
     break;
 
   case 302: /* sp_block_content: BEGIN_SYM $@36 sp_decls sp_proc_stmts END  */
@@ -17273,7 +18522,7 @@ yyreduce:
             }
             lex->spcont= ctx->pop_context();
           }
-#line 17277 "sql_yacc.cc"
+#line 18526 "sql_yacc.cc"
     break;
 
   case 303: /* sp_unlabeled_control: LOOP_SYM sp_proc_stmts1 END LOOP_SYM  */
@@ -17287,13 +18536,13 @@ yyreduce:
                 lex->sphead->add_instr(i))
               MYSQL_YYABORT;
 	  }
-#line 17291 "sql_yacc.cc"
+#line 18540 "sql_yacc.cc"
     break;
 
   case 304: /* $@37: %empty  */
 #line 3426 "sql_yacc.yy"
           { Lex->sphead->reset_lex(YYTHD); }
-#line 17297 "sql_yacc.cc"
+#line 18546 "sql_yacc.cc"
     break;
 
   case 305: /* $@38: %empty  */
@@ -17313,7 +18562,7 @@ yyreduce:
             if (sp->restore_lex(YYTHD))
               MYSQL_YYABORT;
           }
-#line 17317 "sql_yacc.cc"
+#line 18566 "sql_yacc.cc"
     break;
 
   case 306: /* sp_unlabeled_control: WHILE_SYM $@37 expr DO_SYM $@38 sp_proc_stmts1 END WHILE_SYM  */
@@ -17328,13 +18577,13 @@ yyreduce:
               MYSQL_YYABORT;
             lex->sphead->do_cont_backpatch();
           }
-#line 17332 "sql_yacc.cc"
+#line 18581 "sql_yacc.cc"
     break;
 
   case 307: /* $@39: %empty  */
 #line 3455 "sql_yacc.yy"
           { Lex->sphead->reset_lex(YYTHD); }
-#line 17338 "sql_yacc.cc"
+#line 18587 "sql_yacc.cc"
     break;
 
   case 308: /* sp_unlabeled_control: REPEAT_SYM sp_proc_stmts1 UNTIL_SYM $@39 expr END REPEAT_SYM  */
@@ -17354,43 +18603,43 @@ yyreduce:
             /* We can shortcut the cont_backpatch here */
             i->m_cont_dest= ip+1;
           }
-#line 17358 "sql_yacc.cc"
+#line 18607 "sql_yacc.cc"
     break;
 
   case 309: /* trg_action_time: BEFORE_SYM  */
 #line 3476 "sql_yacc.yy"
             { Lex->trg_chistics.action_time= TRG_ACTION_BEFORE; }
-#line 17364 "sql_yacc.cc"
+#line 18613 "sql_yacc.cc"
     break;
 
   case 310: /* trg_action_time: AFTER_SYM  */
 #line 3478 "sql_yacc.yy"
             { Lex->trg_chistics.action_time= TRG_ACTION_AFTER; }
-#line 17370 "sql_yacc.cc"
+#line 18619 "sql_yacc.cc"
     break;
 
   case 311: /* trg_event: INSERT  */
 #line 3483 "sql_yacc.yy"
             { Lex->trg_chistics.event= TRG_EVENT_INSERT; }
-#line 17376 "sql_yacc.cc"
+#line 18625 "sql_yacc.cc"
     break;
 
   case 312: /* trg_event: UPDATE_SYM  */
 #line 3485 "sql_yacc.yy"
             { Lex->trg_chistics.event= TRG_EVENT_UPDATE; }
-#line 17382 "sql_yacc.cc"
+#line 18631 "sql_yacc.cc"
     break;
 
   case 313: /* trg_event: DELETE_SYM  */
 #line 3487 "sql_yacc.yy"
             { Lex->trg_chistics.event= TRG_EVENT_DELETE; }
-#line 17388 "sql_yacc.cc"
+#line 18637 "sql_yacc.cc"
     break;
 
   case 317: /* opt_logfile_group_name: %empty  */
 #line 3521 "sql_yacc.yy"
                       {}
-#line 17394 "sql_yacc.cc"
+#line 18643 "sql_yacc.cc"
     break;
 
   case 318: /* opt_logfile_group_name: USE_SYM LOGFILE_SYM GROUP_SYM ident  */
@@ -17399,7 +18648,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->logfile_group_name= (yyvsp[0].lex_str).str;
           }
-#line 17403 "sql_yacc.cc"
+#line 18652 "sql_yacc.cc"
     break;
 
   case 319: /* alter_tablespace_info: tablespace_name ADD ts_datafile alter_tablespace_option_list  */
@@ -17407,7 +18656,7 @@ yyreduce:
           { 
             Lex->alter_tablespace_info->ts_alter_tablespace_type= ALTER_TABLESPACE_ADD_FILE; 
           }
-#line 17411 "sql_yacc.cc"
+#line 18660 "sql_yacc.cc"
     break;
 
   case 320: /* alter_tablespace_info: tablespace_name DROP ts_datafile alter_tablespace_option_list  */
@@ -17415,13 +18664,13 @@ yyreduce:
           { 
             Lex->alter_tablespace_info->ts_alter_tablespace_type= ALTER_TABLESPACE_DROP_FILE; 
           }
-#line 17419 "sql_yacc.cc"
+#line 18668 "sql_yacc.cc"
     break;
 
   case 325: /* $@40: %empty  */
 #line 3562 "sql_yacc.yy"
                       {}
-#line 17425 "sql_yacc.cc"
+#line 18674 "sql_yacc.cc"
     break;
 
   case 372: /* ts_datafile: DATAFILE_SYM TEXT_STRING_sys  */
@@ -17430,7 +18679,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->data_file_name= (yyvsp[0].lex_str).str;
           }
-#line 17434 "sql_yacc.cc"
+#line 18683 "sql_yacc.cc"
     break;
 
   case 373: /* lg_undofile: UNDOFILE_SYM TEXT_STRING_sys  */
@@ -17439,7 +18688,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->undo_file_name= (yyvsp[0].lex_str).str;
           }
-#line 17443 "sql_yacc.cc"
+#line 18692 "sql_yacc.cc"
     break;
 
   case 374: /* lg_redofile: REDOFILE_SYM TEXT_STRING_sys  */
@@ -17448,7 +18697,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->redo_file_name= (yyvsp[0].lex_str).str;
           }
-#line 17452 "sql_yacc.cc"
+#line 18701 "sql_yacc.cc"
     break;
 
   case 375: /* tablespace_name: ident  */
@@ -17461,7 +18710,7 @@ yyreduce:
             lex->alter_tablespace_info->tablespace_name= (yyvsp[0].lex_str).str;
             lex->sql_command= SQLCOM_ALTER_TABLESPACE;
           }
-#line 17465 "sql_yacc.cc"
+#line 18714 "sql_yacc.cc"
     break;
 
   case 376: /* logfile_group_name: ident  */
@@ -17474,7 +18723,7 @@ yyreduce:
             lex->alter_tablespace_info->logfile_group_name= (yyvsp[0].lex_str).str;
             lex->sql_command= SQLCOM_ALTER_TABLESPACE;
           }
-#line 17478 "sql_yacc.cc"
+#line 18727 "sql_yacc.cc"
     break;
 
   case 377: /* ts_access_mode: READ_ONLY_SYM  */
@@ -17483,7 +18732,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->ts_access_mode= TS_READ_ONLY;
           }
-#line 17487 "sql_yacc.cc"
+#line 18736 "sql_yacc.cc"
     break;
 
   case 378: /* ts_access_mode: READ_WRITE_SYM  */
@@ -17492,7 +18741,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->ts_access_mode= TS_READ_WRITE;
           }
-#line 17496 "sql_yacc.cc"
+#line 18745 "sql_yacc.cc"
     break;
 
   case 379: /* ts_access_mode: NOT_SYM ACCESSIBLE_SYM  */
@@ -17501,7 +18750,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->ts_access_mode= TS_NOT_ACCESSIBLE;
           }
-#line 17505 "sql_yacc.cc"
+#line 18754 "sql_yacc.cc"
     break;
 
   case 380: /* opt_ts_initial_size: INITIAL_SIZE_SYM opt_equal size_number  */
@@ -17510,7 +18759,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->initial_size= (yyvsp[0].ulonglong_number);
           }
-#line 17514 "sql_yacc.cc"
+#line 18763 "sql_yacc.cc"
     break;
 
   case 381: /* opt_ts_autoextend_size: AUTOEXTEND_SIZE_SYM opt_equal size_number  */
@@ -17519,7 +18768,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->autoextend_size= (yyvsp[0].ulonglong_number);
           }
-#line 17523 "sql_yacc.cc"
+#line 18772 "sql_yacc.cc"
     break;
 
   case 382: /* opt_ts_max_size: MAX_SIZE_SYM opt_equal size_number  */
@@ -17528,7 +18777,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->max_size= (yyvsp[0].ulonglong_number);
           }
-#line 17532 "sql_yacc.cc"
+#line 18781 "sql_yacc.cc"
     break;
 
   case 383: /* opt_ts_extent_size: EXTENT_SIZE_SYM opt_equal size_number  */
@@ -17537,7 +18786,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->extent_size= (yyvsp[0].ulonglong_number);
           }
-#line 17541 "sql_yacc.cc"
+#line 18790 "sql_yacc.cc"
     break;
 
   case 384: /* opt_ts_undo_buffer_size: UNDO_BUFFER_SIZE_SYM opt_equal size_number  */
@@ -17546,7 +18795,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->undo_buffer_size= (yyvsp[0].ulonglong_number);
           }
-#line 17550 "sql_yacc.cc"
+#line 18799 "sql_yacc.cc"
     break;
 
   case 385: /* opt_ts_redo_buffer_size: REDO_BUFFER_SIZE_SYM opt_equal size_number  */
@@ -17555,7 +18804,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->redo_buffer_size= (yyvsp[0].ulonglong_number);
           }
-#line 17559 "sql_yacc.cc"
+#line 18808 "sql_yacc.cc"
     break;
 
   case 386: /* opt_ts_nodegroup: NODEGROUP_SYM opt_equal real_ulong_num  */
@@ -17569,7 +18818,7 @@ yyreduce:
             }
             lex->alter_tablespace_info->nodegroup_id= (yyvsp[0].ulong_num);
           }
-#line 17573 "sql_yacc.cc"
+#line 18822 "sql_yacc.cc"
     break;
 
   case 387: /* opt_ts_comment: COMMENT_SYM opt_equal TEXT_STRING_sys  */
@@ -17583,7 +18832,7 @@ yyreduce:
             }
             lex->alter_tablespace_info->ts_comment= (yyvsp[0].lex_str).str;
           }
-#line 17587 "sql_yacc.cc"
+#line 18836 "sql_yacc.cc"
     break;
 
   case 388: /* opt_ts_engine: opt_storage ENGINE_SYM opt_equal storage_engines  */
@@ -17598,7 +18847,7 @@ yyreduce:
             }
             lex->alter_tablespace_info->storage_engine= (yyvsp[0].db_type);
           }
-#line 17602 "sql_yacc.cc"
+#line 18851 "sql_yacc.cc"
     break;
 
   case 391: /* ts_wait: WAIT_SYM  */
@@ -17607,7 +18856,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->wait_until_completed= TRUE;
           }
-#line 17611 "sql_yacc.cc"
+#line 18860 "sql_yacc.cc"
     break;
 
   case 392: /* ts_wait: NO_WAIT_SYM  */
@@ -17621,13 +18870,13 @@ yyreduce:
             }
             lex->alter_tablespace_info->wait_until_completed= FALSE;
           }
-#line 17625 "sql_yacc.cc"
+#line 18874 "sql_yacc.cc"
     break;
 
   case 393: /* size_number: real_ulong_num  */
 #line 3832 "sql_yacc.yy"
                          { (yyval.ulonglong_number)= (yyvsp[0].ulong_num);}
-#line 17631 "sql_yacc.cc"
+#line 18880 "sql_yacc.cc"
     break;
 
   case 394: /* size_number: IDENT  */
@@ -17675,19 +18924,19 @@ yyreduce:
             }
             (yyval.ulonglong_number)= number;
           }
-#line 17679 "sql_yacc.cc"
+#line 18928 "sql_yacc.cc"
     break;
 
   case 395: /* create2: '(' create2a  */
 #line 3884 "sql_yacc.yy"
                        {}
-#line 17685 "sql_yacc.cc"
+#line 18934 "sql_yacc.cc"
     break;
 
   case 396: /* create2: opt_create_table_options opt_partitioning create3  */
 #line 3887 "sql_yacc.yy"
                   {}
-#line 17691 "sql_yacc.cc"
+#line 18940 "sql_yacc.cc"
     break;
 
   case 397: /* create2: LIKE table_ident  */
@@ -17705,7 +18954,7 @@ yyreduce:
             /* CREATE TABLE ... LIKE is not allowed for views. */
             src_table->required_type= FRMTYPE_TABLE;
           }
-#line 17709 "sql_yacc.cc"
+#line 18958 "sql_yacc.cc"
     break;
 
   case 398: /* create2: '(' LIKE table_ident ')'  */
@@ -17723,13 +18972,13 @@ yyreduce:
             /* CREATE TABLE ... LIKE is not allowed for views. */
             src_table->required_type= FRMTYPE_TABLE;
           }
-#line 17727 "sql_yacc.cc"
+#line 18976 "sql_yacc.cc"
     break;
 
   case 399: /* create2a: field_list ')' opt_create_table_options opt_partitioning create3  */
 #line 3921 "sql_yacc.yy"
                   {}
-#line 17733 "sql_yacc.cc"
+#line 18982 "sql_yacc.cc"
     break;
 
   case 400: /* $@41: %empty  */
@@ -17738,19 +18987,19 @@ yyreduce:
              Select->set_braces(1);
              Lex->create_select_start_with_brace= TRUE;
            }
-#line 17742 "sql_yacc.cc"
+#line 18991 "sql_yacc.cc"
     break;
 
   case 401: /* create2a: opt_partitioning create_select ')' $@41 union_opt  */
 #line 3928 "sql_yacc.yy"
                      {}
-#line 17748 "sql_yacc.cc"
+#line 18997 "sql_yacc.cc"
     break;
 
   case 402: /* create3: %empty  */
 #line 3932 "sql_yacc.yy"
                       {}
-#line 17754 "sql_yacc.cc"
+#line 19003 "sql_yacc.cc"
     break;
 
   case 403: /* $@42: %empty  */
@@ -17759,13 +19008,13 @@ yyreduce:
             Select->set_braces(0);
             Lex->create_select_start_with_brace= FALSE;
           }
-#line 17763 "sql_yacc.cc"
+#line 19012 "sql_yacc.cc"
     break;
 
   case 404: /* create3: opt_duplicate opt_as create_select $@42 union_clause  */
 #line 3938 "sql_yacc.yy"
                        {}
-#line 17769 "sql_yacc.cc"
+#line 19018 "sql_yacc.cc"
     break;
 
   case 405: /* $@43: %empty  */
@@ -17774,19 +19023,19 @@ yyreduce:
             Select->set_braces(1);
             Lex->create_select_start_with_brace= TRUE;
           }
-#line 17778 "sql_yacc.cc"
+#line 19027 "sql_yacc.cc"
     break;
 
   case 406: /* create3: opt_duplicate opt_as '(' create_select ')' $@43 union_opt  */
 #line 3944 "sql_yacc.yy"
                     {}
-#line 17784 "sql_yacc.cc"
+#line 19033 "sql_yacc.cc"
     break;
 
   case 407: /* opt_partitioning: %empty  */
 #line 3972 "sql_yacc.yy"
                       {}
-#line 17790 "sql_yacc.cc"
+#line 19039 "sql_yacc.cc"
     break;
 
   case 409: /* $@44: %empty  */
@@ -17818,7 +19067,7 @@ yyreduce:
 #endif
 
           }
-#line 17822 "sql_yacc.cc"
+#line 19071 "sql_yacc.cc"
     break;
 
   case 411: /* $@45: %empty  */
@@ -17835,13 +19084,13 @@ yyreduce:
               partition info string into part_info data structure.
             */
           }
-#line 17839 "sql_yacc.cc"
+#line 19088 "sql_yacc.cc"
     break;
 
   case 412: /* partition_entry: PARTITION_SYM $@45 partition  */
 #line 4022 "sql_yacc.yy"
                     {}
-#line 17845 "sql_yacc.cc"
+#line 19094 "sql_yacc.cc"
     break;
 
   case 414: /* part_type_def: opt_linear KEY_SYM '(' part_field_list ')'  */
@@ -17851,79 +19100,79 @@ yyreduce:
             lex->part_info->list_of_part_fields= TRUE;
             lex->part_info->part_type= HASH_PARTITION;
           }
-#line 17855 "sql_yacc.cc"
+#line 19104 "sql_yacc.cc"
     break;
 
   case 415: /* $@46: %empty  */
 #line 4037 "sql_yacc.yy"
           { Lex->part_info->part_type= HASH_PARTITION; }
-#line 17861 "sql_yacc.cc"
+#line 19110 "sql_yacc.cc"
     break;
 
   case 416: /* part_type_def: opt_linear HASH_SYM $@46 part_func  */
 #line 4038 "sql_yacc.yy"
                     {}
-#line 17867 "sql_yacc.cc"
+#line 19116 "sql_yacc.cc"
     break;
 
   case 417: /* $@47: %empty  */
 #line 4040 "sql_yacc.yy"
           { Lex->part_info->part_type= RANGE_PARTITION; }
-#line 17873 "sql_yacc.cc"
+#line 19122 "sql_yacc.cc"
     break;
 
   case 418: /* part_type_def: RANGE_SYM $@47 part_func  */
 #line 4041 "sql_yacc.yy"
                     {}
-#line 17879 "sql_yacc.cc"
+#line 19128 "sql_yacc.cc"
     break;
 
   case 419: /* $@48: %empty  */
 #line 4043 "sql_yacc.yy"
           { Lex->part_info->part_type= LIST_PARTITION; }
-#line 17885 "sql_yacc.cc"
+#line 19134 "sql_yacc.cc"
     break;
 
   case 420: /* part_type_def: LIST_SYM $@48 part_func  */
 #line 4044 "sql_yacc.yy"
                     {}
-#line 17891 "sql_yacc.cc"
+#line 19140 "sql_yacc.cc"
     break;
 
   case 421: /* opt_linear: %empty  */
 #line 4048 "sql_yacc.yy"
                       {}
-#line 17897 "sql_yacc.cc"
+#line 19146 "sql_yacc.cc"
     break;
 
   case 422: /* opt_linear: LINEAR_SYM  */
 #line 4050 "sql_yacc.yy"
           { Lex->part_info->linear_hash_ind= TRUE;}
-#line 17903 "sql_yacc.cc"
+#line 19152 "sql_yacc.cc"
     break;
 
   case 423: /* part_field_list: %empty  */
 #line 4054 "sql_yacc.yy"
                       {}
-#line 17909 "sql_yacc.cc"
+#line 19158 "sql_yacc.cc"
     break;
 
   case 424: /* part_field_list: part_field_item_list  */
 #line 4055 "sql_yacc.yy"
                                {}
-#line 17915 "sql_yacc.cc"
+#line 19164 "sql_yacc.cc"
     break;
 
   case 425: /* part_field_item_list: part_field_item  */
 #line 4059 "sql_yacc.yy"
                           {}
-#line 17921 "sql_yacc.cc"
+#line 19170 "sql_yacc.cc"
     break;
 
   case 426: /* part_field_item_list: part_field_item_list ',' part_field_item  */
 #line 4060 "sql_yacc.yy"
                                                    {}
-#line 17927 "sql_yacc.cc"
+#line 19176 "sql_yacc.cc"
     break;
 
   case 427: /* part_field_item: ident  */
@@ -17935,7 +19184,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 17939 "sql_yacc.cc"
+#line 19188 "sql_yacc.cc"
     break;
 
   case 428: /* part_func: '(' remember_name part_func_expr remember_end ')'  */
@@ -17951,7 +19200,7 @@ yyreduce:
             lex->part_info->part_func_string= func_string;
             lex->part_info->part_func_len= expr_len;
           }
-#line 17955 "sql_yacc.cc"
+#line 19204 "sql_yacc.cc"
     break;
 
   case 429: /* sub_part_func: '(' remember_name part_func_expr remember_end ')'  */
@@ -17967,13 +19216,13 @@ yyreduce:
             lex->part_info->subpart_func_string= func_string;        
             lex->part_info->subpart_func_len= expr_len;
           }
-#line 17971 "sql_yacc.cc"
+#line 19220 "sql_yacc.cc"
     break;
 
   case 430: /* opt_no_parts: %empty  */
 #line 4106 "sql_yacc.yy"
                       {}
-#line 17977 "sql_yacc.cc"
+#line 19226 "sql_yacc.cc"
     break;
 
   case 431: /* opt_no_parts: PARTITIONS_SYM real_ulong_num  */
@@ -17990,25 +19239,25 @@ yyreduce:
             lex->part_info->no_parts= no_parts;
             lex->part_info->use_default_no_partitions= FALSE;
           }
-#line 17994 "sql_yacc.cc"
+#line 19243 "sql_yacc.cc"
     break;
 
   case 432: /* opt_sub_part: %empty  */
 #line 4123 "sql_yacc.yy"
                       {}
-#line 18000 "sql_yacc.cc"
+#line 19249 "sql_yacc.cc"
     break;
 
   case 433: /* $@49: %empty  */
 #line 4125 "sql_yacc.yy"
           { Lex->part_info->subpart_type= HASH_PARTITION; }
-#line 18006 "sql_yacc.cc"
+#line 19255 "sql_yacc.cc"
     break;
 
   case 434: /* opt_sub_part: SUBPARTITION_SYM BY opt_linear HASH_SYM sub_part_func $@49 opt_no_subparts  */
 #line 4126 "sql_yacc.yy"
                           {}
-#line 18012 "sql_yacc.cc"
+#line 19261 "sql_yacc.cc"
     break;
 
   case 435: /* $@50: %empty  */
@@ -18018,25 +19267,25 @@ yyreduce:
             lex->part_info->subpart_type= HASH_PARTITION;
             lex->part_info->list_of_subpart_fields= TRUE;
           }
-#line 18022 "sql_yacc.cc"
+#line 19271 "sql_yacc.cc"
     break;
 
   case 436: /* opt_sub_part: SUBPARTITION_SYM BY opt_linear KEY_SYM '(' sub_part_field_list ')' $@50 opt_no_subparts  */
 #line 4134 "sql_yacc.yy"
                           {}
-#line 18028 "sql_yacc.cc"
+#line 19277 "sql_yacc.cc"
     break;
 
   case 437: /* sub_part_field_list: sub_part_field_item  */
 #line 4138 "sql_yacc.yy"
                               {}
-#line 18034 "sql_yacc.cc"
+#line 19283 "sql_yacc.cc"
     break;
 
   case 438: /* sub_part_field_list: sub_part_field_list ',' sub_part_field_item  */
 #line 4139 "sql_yacc.yy"
                                                       {}
-#line 18040 "sql_yacc.cc"
+#line 19289 "sql_yacc.cc"
     break;
 
   case 439: /* sub_part_field_item: ident  */
@@ -18048,7 +19297,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 18052 "sql_yacc.cc"
+#line 19301 "sql_yacc.cc"
     break;
 
   case 440: /* part_func_expr: bit_expr  */
@@ -18065,13 +19314,13 @@ yyreduce:
             }
             (yyval.item)=(yyvsp[0].item);
           }
-#line 18069 "sql_yacc.cc"
+#line 19318 "sql_yacc.cc"
     break;
 
   case 441: /* opt_no_subparts: %empty  */
 #line 4170 "sql_yacc.yy"
                       {}
-#line 18075 "sql_yacc.cc"
+#line 19324 "sql_yacc.cc"
     break;
 
   case 442: /* opt_no_subparts: SUBPARTITIONS_SYM real_ulong_num  */
@@ -18087,13 +19336,13 @@ yyreduce:
             lex->part_info->no_subparts= no_parts;
             lex->part_info->use_default_no_subpartitions= FALSE;
           }
-#line 18091 "sql_yacc.cc"
+#line 19340 "sql_yacc.cc"
     break;
 
   case 443: /* part_defs: %empty  */
 #line 4187 "sql_yacc.yy"
           {}
-#line 18097 "sql_yacc.cc"
+#line 19346 "sql_yacc.cc"
     break;
 
   case 444: /* part_defs: '(' part_def_list ')'  */
@@ -18117,19 +19366,19 @@ yyreduce:
             }
             part_info->count_curr_subparts= 0;
           }
-#line 18121 "sql_yacc.cc"
+#line 19370 "sql_yacc.cc"
     break;
 
   case 445: /* part_def_list: part_definition  */
 #line 4211 "sql_yacc.yy"
                           {}
-#line 18127 "sql_yacc.cc"
+#line 19376 "sql_yacc.cc"
     break;
 
   case 446: /* part_def_list: part_def_list ',' part_definition  */
 #line 4212 "sql_yacc.yy"
                                             {}
-#line 18133 "sql_yacc.cc"
+#line 19382 "sql_yacc.cc"
     break;
 
   case 447: /* $@51: %empty  */
@@ -18150,13 +19399,13 @@ yyreduce:
             part_info->use_default_partitions= FALSE;
             part_info->use_default_no_partitions= FALSE;
           }
-#line 18154 "sql_yacc.cc"
+#line 19403 "sql_yacc.cc"
     break;
 
   case 448: /* part_definition: PARTITION_SYM $@51 part_name opt_part_values opt_part_options opt_sub_partition  */
 #line 4237 "sql_yacc.yy"
           {}
-#line 18160 "sql_yacc.cc"
+#line 19409 "sql_yacc.cc"
     break;
 
   case 449: /* part_name: ident  */
@@ -18167,7 +19416,7 @@ yyreduce:
             partition_element *p_elem= part_info->curr_part_elem;
             p_elem->partition_name= (yyvsp[0].lex_str).str;
           }
-#line 18171 "sql_yacc.cc"
+#line 19420 "sql_yacc.cc"
     break;
 
   case 450: /* opt_part_values: %empty  */
@@ -18192,7 +19441,7 @@ yyreduce:
             else
               lex->part_info->part_type= HASH_PARTITION;
           }
-#line 18196 "sql_yacc.cc"
+#line 19445 "sql_yacc.cc"
     break;
 
   case 451: /* opt_part_values: VALUES LESS_SYM THAN_SYM part_func_max  */
@@ -18211,7 +19460,7 @@ yyreduce:
             else
               lex->part_info->part_type= RANGE_PARTITION;
           }
-#line 18215 "sql_yacc.cc"
+#line 19464 "sql_yacc.cc"
     break;
 
   case 452: /* opt_part_values: VALUES IN_SYM '(' part_list_func ')'  */
@@ -18230,7 +19479,7 @@ yyreduce:
             else
               lex->part_info->part_type= LIST_PARTITION;
           }
-#line 18234 "sql_yacc.cc"
+#line 19483 "sql_yacc.cc"
     break;
 
   case 453: /* part_func_max: max_value_sym  */
@@ -18246,7 +19495,7 @@ yyreduce:
             lex->part_info->curr_part_elem->max_value= TRUE;
             lex->part_info->curr_part_elem->range_value= LONGLONG_MAX;
           }
-#line 18250 "sql_yacc.cc"
+#line 19499 "sql_yacc.cc"
     break;
 
   case 454: /* part_func_max: part_range_func  */
@@ -18263,7 +19512,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 18267 "sql_yacc.cc"
+#line 19516 "sql_yacc.cc"
     break;
 
   case 457: /* part_range_func: '(' part_bit_expr ')'  */
@@ -18274,19 +19523,19 @@ yyreduce:
               part_info->curr_part_elem->signed_flag= TRUE;
             part_info->curr_part_elem->range_value= (yyvsp[-1].p_elem_value)->value;
           }
-#line 18278 "sql_yacc.cc"
+#line 19527 "sql_yacc.cc"
     break;
 
   case 458: /* part_list_func: part_list_item  */
 #line 4348 "sql_yacc.yy"
                          {}
-#line 18284 "sql_yacc.cc"
+#line 19533 "sql_yacc.cc"
     break;
 
   case 459: /* part_list_func: part_list_func ',' part_list_item  */
 #line 4349 "sql_yacc.yy"
                                             {}
-#line 18290 "sql_yacc.cc"
+#line 19539 "sql_yacc.cc"
     break;
 
   case 460: /* part_list_item: part_bit_expr  */
@@ -18304,7 +19553,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 18308 "sql_yacc.cc"
+#line 19557 "sql_yacc.cc"
     break;
 
   case 461: /* part_bit_expr: bit_expr  */
@@ -18363,7 +19612,7 @@ yyreduce:
             }
             (yyval.p_elem_value)= value_ptr; 
           }
-#line 18367 "sql_yacc.cc"
+#line 19616 "sql_yacc.cc"
     break;
 
   case 462: /* opt_sub_partition: %empty  */
@@ -18380,7 +19629,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 18384 "sql_yacc.cc"
+#line 19633 "sql_yacc.cc"
     break;
 
   case 463: /* opt_sub_partition: '(' sub_part_list ')'  */
@@ -18408,19 +19657,19 @@ yyreduce:
             }
             part_info->count_curr_subparts= 0;
           }
-#line 18412 "sql_yacc.cc"
+#line 19661 "sql_yacc.cc"
     break;
 
   case 464: /* sub_part_list: sub_part_definition  */
 #line 4468 "sql_yacc.yy"
                               {}
-#line 18418 "sql_yacc.cc"
+#line 19667 "sql_yacc.cc"
     break;
 
   case 465: /* sub_part_list: sub_part_list ',' sub_part_definition  */
 #line 4469 "sql_yacc.yy"
                                                 {}
-#line 18424 "sql_yacc.cc"
+#line 19673 "sql_yacc.cc"
     break;
 
   case 466: /* $@52: %empty  */
@@ -18458,49 +19707,49 @@ yyreduce:
             part_info->use_default_no_subpartitions= FALSE;
             part_info->count_curr_subparts++;
           }
-#line 18462 "sql_yacc.cc"
+#line 19711 "sql_yacc.cc"
     break;
 
   case 467: /* sub_part_definition: SUBPARTITION_SYM $@52 sub_name opt_part_options  */
 #line 4507 "sql_yacc.yy"
                                     {}
-#line 18468 "sql_yacc.cc"
+#line 19717 "sql_yacc.cc"
     break;
 
   case 468: /* sub_name: ident_or_text  */
 #line 4512 "sql_yacc.yy"
           { Lex->part_info->curr_part_elem->partition_name= (yyvsp[0].lex_str).str; }
-#line 18474 "sql_yacc.cc"
+#line 19723 "sql_yacc.cc"
     break;
 
   case 469: /* opt_part_options: %empty  */
 #line 4516 "sql_yacc.yy"
                      {}
-#line 18480 "sql_yacc.cc"
+#line 19729 "sql_yacc.cc"
     break;
 
   case 470: /* opt_part_options: opt_part_option_list  */
 #line 4517 "sql_yacc.yy"
                               {}
-#line 18486 "sql_yacc.cc"
+#line 19735 "sql_yacc.cc"
     break;
 
   case 471: /* opt_part_option_list: opt_part_option_list opt_part_option  */
 #line 4521 "sql_yacc.yy"
                                               {}
-#line 18492 "sql_yacc.cc"
+#line 19741 "sql_yacc.cc"
     break;
 
   case 472: /* opt_part_option_list: opt_part_option  */
 #line 4522 "sql_yacc.yy"
                          {}
-#line 18498 "sql_yacc.cc"
+#line 19747 "sql_yacc.cc"
     break;
 
   case 473: /* opt_part_option: TABLESPACE opt_equal ident_or_text  */
 #line 4527 "sql_yacc.yy"
           { Lex->part_info->curr_part_elem->tablespace_name= (yyvsp[0].lex_str).str; }
-#line 18504 "sql_yacc.cc"
+#line 19753 "sql_yacc.cc"
     break;
 
   case 474: /* opt_part_option: opt_storage ENGINE_SYM opt_equal storage_engines  */
@@ -18510,43 +19759,43 @@ yyreduce:
             lex->part_info->curr_part_elem->engine_type= (yyvsp[0].db_type);
             lex->part_info->default_engine_type= (yyvsp[0].db_type);
           }
-#line 18514 "sql_yacc.cc"
+#line 19763 "sql_yacc.cc"
     break;
 
   case 475: /* opt_part_option: NODEGROUP_SYM opt_equal real_ulong_num  */
 #line 4535 "sql_yacc.yy"
           { Lex->part_info->curr_part_elem->nodegroup_id= (uint16) (yyvsp[0].ulong_num); }
-#line 18520 "sql_yacc.cc"
+#line 19769 "sql_yacc.cc"
     break;
 
   case 476: /* opt_part_option: MAX_ROWS opt_equal real_ulonglong_num  */
 #line 4537 "sql_yacc.yy"
           { Lex->part_info->curr_part_elem->part_max_rows= (ha_rows) (yyvsp[0].ulonglong_number); }
-#line 18526 "sql_yacc.cc"
+#line 19775 "sql_yacc.cc"
     break;
 
   case 477: /* opt_part_option: MIN_ROWS opt_equal real_ulonglong_num  */
 #line 4539 "sql_yacc.yy"
           { Lex->part_info->curr_part_elem->part_min_rows= (ha_rows) (yyvsp[0].ulonglong_number); }
-#line 18532 "sql_yacc.cc"
+#line 19781 "sql_yacc.cc"
     break;
 
   case 478: /* opt_part_option: DATA_SYM DIRECTORY_SYM opt_equal TEXT_STRING_sys  */
 #line 4541 "sql_yacc.yy"
           { Lex->part_info->curr_part_elem->data_file_name= (yyvsp[0].lex_str).str; }
-#line 18538 "sql_yacc.cc"
+#line 19787 "sql_yacc.cc"
     break;
 
   case 479: /* opt_part_option: INDEX_SYM DIRECTORY_SYM opt_equal TEXT_STRING_sys  */
 #line 4543 "sql_yacc.yy"
           { Lex->part_info->curr_part_elem->index_file_name= (yyvsp[0].lex_str).str; }
-#line 18544 "sql_yacc.cc"
+#line 19793 "sql_yacc.cc"
     break;
 
   case 480: /* opt_part_option: COMMENT_SYM opt_equal TEXT_STRING_sys  */
 #line 4545 "sql_yacc.yy"
           { Lex->part_info->curr_part_elem->part_comment= (yyvsp[0].lex_str).str; }
-#line 18550 "sql_yacc.cc"
+#line 19799 "sql_yacc.cc"
     break;
 
   case 481: /* $@53: %empty  */
@@ -18579,7 +19828,7 @@ yyreduce:
               lex->create_select_in_comment= (lip->in_comment == DISCARD_COMMENT);
             }
           }
-#line 18583 "sql_yacc.cc"
+#line 19832 "sql_yacc.cc"
     break;
 
   case 482: /* $@54: %empty  */
@@ -18587,7 +19836,7 @@ yyreduce:
           {
             Select->parsing_place= NO_MATTER;
           }
-#line 18591 "sql_yacc.cc"
+#line 19840 "sql_yacc.cc"
     break;
 
   case 483: /* create_select: SELECT_SYM $@53 select_options select_item_list $@54 opt_select_from  */
@@ -18599,97 +19848,97 @@ yyreduce:
             */
             Lex->current_select->table_list.push_front(&Lex->save_list);
           }
-#line 18603 "sql_yacc.cc"
+#line 19852 "sql_yacc.cc"
     break;
 
   case 484: /* opt_as: %empty  */
 #line 4597 "sql_yacc.yy"
                       {}
-#line 18609 "sql_yacc.cc"
+#line 19858 "sql_yacc.cc"
     break;
 
   case 485: /* opt_as: AS  */
 #line 4598 "sql_yacc.yy"
              {}
-#line 18615 "sql_yacc.cc"
+#line 19864 "sql_yacc.cc"
     break;
 
   case 486: /* opt_create_database_options: %empty  */
 #line 4602 "sql_yacc.yy"
                       {}
-#line 18621 "sql_yacc.cc"
+#line 19870 "sql_yacc.cc"
     break;
 
   case 487: /* opt_create_database_options: create_database_options  */
 #line 4603 "sql_yacc.yy"
                                   {}
-#line 18627 "sql_yacc.cc"
+#line 19876 "sql_yacc.cc"
     break;
 
   case 488: /* create_database_options: create_database_option  */
 #line 4607 "sql_yacc.yy"
                                  {}
-#line 18633 "sql_yacc.cc"
+#line 19882 "sql_yacc.cc"
     break;
 
   case 489: /* create_database_options: create_database_options create_database_option  */
 #line 4608 "sql_yacc.yy"
                                                          {}
-#line 18639 "sql_yacc.cc"
+#line 19888 "sql_yacc.cc"
     break;
 
   case 490: /* create_database_option: default_collation  */
 #line 4612 "sql_yacc.yy"
                             {}
-#line 18645 "sql_yacc.cc"
+#line 19894 "sql_yacc.cc"
     break;
 
   case 491: /* create_database_option: default_charset  */
 #line 4613 "sql_yacc.yy"
                           {}
-#line 18651 "sql_yacc.cc"
+#line 19900 "sql_yacc.cc"
     break;
 
   case 492: /* opt_table_options: %empty  */
 #line 4617 "sql_yacc.yy"
                       { (yyval.num)= 0; }
-#line 18657 "sql_yacc.cc"
+#line 19906 "sql_yacc.cc"
     break;
 
   case 493: /* opt_table_options: table_options  */
 #line 4618 "sql_yacc.yy"
                          { (yyval.num)= (yyvsp[0].num);}
-#line 18663 "sql_yacc.cc"
+#line 19912 "sql_yacc.cc"
     break;
 
   case 494: /* table_options: table_option  */
 #line 4622 "sql_yacc.yy"
                        { (yyval.num)=(yyvsp[0].num); }
-#line 18669 "sql_yacc.cc"
+#line 19918 "sql_yacc.cc"
     break;
 
   case 495: /* table_options: table_option table_options  */
 #line 4623 "sql_yacc.yy"
                                      { (yyval.num)= (yyvsp[-1].num) | (yyvsp[0].num); }
-#line 18675 "sql_yacc.cc"
+#line 19924 "sql_yacc.cc"
     break;
 
   case 496: /* table_option: TEMPORARY  */
 #line 4627 "sql_yacc.yy"
                     { (yyval.num)=HA_LEX_CREATE_TMP_TABLE; }
-#line 18681 "sql_yacc.cc"
+#line 19930 "sql_yacc.cc"
     break;
 
   case 497: /* opt_if_not_exists: %empty  */
 #line 4631 "sql_yacc.yy"
                       { (yyval.num)= 0; }
-#line 18687 "sql_yacc.cc"
+#line 19936 "sql_yacc.cc"
     break;
 
   case 498: /* opt_if_not_exists: IF not EXISTS  */
 #line 4632 "sql_yacc.yy"
                         { (yyval.num)=HA_LEX_CREATE_IF_NOT_EXISTS; }
-#line 18693 "sql_yacc.cc"
+#line 19942 "sql_yacc.cc"
     break;
 
   case 506: /* create_table_option: ENGINE_SYM opt_equal storage_engines  */
@@ -18698,7 +19947,7 @@ yyreduce:
             Lex->create_info.db_type= (yyvsp[0].db_type);
             Lex->create_info.used_fields|= HA_CREATE_USED_ENGINE;
           }
-#line 18702 "sql_yacc.cc"
+#line 19951 "sql_yacc.cc"
     break;
 
   case 507: /* create_table_option: TYPE_SYM opt_equal storage_engines  */
@@ -18709,7 +19958,7 @@ yyreduce:
                             "'ENGINE=storage_engine'");
             Lex->create_info.used_fields|= HA_CREATE_USED_ENGINE;
           }
-#line 18713 "sql_yacc.cc"
+#line 19962 "sql_yacc.cc"
     break;
 
   case 508: /* create_table_option: MAX_ROWS opt_equal ulonglong_num  */
@@ -18718,7 +19967,7 @@ yyreduce:
             Lex->create_info.max_rows= (yyvsp[0].ulonglong_number);
             Lex->create_info.used_fields|= HA_CREATE_USED_MAX_ROWS;
           }
-#line 18722 "sql_yacc.cc"
+#line 19971 "sql_yacc.cc"
     break;
 
   case 509: /* create_table_option: MIN_ROWS opt_equal ulonglong_num  */
@@ -18727,7 +19976,7 @@ yyreduce:
             Lex->create_info.min_rows= (yyvsp[0].ulonglong_number);
             Lex->create_info.used_fields|= HA_CREATE_USED_MIN_ROWS;
           }
-#line 18731 "sql_yacc.cc"
+#line 19980 "sql_yacc.cc"
     break;
 
   case 510: /* create_table_option: AVG_ROW_LENGTH opt_equal ulong_num  */
@@ -18736,7 +19985,7 @@ yyreduce:
             Lex->create_info.avg_row_length=(yyvsp[0].ulong_num);
             Lex->create_info.used_fields|= HA_CREATE_USED_AVG_ROW_LENGTH;
           }
-#line 18740 "sql_yacc.cc"
+#line 19989 "sql_yacc.cc"
     break;
 
   case 511: /* create_table_option: PASSWORD opt_equal TEXT_STRING_sys  */
@@ -18745,7 +19994,7 @@ yyreduce:
             Lex->create_info.password=(yyvsp[0].lex_str).str;
             Lex->create_info.used_fields|= HA_CREATE_USED_PASSWORD;
           }
-#line 18749 "sql_yacc.cc"
+#line 19998 "sql_yacc.cc"
     break;
 
   case 512: /* create_table_option: COMMENT_SYM opt_equal TEXT_STRING_sys  */
@@ -18754,7 +20003,7 @@ yyreduce:
             Lex->create_info.comment=(yyvsp[0].lex_str);
             Lex->create_info.used_fields|= HA_CREATE_USED_COMMENT;
           }
-#line 18758 "sql_yacc.cc"
+#line 20007 "sql_yacc.cc"
     break;
 
   case 513: /* create_table_option: AUTO_INC opt_equal ulonglong_num  */
@@ -18763,7 +20012,7 @@ yyreduce:
             Lex->create_info.auto_increment_value=(yyvsp[0].ulonglong_number);
             Lex->create_info.used_fields|= HA_CREATE_USED_AUTO;
           }
-#line 18767 "sql_yacc.cc"
+#line 20016 "sql_yacc.cc"
     break;
 
   case 514: /* create_table_option: PACK_KEYS_SYM opt_equal ulong_num  */
@@ -18782,7 +20031,7 @@ yyreduce:
             }
             Lex->create_info.used_fields|= HA_CREATE_USED_PACK_KEYS;
           }
-#line 18786 "sql_yacc.cc"
+#line 20035 "sql_yacc.cc"
     break;
 
   case 515: /* create_table_option: PACK_KEYS_SYM opt_equal DEFAULT  */
@@ -18792,7 +20041,7 @@ yyreduce:
               ~(HA_OPTION_PACK_KEYS | HA_OPTION_NO_PACK_KEYS);
             Lex->create_info.used_fields|= HA_CREATE_USED_PACK_KEYS;
           }
-#line 18796 "sql_yacc.cc"
+#line 20045 "sql_yacc.cc"
     break;
 
   case 516: /* create_table_option: CHECKSUM_SYM opt_equal ulong_num  */
@@ -18801,7 +20050,7 @@ yyreduce:
             Lex->create_info.table_options|= (yyvsp[0].ulong_num) ? HA_OPTION_CHECKSUM : HA_OPTION_NO_CHECKSUM;
             Lex->create_info.used_fields|= HA_CREATE_USED_CHECKSUM;
           }
-#line 18805 "sql_yacc.cc"
+#line 20054 "sql_yacc.cc"
     break;
 
   case 517: /* create_table_option: TABLE_CHECKSUM_SYM opt_equal ulong_num  */
@@ -18810,7 +20059,7 @@ yyreduce:
              Lex->create_info.table_options|= (yyvsp[0].ulong_num) ? HA_OPTION_CHECKSUM : HA_OPTION_NO_CHECKSUM;
              Lex->create_info.used_fields|= HA_CREATE_USED_CHECKSUM;
           }
-#line 18814 "sql_yacc.cc"
+#line 20063 "sql_yacc.cc"
     break;
 
   case 518: /* create_table_option: DELAY_KEY_WRITE_SYM opt_equal ulong_num  */
@@ -18819,7 +20068,7 @@ yyreduce:
             Lex->create_info.table_options|= (yyvsp[0].ulong_num) ? HA_OPTION_DELAY_KEY_WRITE : HA_OPTION_NO_DELAY_KEY_WRITE;
             Lex->create_info.used_fields|= HA_CREATE_USED_DELAY_KEY_WRITE;
           }
-#line 18823 "sql_yacc.cc"
+#line 20072 "sql_yacc.cc"
     break;
 
   case 519: /* create_table_option: ROW_FORMAT_SYM opt_equal row_types  */
@@ -18828,7 +20077,7 @@ yyreduce:
             Lex->create_info.row_type= (yyvsp[0].row_type);
             Lex->create_info.used_fields|= HA_CREATE_USED_ROW_FORMAT;
           }
-#line 18832 "sql_yacc.cc"
+#line 20081 "sql_yacc.cc"
     break;
 
   case 520: /* create_table_option: UNION_SYM opt_equal '(' opt_table_list ')'  */
@@ -18845,7 +20094,7 @@ yyreduce:
             table_list->next_local= 0;
             lex->create_info.used_fields|= HA_CREATE_USED_UNION;
           }
-#line 18849 "sql_yacc.cc"
+#line 20098 "sql_yacc.cc"
     break;
 
   case 523: /* create_table_option: INSERT_METHOD opt_equal merge_insert_types  */
@@ -18854,7 +20103,7 @@ yyreduce:
             Lex->create_info.merge_insert_method= (yyvsp[0].ulong_num);
             Lex->create_info.used_fields|= HA_CREATE_USED_INSERT_METHOD;
           }
-#line 18858 "sql_yacc.cc"
+#line 20107 "sql_yacc.cc"
     break;
 
   case 524: /* create_table_option: DATA_SYM DIRECTORY_SYM opt_equal TEXT_STRING_sys  */
@@ -18863,7 +20112,7 @@ yyreduce:
             Lex->create_info.data_file_name= (yyvsp[0].lex_str).str;
             Lex->create_info.used_fields|= HA_CREATE_USED_DATADIR;
           }
-#line 18867 "sql_yacc.cc"
+#line 20116 "sql_yacc.cc"
     break;
 
   case 525: /* create_table_option: INDEX_SYM DIRECTORY_SYM opt_equal TEXT_STRING_sys  */
@@ -18872,25 +20121,25 @@ yyreduce:
             Lex->create_info.index_file_name= (yyvsp[0].lex_str).str;
             Lex->create_info.used_fields|= HA_CREATE_USED_INDEXDIR;
           }
-#line 18876 "sql_yacc.cc"
+#line 20125 "sql_yacc.cc"
     break;
 
   case 526: /* create_table_option: TABLESPACE ident  */
 #line 4766 "sql_yacc.yy"
           {Lex->create_info.tablespace= (yyvsp[0].lex_str).str;}
-#line 18882 "sql_yacc.cc"
+#line 20131 "sql_yacc.cc"
     break;
 
   case 527: /* create_table_option: STORAGE_SYM DISK_SYM  */
 #line 4768 "sql_yacc.yy"
           {Lex->create_info.storage_media= HA_SM_DISK;}
-#line 18888 "sql_yacc.cc"
+#line 20137 "sql_yacc.cc"
     break;
 
   case 528: /* create_table_option: STORAGE_SYM MEMORY_SYM  */
 #line 4770 "sql_yacc.yy"
           {Lex->create_info.storage_media= HA_SM_MEMORY;}
-#line 18894 "sql_yacc.cc"
+#line 20143 "sql_yacc.cc"
     break;
 
   case 529: /* create_table_option: CONNECTION_SYM opt_equal TEXT_STRING_sys  */
@@ -18900,7 +20149,7 @@ yyreduce:
             Lex->create_info.connect_string.length= (yyvsp[0].lex_str).length;
             Lex->create_info.used_fields|= HA_CREATE_USED_CONNECTION;
           }
-#line 18904 "sql_yacc.cc"
+#line 20153 "sql_yacc.cc"
     break;
 
   case 530: /* create_table_option: KEY_BLOCK_SIZE opt_equal ulong_num  */
@@ -18909,7 +20158,7 @@ yyreduce:
             Lex->create_info.used_fields|= HA_CREATE_USED_KEY_BLOCK_SIZE;
             Lex->create_info.key_block_size= (yyvsp[0].ulong_num);
           }
-#line 18913 "sql_yacc.cc"
+#line 20162 "sql_yacc.cc"
     break;
 
   case 531: /* default_charset: opt_default charset opt_equal charset_name_or_default  */
@@ -18928,7 +20177,7 @@ yyreduce:
             Lex->create_info.default_table_charset= (yyvsp[0].charset);
             Lex->create_info.used_fields|= HA_CREATE_USED_DEFAULT_CHARSET;
           }
-#line 18932 "sql_yacc.cc"
+#line 20181 "sql_yacc.cc"
     break;
 
   case 532: /* default_collation: opt_default COLLATE_SYM opt_equal collation_name_or_default  */
@@ -18946,7 +20195,7 @@ yyreduce:
               Lex->create_info.default_table_charset= (yyvsp[0].charset);
               Lex->create_info.used_fields|= HA_CREATE_USED_DEFAULT_CHARSET;
           }
-#line 18950 "sql_yacc.cc"
+#line 20199 "sql_yacc.cc"
     break;
 
   case 533: /* storage_engines: ident_or_text  */
@@ -18970,7 +20219,7 @@ yyreduce:
                                   (yyvsp[0].lex_str).str);
             }
           }
-#line 18974 "sql_yacc.cc"
+#line 20223 "sql_yacc.cc"
     break;
 
   case 534: /* known_storage_engines: ident_or_text  */
@@ -18985,91 +20234,91 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 18989 "sql_yacc.cc"
+#line 20238 "sql_yacc.cc"
     break;
 
   case 535: /* row_types: DEFAULT  */
 #line 4857 "sql_yacc.yy"
                          { (yyval.row_type)= ROW_TYPE_DEFAULT; }
-#line 18995 "sql_yacc.cc"
+#line 20244 "sql_yacc.cc"
     break;
 
   case 536: /* row_types: FIXED_SYM  */
 #line 4858 "sql_yacc.yy"
                          { (yyval.row_type)= ROW_TYPE_FIXED; }
-#line 19001 "sql_yacc.cc"
+#line 20250 "sql_yacc.cc"
     break;
 
   case 537: /* row_types: DYNAMIC_SYM  */
 #line 4859 "sql_yacc.yy"
                          { (yyval.row_type)= ROW_TYPE_DYNAMIC; }
-#line 19007 "sql_yacc.cc"
+#line 20256 "sql_yacc.cc"
     break;
 
   case 538: /* row_types: COMPRESSED_SYM  */
 #line 4860 "sql_yacc.yy"
                          { (yyval.row_type)= ROW_TYPE_COMPRESSED; }
-#line 19013 "sql_yacc.cc"
+#line 20262 "sql_yacc.cc"
     break;
 
   case 539: /* row_types: REDUNDANT_SYM  */
 #line 4861 "sql_yacc.yy"
                          { (yyval.row_type)= ROW_TYPE_REDUNDANT; }
-#line 19019 "sql_yacc.cc"
+#line 20268 "sql_yacc.cc"
     break;
 
   case 540: /* row_types: COMPACT_SYM  */
 #line 4862 "sql_yacc.yy"
                          { (yyval.row_type)= ROW_TYPE_COMPACT; }
-#line 19025 "sql_yacc.cc"
+#line 20274 "sql_yacc.cc"
     break;
 
   case 541: /* merge_insert_types: NO_SYM  */
 #line 4866 "sql_yacc.yy"
                          { (yyval.ulong_num)= MERGE_INSERT_DISABLED; }
-#line 19031 "sql_yacc.cc"
+#line 20280 "sql_yacc.cc"
     break;
 
   case 542: /* merge_insert_types: FIRST_SYM  */
 #line 4867 "sql_yacc.yy"
                          { (yyval.ulong_num)= MERGE_INSERT_TO_FIRST; }
-#line 19037 "sql_yacc.cc"
+#line 20286 "sql_yacc.cc"
     break;
 
   case 543: /* merge_insert_types: LAST_SYM  */
 #line 4868 "sql_yacc.yy"
                          { (yyval.ulong_num)= MERGE_INSERT_TO_LAST; }
-#line 19043 "sql_yacc.cc"
+#line 20292 "sql_yacc.cc"
     break;
 
   case 544: /* opt_select_from: opt_limit_clause  */
 #line 4872 "sql_yacc.yy"
                            {}
-#line 19049 "sql_yacc.cc"
+#line 20298 "sql_yacc.cc"
     break;
 
   case 546: /* udf_type: STRING_SYM  */
 #line 4877 "sql_yacc.yy"
                      {(yyval.num) = (int) STRING_RESULT; }
-#line 19055 "sql_yacc.cc"
+#line 20304 "sql_yacc.cc"
     break;
 
   case 547: /* udf_type: REAL  */
 #line 4878 "sql_yacc.yy"
                {(yyval.num) = (int) REAL_RESULT; }
-#line 19061 "sql_yacc.cc"
+#line 20310 "sql_yacc.cc"
     break;
 
   case 548: /* udf_type: DECIMAL_SYM  */
 #line 4879 "sql_yacc.yy"
                       {(yyval.num) = (int) DECIMAL_RESULT; }
-#line 19067 "sql_yacc.cc"
+#line 20316 "sql_yacc.cc"
     break;
 
   case 549: /* udf_type: INT_SYM  */
 #line 4880 "sql_yacc.yy"
                   {(yyval.num) = (int) INT_RESULT; }
-#line 19073 "sql_yacc.cc"
+#line 20322 "sql_yacc.cc"
     break;
 
   case 555: /* column_def: field_spec references  */
@@ -19077,7 +20326,7 @@ yyreduce:
           {
             Lex->col_list.empty(); /* Alloced by sql_alloc */
           }
-#line 19081 "sql_yacc.cc"
+#line 20330 "sql_yacc.cc"
     break;
 
   case 556: /* key_def: normal_key_type opt_ident key_alg '(' key_list ')' normal_key_options  */
@@ -19086,7 +20335,7 @@ yyreduce:
             if (add_create_index (Lex, (yyvsp[-6].key_type), (yyvsp[-5].simple_string)))
               MYSQL_YYABORT;
           }
-#line 19090 "sql_yacc.cc"
+#line 20339 "sql_yacc.cc"
     break;
 
   case 557: /* key_def: fulltext opt_key_or_index opt_ident init_key_options '(' key_list ')' fulltext_key_options  */
@@ -19095,7 +20344,7 @@ yyreduce:
             if (add_create_index (Lex, (yyvsp[-7].key_type), (yyvsp[-5].simple_string)))
               MYSQL_YYABORT;
           }
-#line 19099 "sql_yacc.cc"
+#line 20348 "sql_yacc.cc"
     break;
 
   case 558: /* key_def: spatial opt_key_or_index opt_ident init_key_options '(' key_list ')' spatial_key_options  */
@@ -19104,7 +20353,7 @@ yyreduce:
             if (add_create_index (Lex, (yyvsp[-7].key_type), (yyvsp[-5].simple_string)))
               MYSQL_YYABORT;
           }
-#line 19108 "sql_yacc.cc"
+#line 20357 "sql_yacc.cc"
     break;
 
   case 559: /* key_def: opt_constraint constraint_key_type opt_ident key_alg '(' key_list ')' normal_key_options  */
@@ -19113,7 +20362,7 @@ yyreduce:
             if (add_create_index (Lex, (yyvsp[-6].key_type), (yyvsp[-5].simple_string) ? (yyvsp[-5].simple_string) : (yyvsp[-7].simple_string)))
               MYSQL_YYABORT;
           }
-#line 19117 "sql_yacc.cc"
+#line 20366 "sql_yacc.cc"
     break;
 
   case 560: /* key_def: opt_constraint FOREIGN KEY_SYM opt_ident '(' key_list ')' references  */
@@ -19137,7 +20386,7 @@ yyreduce:
             /* Only used for ALTER TABLE. Ignored otherwise. */
             lex->alter_info.flags|= ALTER_FOREIGN_KEY;
           }
-#line 19141 "sql_yacc.cc"
+#line 20390 "sql_yacc.cc"
     break;
 
   case 561: /* key_def: constraint opt_check_constraint  */
@@ -19145,7 +20394,7 @@ yyreduce:
           {
             Lex->col_list.empty(); /* Alloced by sql_alloc */
           }
-#line 19149 "sql_yacc.cc"
+#line 20398 "sql_yacc.cc"
     break;
 
   case 562: /* key_def: opt_constraint check_constraint  */
@@ -19153,25 +20402,25 @@ yyreduce:
           {
             Lex->col_list.empty(); /* Alloced by sql_alloc */
           }
-#line 19157 "sql_yacc.cc"
+#line 20406 "sql_yacc.cc"
     break;
 
   case 566: /* opt_constraint: %empty  */
 #line 4965 "sql_yacc.yy"
                       { (yyval.simple_string)=(char*) 0; }
-#line 19163 "sql_yacc.cc"
+#line 20412 "sql_yacc.cc"
     break;
 
   case 567: /* opt_constraint: constraint  */
 #line 4966 "sql_yacc.yy"
                      { (yyval.simple_string)= (yyvsp[0].simple_string); }
-#line 19169 "sql_yacc.cc"
+#line 20418 "sql_yacc.cc"
     break;
 
   case 568: /* constraint: CONSTRAINT opt_ident  */
 #line 4970 "sql_yacc.yy"
                                { (yyval.simple_string)=(yyvsp[0].simple_string); }
-#line 19175 "sql_yacc.cc"
+#line 20424 "sql_yacc.cc"
     break;
 
   case 569: /* $@55: %empty  */
@@ -19184,7 +20433,7 @@ yyreduce:
             lex->comment=null_lex_str;
             lex->charset=NULL;
           }
-#line 19188 "sql_yacc.cc"
+#line 20437 "sql_yacc.cc"
     break;
 
   case 570: /* field_spec: field_ident $@55 type opt_attribute  */
@@ -19199,25 +20448,25 @@ yyreduce:
                                   lex->uint_geom_type))
               MYSQL_YYABORT;
           }
-#line 19203 "sql_yacc.cc"
+#line 20452 "sql_yacc.cc"
     break;
 
   case 571: /* type: int_type opt_field_length field_options  */
 #line 4997 "sql_yacc.yy"
                                                   { (yyval.num)=(yyvsp[-2].num); }
-#line 19209 "sql_yacc.cc"
+#line 20458 "sql_yacc.cc"
     break;
 
   case 572: /* type: real_type opt_precision field_options  */
 #line 4998 "sql_yacc.yy"
                                                 { (yyval.num)=(yyvsp[-2].num); }
-#line 19215 "sql_yacc.cc"
+#line 20464 "sql_yacc.cc"
     break;
 
   case 573: /* type: FLOAT_SYM float_options field_options  */
 #line 4999 "sql_yacc.yy"
                                                 { (yyval.num)=MYSQL_TYPE_FLOAT; }
-#line 19221 "sql_yacc.cc"
+#line 20470 "sql_yacc.cc"
     break;
 
   case 574: /* type: BIT_SYM  */
@@ -19226,7 +20475,7 @@ yyreduce:
             Lex->length= (char*) "1";
             (yyval.num)=MYSQL_TYPE_BIT;
           }
-#line 19230 "sql_yacc.cc"
+#line 20479 "sql_yacc.cc"
     break;
 
   case 575: /* type: BIT_SYM field_length  */
@@ -19234,7 +20483,7 @@ yyreduce:
           {
             (yyval.num)=MYSQL_TYPE_BIT;
           }
-#line 19238 "sql_yacc.cc"
+#line 20487 "sql_yacc.cc"
     break;
 
   case 576: /* type: BOOL_SYM  */
@@ -19243,7 +20492,7 @@ yyreduce:
             Lex->length= (char*) "1";
             (yyval.num)=MYSQL_TYPE_TINY;
           }
-#line 19247 "sql_yacc.cc"
+#line 20496 "sql_yacc.cc"
     break;
 
   case 577: /* type: BOOLEAN_SYM  */
@@ -19252,7 +20501,7 @@ yyreduce:
             Lex->length= (char*) "1";
             (yyval.num)=MYSQL_TYPE_TINY;
           }
-#line 19256 "sql_yacc.cc"
+#line 20505 "sql_yacc.cc"
     break;
 
   case 578: /* type: char field_length opt_binary  */
@@ -19260,7 +20509,7 @@ yyreduce:
           {
             (yyval.num)=MYSQL_TYPE_STRING;
           }
-#line 19264 "sql_yacc.cc"
+#line 20513 "sql_yacc.cc"
     break;
 
   case 579: /* type: char opt_binary  */
@@ -19269,7 +20518,7 @@ yyreduce:
             Lex->length= (char*) "1";
             (yyval.num)=MYSQL_TYPE_STRING;
           }
-#line 19273 "sql_yacc.cc"
+#line 20522 "sql_yacc.cc"
     break;
 
   case 580: /* type: nchar field_length opt_bin_mod  */
@@ -19278,7 +20527,7 @@ yyreduce:
             (yyval.num)=MYSQL_TYPE_STRING;
             Lex->charset=national_charset_info;
           }
-#line 19282 "sql_yacc.cc"
+#line 20531 "sql_yacc.cc"
     break;
 
   case 581: /* type: nchar opt_bin_mod  */
@@ -19288,7 +20537,7 @@ yyreduce:
             (yyval.num)=MYSQL_TYPE_STRING;
             Lex->charset=national_charset_info;
           }
-#line 19292 "sql_yacc.cc"
+#line 20541 "sql_yacc.cc"
     break;
 
   case 582: /* type: BINARY field_length  */
@@ -19297,7 +20546,7 @@ yyreduce:
             Lex->charset=&my_charset_bin;
             (yyval.num)=MYSQL_TYPE_STRING;
           }
-#line 19301 "sql_yacc.cc"
+#line 20550 "sql_yacc.cc"
     break;
 
   case 583: /* type: BINARY  */
@@ -19307,7 +20556,7 @@ yyreduce:
             Lex->charset=&my_charset_bin;
             (yyval.num)=MYSQL_TYPE_STRING;
           }
-#line 19311 "sql_yacc.cc"
+#line 20560 "sql_yacc.cc"
     break;
 
   case 584: /* type: varchar field_length opt_binary  */
@@ -19315,7 +20564,7 @@ yyreduce:
           {
             (yyval.num)= MYSQL_TYPE_VARCHAR;
           }
-#line 19319 "sql_yacc.cc"
+#line 20568 "sql_yacc.cc"
     break;
 
   case 585: /* type: nvarchar field_length opt_bin_mod  */
@@ -19324,7 +20573,7 @@ yyreduce:
             (yyval.num)= MYSQL_TYPE_VARCHAR;
             Lex->charset=national_charset_info;
           }
-#line 19328 "sql_yacc.cc"
+#line 20577 "sql_yacc.cc"
     break;
 
   case 586: /* type: VARBINARY field_length  */
@@ -19333,25 +20582,25 @@ yyreduce:
             Lex->charset=&my_charset_bin;
             (yyval.num)= MYSQL_TYPE_VARCHAR;
           }
-#line 19337 "sql_yacc.cc"
+#line 20586 "sql_yacc.cc"
     break;
 
   case 587: /* type: YEAR_SYM opt_field_length field_options  */
 #line 5065 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_YEAR; }
-#line 19343 "sql_yacc.cc"
+#line 20592 "sql_yacc.cc"
     break;
 
   case 588: /* type: DATE_SYM  */
 #line 5067 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_DATE; }
-#line 19349 "sql_yacc.cc"
+#line 20598 "sql_yacc.cc"
     break;
 
   case 589: /* type: TIME_SYM  */
 #line 5069 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_TIME; }
-#line 19355 "sql_yacc.cc"
+#line 20604 "sql_yacc.cc"
     break;
 
   case 590: /* type: TIMESTAMP opt_field_length  */
@@ -19368,13 +20617,13 @@ yyreduce:
               (yyval.num)=MYSQL_TYPE_TIMESTAMP;
             }
           }
-#line 19372 "sql_yacc.cc"
+#line 20621 "sql_yacc.cc"
     break;
 
   case 591: /* type: DATETIME  */
 #line 5084 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_DATETIME; }
-#line 19378 "sql_yacc.cc"
+#line 20627 "sql_yacc.cc"
     break;
 
   case 592: /* type: TINYBLOB  */
@@ -19383,7 +20632,7 @@ yyreduce:
             Lex->charset=&my_charset_bin;
             (yyval.num)=MYSQL_TYPE_TINY_BLOB;
           }
-#line 19387 "sql_yacc.cc"
+#line 20636 "sql_yacc.cc"
     break;
 
   case 593: /* type: BLOB_SYM opt_field_length  */
@@ -19392,7 +20641,7 @@ yyreduce:
             Lex->charset=&my_charset_bin;
             (yyval.num)=MYSQL_TYPE_BLOB;
           }
-#line 19396 "sql_yacc.cc"
+#line 20645 "sql_yacc.cc"
     break;
 
   case 594: /* type: spatial_type  */
@@ -19408,7 +20657,7 @@ yyreduce:
             MYSQL_YYABORT;
 #endif
           }
-#line 19412 "sql_yacc.cc"
+#line 20661 "sql_yacc.cc"
     break;
 
   case 595: /* type: MEDIUMBLOB  */
@@ -19417,7 +20666,7 @@ yyreduce:
             Lex->charset=&my_charset_bin;
             (yyval.num)=MYSQL_TYPE_MEDIUM_BLOB;
           }
-#line 19421 "sql_yacc.cc"
+#line 20670 "sql_yacc.cc"
     break;
 
   case 596: /* type: LONGBLOB  */
@@ -19426,7 +20675,7 @@ yyreduce:
             Lex->charset=&my_charset_bin;
             (yyval.num)=MYSQL_TYPE_LONG_BLOB;
           }
-#line 19430 "sql_yacc.cc"
+#line 20679 "sql_yacc.cc"
     break;
 
   case 597: /* type: LONG_SYM VARBINARY  */
@@ -19435,85 +20684,85 @@ yyreduce:
             Lex->charset=&my_charset_bin;
             (yyval.num)=MYSQL_TYPE_MEDIUM_BLOB;
           }
-#line 19439 "sql_yacc.cc"
+#line 20688 "sql_yacc.cc"
     break;
 
   case 598: /* type: LONG_SYM varchar opt_binary  */
 #line 5123 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_MEDIUM_BLOB; }
-#line 19445 "sql_yacc.cc"
+#line 20694 "sql_yacc.cc"
     break;
 
   case 599: /* type: TINYTEXT opt_binary  */
 #line 5125 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_TINY_BLOB; }
-#line 19451 "sql_yacc.cc"
+#line 20700 "sql_yacc.cc"
     break;
 
   case 600: /* type: TEXT_SYM opt_field_length opt_binary  */
 #line 5127 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_BLOB; }
-#line 19457 "sql_yacc.cc"
+#line 20706 "sql_yacc.cc"
     break;
 
   case 601: /* type: MEDIUMTEXT opt_binary  */
 #line 5129 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_MEDIUM_BLOB; }
-#line 19463 "sql_yacc.cc"
+#line 20712 "sql_yacc.cc"
     break;
 
   case 602: /* type: LONGTEXT opt_binary  */
 #line 5131 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_LONG_BLOB; }
-#line 19469 "sql_yacc.cc"
+#line 20718 "sql_yacc.cc"
     break;
 
   case 603: /* type: DECIMAL_SYM float_options field_options  */
 #line 5133 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_NEWDECIMAL;}
-#line 19475 "sql_yacc.cc"
+#line 20724 "sql_yacc.cc"
     break;
 
   case 604: /* type: NUMERIC_SYM float_options field_options  */
 #line 5135 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_NEWDECIMAL;}
-#line 19481 "sql_yacc.cc"
+#line 20730 "sql_yacc.cc"
     break;
 
   case 605: /* type: FIXED_SYM float_options field_options  */
 #line 5137 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_NEWDECIMAL;}
-#line 19487 "sql_yacc.cc"
+#line 20736 "sql_yacc.cc"
     break;
 
   case 606: /* $@56: %empty  */
 #line 5139 "sql_yacc.yy"
           {Lex->interval_list.empty();}
-#line 19493 "sql_yacc.cc"
+#line 20742 "sql_yacc.cc"
     break;
 
   case 607: /* type: ENUM $@56 '(' string_list ')' opt_binary  */
 #line 5141 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_ENUM; }
-#line 19499 "sql_yacc.cc"
+#line 20748 "sql_yacc.cc"
     break;
 
   case 608: /* $@57: %empty  */
 #line 5143 "sql_yacc.yy"
           { Lex->interval_list.empty();}
-#line 19505 "sql_yacc.cc"
+#line 20754 "sql_yacc.cc"
     break;
 
   case 609: /* type: SET $@57 '(' string_list ')' opt_binary  */
 #line 5145 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_SET; }
-#line 19511 "sql_yacc.cc"
+#line 20760 "sql_yacc.cc"
     break;
 
   case 610: /* type: LONG_SYM opt_binary  */
 #line 5147 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_MEDIUM_BLOB; }
-#line 19517 "sql_yacc.cc"
+#line 20766 "sql_yacc.cc"
     break;
 
   case 611: /* type: SERIAL_SYM  */
@@ -19523,19 +20772,19 @@ yyreduce:
             Lex->type|= (AUTO_INCREMENT_FLAG | NOT_NULL_FLAG | UNSIGNED_FLAG |
               UNIQUE_FLAG);
           }
-#line 19527 "sql_yacc.cc"
+#line 20776 "sql_yacc.cc"
     break;
 
   case 612: /* spatial_type: GEOMETRY_SYM  */
 #line 5157 "sql_yacc.yy"
                               { (yyval.num)= Field::GEOM_GEOMETRY; }
-#line 19533 "sql_yacc.cc"
+#line 20782 "sql_yacc.cc"
     break;
 
   case 613: /* spatial_type: GEOMETRYCOLLECTION  */
 #line 5158 "sql_yacc.yy"
                               { (yyval.num)= Field::GEOM_GEOMETRYCOLLECTION; }
-#line 19539 "sql_yacc.cc"
+#line 20788 "sql_yacc.cc"
     break;
 
   case 614: /* spatial_type: POINT_SYM  */
@@ -19544,127 +20793,127 @@ yyreduce:
             Lex->length= (char*)"25";
             (yyval.num)= Field::GEOM_POINT;
           }
-#line 19548 "sql_yacc.cc"
+#line 20797 "sql_yacc.cc"
     break;
 
   case 615: /* spatial_type: MULTIPOINT  */
 #line 5164 "sql_yacc.yy"
                               { (yyval.num)= Field::GEOM_MULTIPOINT; }
-#line 19554 "sql_yacc.cc"
+#line 20803 "sql_yacc.cc"
     break;
 
   case 616: /* spatial_type: LINESTRING  */
 #line 5165 "sql_yacc.yy"
                               { (yyval.num)= Field::GEOM_LINESTRING; }
-#line 19560 "sql_yacc.cc"
+#line 20809 "sql_yacc.cc"
     break;
 
   case 617: /* spatial_type: MULTILINESTRING  */
 #line 5166 "sql_yacc.yy"
                               { (yyval.num)= Field::GEOM_MULTILINESTRING; }
-#line 19566 "sql_yacc.cc"
+#line 20815 "sql_yacc.cc"
     break;
 
   case 618: /* spatial_type: POLYGON  */
 #line 5167 "sql_yacc.yy"
                               { (yyval.num)= Field::GEOM_POLYGON; }
-#line 19572 "sql_yacc.cc"
+#line 20821 "sql_yacc.cc"
     break;
 
   case 619: /* spatial_type: MULTIPOLYGON  */
 #line 5168 "sql_yacc.yy"
                               { (yyval.num)= Field::GEOM_MULTIPOLYGON; }
-#line 19578 "sql_yacc.cc"
+#line 20827 "sql_yacc.cc"
     break;
 
   case 620: /* char: CHAR_SYM  */
 #line 5172 "sql_yacc.yy"
                    {}
-#line 19584 "sql_yacc.cc"
+#line 20833 "sql_yacc.cc"
     break;
 
   case 621: /* nchar: NCHAR_SYM  */
 #line 5176 "sql_yacc.yy"
                     {}
-#line 19590 "sql_yacc.cc"
+#line 20839 "sql_yacc.cc"
     break;
 
   case 622: /* nchar: NATIONAL_SYM CHAR_SYM  */
 #line 5177 "sql_yacc.yy"
                                 {}
-#line 19596 "sql_yacc.cc"
+#line 20845 "sql_yacc.cc"
     break;
 
   case 623: /* varchar: char VARYING  */
 #line 5181 "sql_yacc.yy"
                        {}
-#line 19602 "sql_yacc.cc"
+#line 20851 "sql_yacc.cc"
     break;
 
   case 624: /* varchar: VARCHAR  */
 #line 5182 "sql_yacc.yy"
                   {}
-#line 19608 "sql_yacc.cc"
+#line 20857 "sql_yacc.cc"
     break;
 
   case 625: /* nvarchar: NATIONAL_SYM VARCHAR  */
 #line 5186 "sql_yacc.yy"
                                {}
-#line 19614 "sql_yacc.cc"
+#line 20863 "sql_yacc.cc"
     break;
 
   case 626: /* nvarchar: NVARCHAR_SYM  */
 #line 5187 "sql_yacc.yy"
                        {}
-#line 19620 "sql_yacc.cc"
+#line 20869 "sql_yacc.cc"
     break;
 
   case 627: /* nvarchar: NCHAR_SYM VARCHAR  */
 #line 5188 "sql_yacc.yy"
                             {}
-#line 19626 "sql_yacc.cc"
+#line 20875 "sql_yacc.cc"
     break;
 
   case 628: /* nvarchar: NATIONAL_SYM CHAR_SYM VARYING  */
 #line 5189 "sql_yacc.yy"
                                         {}
-#line 19632 "sql_yacc.cc"
+#line 20881 "sql_yacc.cc"
     break;
 
   case 629: /* nvarchar: NCHAR_SYM VARYING  */
 #line 5190 "sql_yacc.yy"
                             {}
-#line 19638 "sql_yacc.cc"
+#line 20887 "sql_yacc.cc"
     break;
 
   case 630: /* int_type: INT_SYM  */
 #line 5194 "sql_yacc.yy"
                     { (yyval.num)=MYSQL_TYPE_LONG; }
-#line 19644 "sql_yacc.cc"
+#line 20893 "sql_yacc.cc"
     break;
 
   case 631: /* int_type: TINYINT  */
 #line 5195 "sql_yacc.yy"
                     { (yyval.num)=MYSQL_TYPE_TINY; }
-#line 19650 "sql_yacc.cc"
+#line 20899 "sql_yacc.cc"
     break;
 
   case 632: /* int_type: SMALLINT  */
 #line 5196 "sql_yacc.yy"
                     { (yyval.num)=MYSQL_TYPE_SHORT; }
-#line 19656 "sql_yacc.cc"
+#line 20905 "sql_yacc.cc"
     break;
 
   case 633: /* int_type: MEDIUMINT  */
 #line 5197 "sql_yacc.yy"
                     { (yyval.num)=MYSQL_TYPE_INT24; }
-#line 19662 "sql_yacc.cc"
+#line 20911 "sql_yacc.cc"
     break;
 
   case 634: /* int_type: BIGINT  */
 #line 5198 "sql_yacc.yy"
                     { (yyval.num)=MYSQL_TYPE_LONGLONG; }
-#line 19668 "sql_yacc.cc"
+#line 20917 "sql_yacc.cc"
     break;
 
   case 635: /* real_type: REAL  */
@@ -19673,37 +20922,37 @@ yyreduce:
             (yyval.num)= YYTHD->variables.sql_mode & MODE_REAL_AS_FLOAT ?
               MYSQL_TYPE_FLOAT : MYSQL_TYPE_DOUBLE;
           }
-#line 19677 "sql_yacc.cc"
+#line 20926 "sql_yacc.cc"
     break;
 
   case 636: /* real_type: DOUBLE_SYM  */
 #line 5208 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_DOUBLE; }
-#line 19683 "sql_yacc.cc"
+#line 20932 "sql_yacc.cc"
     break;
 
   case 637: /* real_type: DOUBLE_SYM PRECISION  */
 #line 5210 "sql_yacc.yy"
           { (yyval.num)=MYSQL_TYPE_DOUBLE; }
-#line 19689 "sql_yacc.cc"
+#line 20938 "sql_yacc.cc"
     break;
 
   case 638: /* float_options: %empty  */
 #line 5215 "sql_yacc.yy"
           { Lex->dec=Lex->length= (char*)0; }
-#line 19695 "sql_yacc.cc"
+#line 20944 "sql_yacc.cc"
     break;
 
   case 639: /* float_options: field_length  */
 #line 5217 "sql_yacc.yy"
           { Lex->dec= (char*)0; }
-#line 19701 "sql_yacc.cc"
+#line 20950 "sql_yacc.cc"
     break;
 
   case 640: /* float_options: precision  */
 #line 5219 "sql_yacc.yy"
           {}
-#line 19707 "sql_yacc.cc"
+#line 20956 "sql_yacc.cc"
     break;
 
   case 641: /* precision: '(' NUM ',' NUM ')'  */
@@ -19713,133 +20962,133 @@ yyreduce:
             lex->length=(yyvsp[-3].lex_str).str;
             lex->dec=(yyvsp[-1].lex_str).str;
           }
-#line 19717 "sql_yacc.cc"
+#line 20966 "sql_yacc.cc"
     break;
 
   case 642: /* field_options: %empty  */
 #line 5232 "sql_yacc.yy"
                       {}
-#line 19723 "sql_yacc.cc"
+#line 20972 "sql_yacc.cc"
     break;
 
   case 643: /* field_options: field_opt_list  */
 #line 5233 "sql_yacc.yy"
                          {}
-#line 19729 "sql_yacc.cc"
+#line 20978 "sql_yacc.cc"
     break;
 
   case 644: /* field_opt_list: field_opt_list field_option  */
 #line 5237 "sql_yacc.yy"
                                       {}
-#line 19735 "sql_yacc.cc"
+#line 20984 "sql_yacc.cc"
     break;
 
   case 645: /* field_opt_list: field_option  */
 #line 5238 "sql_yacc.yy"
                        {}
-#line 19741 "sql_yacc.cc"
+#line 20990 "sql_yacc.cc"
     break;
 
   case 646: /* field_option: SIGNED_SYM  */
 #line 5242 "sql_yacc.yy"
                      {}
-#line 19747 "sql_yacc.cc"
+#line 20996 "sql_yacc.cc"
     break;
 
   case 647: /* field_option: UNSIGNED  */
 #line 5243 "sql_yacc.yy"
                    { Lex->type|= UNSIGNED_FLAG;}
-#line 19753 "sql_yacc.cc"
+#line 21002 "sql_yacc.cc"
     break;
 
   case 648: /* field_option: ZEROFILL  */
 #line 5244 "sql_yacc.yy"
                    { Lex->type|= UNSIGNED_FLAG | ZEROFILL_FLAG; }
-#line 19759 "sql_yacc.cc"
+#line 21008 "sql_yacc.cc"
     break;
 
   case 649: /* field_length: '(' LONG_NUM ')'  */
 #line 5248 "sql_yacc.yy"
                                 { Lex->length= (yyvsp[-1].lex_str).str; }
-#line 19765 "sql_yacc.cc"
+#line 21014 "sql_yacc.cc"
     break;
 
   case 650: /* field_length: '(' ULONGLONG_NUM ')'  */
 #line 5249 "sql_yacc.yy"
                                 { Lex->length= (yyvsp[-1].lex_str).str; }
-#line 19771 "sql_yacc.cc"
+#line 21020 "sql_yacc.cc"
     break;
 
   case 651: /* field_length: '(' DECIMAL_NUM ')'  */
 #line 5250 "sql_yacc.yy"
                                 { Lex->length= (yyvsp[-1].lex_str).str; }
-#line 19777 "sql_yacc.cc"
+#line 21026 "sql_yacc.cc"
     break;
 
   case 652: /* field_length: '(' NUM ')'  */
 #line 5251 "sql_yacc.yy"
                                 { Lex->length= (yyvsp[-1].lex_str).str; }
-#line 19783 "sql_yacc.cc"
+#line 21032 "sql_yacc.cc"
     break;
 
   case 653: /* opt_field_length: %empty  */
 #line 5254 "sql_yacc.yy"
                        { Lex->length=(char*) 0; /* use default length */ }
-#line 19789 "sql_yacc.cc"
+#line 21038 "sql_yacc.cc"
     break;
 
   case 654: /* opt_field_length: field_length  */
 #line 5255 "sql_yacc.yy"
                        { }
-#line 19795 "sql_yacc.cc"
+#line 21044 "sql_yacc.cc"
     break;
 
   case 655: /* opt_precision: %empty  */
 #line 5258 "sql_yacc.yy"
                       {}
-#line 19801 "sql_yacc.cc"
+#line 21050 "sql_yacc.cc"
     break;
 
   case 656: /* opt_precision: precision  */
 #line 5259 "sql_yacc.yy"
                     {}
-#line 19807 "sql_yacc.cc"
+#line 21056 "sql_yacc.cc"
     break;
 
   case 657: /* opt_attribute: %empty  */
 #line 5263 "sql_yacc.yy"
                       {}
-#line 19813 "sql_yacc.cc"
+#line 21062 "sql_yacc.cc"
     break;
 
   case 658: /* opt_attribute: opt_attribute_list  */
 #line 5264 "sql_yacc.yy"
                              {}
-#line 19819 "sql_yacc.cc"
+#line 21068 "sql_yacc.cc"
     break;
 
   case 659: /* opt_attribute_list: opt_attribute_list attribute  */
 #line 5268 "sql_yacc.yy"
                                        {}
-#line 19825 "sql_yacc.cc"
+#line 21074 "sql_yacc.cc"
     break;
 
   case 661: /* attribute: NULL_SYM  */
 #line 5273 "sql_yacc.yy"
                    { Lex->type&= ~ NOT_NULL_FLAG; }
-#line 19831 "sql_yacc.cc"
+#line 21080 "sql_yacc.cc"
     break;
 
   case 662: /* attribute: not NULL_SYM  */
 #line 5274 "sql_yacc.yy"
                        { Lex->type|= NOT_NULL_FLAG; }
-#line 19837 "sql_yacc.cc"
+#line 21086 "sql_yacc.cc"
     break;
 
   case 663: /* attribute: DEFAULT now_or_signed_literal  */
 #line 5275 "sql_yacc.yy"
                                         { Lex->default_value=(yyvsp[0].item); }
-#line 19843 "sql_yacc.cc"
+#line 21092 "sql_yacc.cc"
     break;
 
   case 664: /* attribute: ON UPDATE_SYM NOW_SYM optional_braces  */
@@ -19850,13 +21099,13 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->on_update_value= item;
           }
-#line 19854 "sql_yacc.cc"
+#line 21103 "sql_yacc.cc"
     break;
 
   case 665: /* attribute: AUTO_INC  */
 #line 5283 "sql_yacc.yy"
                    { Lex->type|= AUTO_INCREMENT_FLAG | NOT_NULL_FLAG; }
-#line 19860 "sql_yacc.cc"
+#line 21109 "sql_yacc.cc"
     break;
 
   case 666: /* attribute: SERIAL_SYM DEFAULT VALUE_SYM  */
@@ -19866,7 +21115,7 @@ yyreduce:
             lex->type|= AUTO_INCREMENT_FLAG | NOT_NULL_FLAG | UNIQUE_FLAG;
             lex->alter_info.flags|= ALTER_ADD_INDEX;
           }
-#line 19870 "sql_yacc.cc"
+#line 21119 "sql_yacc.cc"
     break;
 
   case 667: /* attribute: opt_primary KEY_SYM  */
@@ -19876,7 +21125,7 @@ yyreduce:
             lex->type|= PRI_KEY_FLAG | NOT_NULL_FLAG;
             lex->alter_info.flags|= ALTER_ADD_INDEX;
           }
-#line 19880 "sql_yacc.cc"
+#line 21129 "sql_yacc.cc"
     break;
 
   case 668: /* attribute: UNIQUE_SYM  */
@@ -19886,7 +21135,7 @@ yyreduce:
             lex->type|= UNIQUE_FLAG; 
             lex->alter_info.flags|= ALTER_ADD_INDEX;
           }
-#line 19890 "sql_yacc.cc"
+#line 21139 "sql_yacc.cc"
     break;
 
   case 669: /* attribute: UNIQUE_SYM KEY_SYM  */
@@ -19896,13 +21145,13 @@ yyreduce:
             lex->type|= UNIQUE_KEY_FLAG; 
             lex->alter_info.flags|= ALTER_ADD_INDEX; 
           }
-#line 19900 "sql_yacc.cc"
+#line 21149 "sql_yacc.cc"
     break;
 
   case 670: /* attribute: COMMENT_SYM TEXT_STRING_sys  */
 #line 5308 "sql_yacc.yy"
                                       { Lex->comment= (yyvsp[0].lex_str); }
-#line 19906 "sql_yacc.cc"
+#line 21155 "sql_yacc.cc"
     break;
 
   case 671: /* attribute: COLLATE_SYM collation_name  */
@@ -19919,7 +21168,7 @@ yyreduce:
               Lex->charset=(yyvsp[0].charset);
             }
           }
-#line 19923 "sql_yacc.cc"
+#line 21172 "sql_yacc.cc"
     break;
 
   case 672: /* now_or_signed_literal: NOW_SYM optional_braces  */
@@ -19929,25 +21178,25 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 19933 "sql_yacc.cc"
+#line 21182 "sql_yacc.cc"
     break;
 
   case 673: /* now_or_signed_literal: signed_literal  */
 #line 5332 "sql_yacc.yy"
           { (yyval.item)=(yyvsp[0].item); }
-#line 19939 "sql_yacc.cc"
+#line 21188 "sql_yacc.cc"
     break;
 
   case 674: /* charset: CHAR_SYM SET  */
 #line 5336 "sql_yacc.yy"
                        {}
-#line 19945 "sql_yacc.cc"
+#line 21194 "sql_yacc.cc"
     break;
 
   case 675: /* charset: CHARSET  */
 #line 5337 "sql_yacc.yy"
                   {}
-#line 19951 "sql_yacc.cc"
+#line 21200 "sql_yacc.cc"
     break;
 
   case 676: /* charset_name: ident_or_text  */
@@ -19959,37 +21208,37 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 19963 "sql_yacc.cc"
+#line 21212 "sql_yacc.cc"
     break;
 
   case 677: /* charset_name: BINARY  */
 #line 5349 "sql_yacc.yy"
                  { (yyval.charset)= &my_charset_bin; }
-#line 19969 "sql_yacc.cc"
+#line 21218 "sql_yacc.cc"
     break;
 
   case 678: /* charset_name_or_default: charset_name  */
 #line 5353 "sql_yacc.yy"
                        { (yyval.charset)=(yyvsp[0].charset);   }
-#line 19975 "sql_yacc.cc"
+#line 21224 "sql_yacc.cc"
     break;
 
   case 679: /* charset_name_or_default: DEFAULT  */
 #line 5354 "sql_yacc.yy"
                      { (yyval.charset)=NULL; }
-#line 19981 "sql_yacc.cc"
+#line 21230 "sql_yacc.cc"
     break;
 
   case 680: /* opt_load_data_charset: %empty  */
 #line 5358 "sql_yacc.yy"
                       { (yyval.charset)= NULL; }
-#line 19987 "sql_yacc.cc"
+#line 21236 "sql_yacc.cc"
     break;
 
   case 681: /* opt_load_data_charset: charset charset_name_or_default  */
 #line 5359 "sql_yacc.yy"
                                           { (yyval.charset)= (yyvsp[0].charset); }
-#line 19993 "sql_yacc.cc"
+#line 21242 "sql_yacc.cc"
     break;
 
   case 682: /* old_or_new_charset_name: ident_or_text  */
@@ -20002,25 +21251,25 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 20006 "sql_yacc.cc"
+#line 21255 "sql_yacc.cc"
     break;
 
   case 683: /* old_or_new_charset_name: BINARY  */
 #line 5372 "sql_yacc.yy"
                  { (yyval.charset)= &my_charset_bin; }
-#line 20012 "sql_yacc.cc"
+#line 21261 "sql_yacc.cc"
     break;
 
   case 684: /* old_or_new_charset_name_or_default: old_or_new_charset_name  */
 #line 5376 "sql_yacc.yy"
                                   { (yyval.charset)=(yyvsp[0].charset);   }
-#line 20018 "sql_yacc.cc"
+#line 21267 "sql_yacc.cc"
     break;
 
   case 685: /* old_or_new_charset_name_or_default: DEFAULT  */
 #line 5377 "sql_yacc.yy"
                      { (yyval.charset)=NULL; }
-#line 20024 "sql_yacc.cc"
+#line 21273 "sql_yacc.cc"
     break;
 
   case 686: /* collation_name: ident_or_text  */
@@ -20032,61 +21281,61 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 20036 "sql_yacc.cc"
+#line 21285 "sql_yacc.cc"
     break;
 
   case 687: /* opt_collate: %empty  */
 #line 5392 "sql_yacc.yy"
                       { (yyval.charset)=NULL; }
-#line 20042 "sql_yacc.cc"
+#line 21291 "sql_yacc.cc"
     break;
 
   case 688: /* opt_collate: COLLATE_SYM collation_name_or_default  */
 #line 5393 "sql_yacc.yy"
                                                 { (yyval.charset)=(yyvsp[0].charset); }
-#line 20048 "sql_yacc.cc"
+#line 21297 "sql_yacc.cc"
     break;
 
   case 689: /* collation_name_or_default: collation_name  */
 #line 5397 "sql_yacc.yy"
                          { (yyval.charset)=(yyvsp[0].charset); }
-#line 20054 "sql_yacc.cc"
+#line 21303 "sql_yacc.cc"
     break;
 
   case 690: /* collation_name_or_default: DEFAULT  */
 #line 5398 "sql_yacc.yy"
                      { (yyval.charset)=NULL; }
-#line 20060 "sql_yacc.cc"
+#line 21309 "sql_yacc.cc"
     break;
 
   case 691: /* opt_default: %empty  */
 #line 5402 "sql_yacc.yy"
                       {}
-#line 20066 "sql_yacc.cc"
+#line 21315 "sql_yacc.cc"
     break;
 
   case 692: /* opt_default: DEFAULT  */
 #line 5403 "sql_yacc.yy"
                   {}
-#line 20072 "sql_yacc.cc"
+#line 21321 "sql_yacc.cc"
     break;
 
   case 693: /* opt_binary: %empty  */
 #line 5407 "sql_yacc.yy"
                       { Lex->charset=NULL; }
-#line 20078 "sql_yacc.cc"
+#line 21327 "sql_yacc.cc"
     break;
 
   case 694: /* opt_binary: ASCII_SYM opt_bin_mod  */
 #line 5408 "sql_yacc.yy"
                                 { Lex->charset=&my_charset_latin1; }
-#line 20084 "sql_yacc.cc"
+#line 21333 "sql_yacc.cc"
     break;
 
   case 695: /* opt_binary: BYTE_SYM  */
 #line 5409 "sql_yacc.yy"
                    { Lex->charset=&my_charset_bin; }
-#line 20090 "sql_yacc.cc"
+#line 21339 "sql_yacc.cc"
     break;
 
   case 696: /* opt_binary: UNICODE_SYM opt_bin_mod  */
@@ -20099,43 +21348,43 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 20103 "sql_yacc.cc"
+#line 21352 "sql_yacc.cc"
     break;
 
   case 697: /* opt_binary: charset charset_name opt_bin_mod  */
 #line 5419 "sql_yacc.yy"
                                            { Lex->charset=(yyvsp[-1].charset); }
-#line 20109 "sql_yacc.cc"
+#line 21358 "sql_yacc.cc"
     break;
 
   case 698: /* opt_binary: BINARY opt_bin_charset  */
 #line 5420 "sql_yacc.yy"
                                  { Lex->type|= BINCMP_FLAG; }
-#line 20115 "sql_yacc.cc"
+#line 21364 "sql_yacc.cc"
     break;
 
   case 699: /* opt_bin_mod: %empty  */
 #line 5424 "sql_yacc.yy"
                       { }
-#line 20121 "sql_yacc.cc"
+#line 21370 "sql_yacc.cc"
     break;
 
   case 700: /* opt_bin_mod: BINARY  */
 #line 5425 "sql_yacc.yy"
                  { Lex->type|= BINCMP_FLAG; }
-#line 20127 "sql_yacc.cc"
+#line 21376 "sql_yacc.cc"
     break;
 
   case 701: /* opt_bin_charset: %empty  */
 #line 5429 "sql_yacc.yy"
                       { Lex->charset= NULL; }
-#line 20133 "sql_yacc.cc"
+#line 21382 "sql_yacc.cc"
     break;
 
   case 702: /* opt_bin_charset: ASCII_SYM  */
 #line 5430 "sql_yacc.yy"
                     { Lex->charset=&my_charset_latin1; }
-#line 20139 "sql_yacc.cc"
+#line 21388 "sql_yacc.cc"
     break;
 
   case 703: /* opt_bin_charset: UNICODE_SYM  */
@@ -20148,13 +21397,13 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 20152 "sql_yacc.cc"
+#line 21401 "sql_yacc.cc"
     break;
 
   case 704: /* opt_bin_charset: charset charset_name  */
 #line 5440 "sql_yacc.yy"
                                { Lex->charset=(yyvsp[0].charset); }
-#line 20158 "sql_yacc.cc"
+#line 21407 "sql_yacc.cc"
     break;
 
   case 707: /* $@58: %empty  */
@@ -20164,7 +21413,7 @@ yyreduce:
             lex->fk_delete_opt= lex->fk_update_opt= lex->fk_match_option= 0;
             lex->ref_list.empty();
           }
-#line 20168 "sql_yacc.cc"
+#line 21417 "sql_yacc.cc"
     break;
 
   case 708: /* references: REFERENCES table_ident $@58 opt_ref_list  */
@@ -20172,19 +21421,19 @@ yyreduce:
           {
             (yyval.table)=(yyvsp[-2].table);
           }
-#line 20176 "sql_yacc.cc"
+#line 21425 "sql_yacc.cc"
     break;
 
   case 709: /* opt_ref_list: opt_on_delete  */
 #line 5462 "sql_yacc.yy"
                                     {}
-#line 20182 "sql_yacc.cc"
+#line 21431 "sql_yacc.cc"
     break;
 
   case 710: /* opt_ref_list: '(' ref_list ')' opt_on_delete  */
 #line 5463 "sql_yacc.yy"
                                          {}
-#line 20188 "sql_yacc.cc"
+#line 21437 "sql_yacc.cc"
     break;
 
   case 711: /* ref_list: ref_list ',' ident  */
@@ -20195,7 +21444,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->ref_list.push_back(key);
           }
-#line 20199 "sql_yacc.cc"
+#line 21448 "sql_yacc.cc"
     break;
 
   case 712: /* ref_list: ident  */
@@ -20206,163 +21455,163 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->ref_list.push_back(key);
           }
-#line 20210 "sql_yacc.cc"
+#line 21459 "sql_yacc.cc"
     break;
 
   case 713: /* opt_on_delete: %empty  */
 #line 5484 "sql_yacc.yy"
                       {}
-#line 20216 "sql_yacc.cc"
+#line 21465 "sql_yacc.cc"
     break;
 
   case 714: /* opt_on_delete: opt_on_delete_list  */
 #line 5485 "sql_yacc.yy"
                              {}
-#line 20222 "sql_yacc.cc"
+#line 21471 "sql_yacc.cc"
     break;
 
   case 715: /* opt_on_delete_list: opt_on_delete_list opt_on_delete_item  */
 #line 5489 "sql_yacc.yy"
                                                 {}
-#line 20228 "sql_yacc.cc"
+#line 21477 "sql_yacc.cc"
     break;
 
   case 716: /* opt_on_delete_list: opt_on_delete_item  */
 #line 5490 "sql_yacc.yy"
                              {}
-#line 20234 "sql_yacc.cc"
+#line 21483 "sql_yacc.cc"
     break;
 
   case 717: /* opt_on_delete_item: ON DELETE_SYM delete_option  */
 #line 5494 "sql_yacc.yy"
                                       { Lex->fk_delete_opt= (yyvsp[0].num); }
-#line 20240 "sql_yacc.cc"
+#line 21489 "sql_yacc.cc"
     break;
 
   case 718: /* opt_on_delete_item: ON UPDATE_SYM delete_option  */
 #line 5495 "sql_yacc.yy"
                                       { Lex->fk_update_opt= (yyvsp[0].num); }
-#line 20246 "sql_yacc.cc"
+#line 21495 "sql_yacc.cc"
     break;
 
   case 719: /* opt_on_delete_item: MATCH FULL  */
 #line 5496 "sql_yacc.yy"
                            { Lex->fk_match_option= Foreign_key::FK_MATCH_FULL; }
-#line 20252 "sql_yacc.cc"
+#line 21501 "sql_yacc.cc"
     break;
 
   case 720: /* opt_on_delete_item: MATCH PARTIAL  */
 #line 5497 "sql_yacc.yy"
                            { Lex->fk_match_option= Foreign_key::FK_MATCH_PARTIAL; }
-#line 20258 "sql_yacc.cc"
+#line 21507 "sql_yacc.cc"
     break;
 
   case 721: /* opt_on_delete_item: MATCH SIMPLE_SYM  */
 #line 5498 "sql_yacc.yy"
                            { Lex->fk_match_option= Foreign_key::FK_MATCH_SIMPLE; }
-#line 20264 "sql_yacc.cc"
+#line 21513 "sql_yacc.cc"
     break;
 
   case 722: /* delete_option: RESTRICT  */
 #line 5502 "sql_yacc.yy"
                         { (yyval.num)= (int) Foreign_key::FK_OPTION_RESTRICT; }
-#line 20270 "sql_yacc.cc"
+#line 21519 "sql_yacc.cc"
     break;
 
   case 723: /* delete_option: CASCADE  */
 #line 5503 "sql_yacc.yy"
                         { (yyval.num)= (int) Foreign_key::FK_OPTION_CASCADE; }
-#line 20276 "sql_yacc.cc"
+#line 21525 "sql_yacc.cc"
     break;
 
   case 724: /* delete_option: SET NULL_SYM  */
 #line 5504 "sql_yacc.yy"
                         { (yyval.num)= (int) Foreign_key::FK_OPTION_SET_NULL; }
-#line 20282 "sql_yacc.cc"
+#line 21531 "sql_yacc.cc"
     break;
 
   case 725: /* delete_option: NO_SYM ACTION  */
 #line 5505 "sql_yacc.yy"
                         { (yyval.num)= (int) Foreign_key::FK_OPTION_NO_ACTION; }
-#line 20288 "sql_yacc.cc"
+#line 21537 "sql_yacc.cc"
     break;
 
   case 726: /* delete_option: SET DEFAULT  */
 #line 5506 "sql_yacc.yy"
                         { (yyval.num)= (int) Foreign_key::FK_OPTION_DEFAULT;  }
-#line 20294 "sql_yacc.cc"
+#line 21543 "sql_yacc.cc"
     break;
 
   case 727: /* normal_key_type: key_or_index  */
 #line 5510 "sql_yacc.yy"
                        { (yyval.key_type)= Key::MULTIPLE; }
-#line 20300 "sql_yacc.cc"
+#line 21549 "sql_yacc.cc"
     break;
 
   case 728: /* constraint_key_type: PRIMARY_SYM KEY_SYM  */
 #line 5514 "sql_yacc.yy"
                               { (yyval.key_type)= Key::PRIMARY; }
-#line 20306 "sql_yacc.cc"
+#line 21555 "sql_yacc.cc"
     break;
 
   case 729: /* constraint_key_type: UNIQUE_SYM opt_key_or_index  */
 #line 5515 "sql_yacc.yy"
                                       { (yyval.key_type)= Key::UNIQUE; }
-#line 20312 "sql_yacc.cc"
+#line 21561 "sql_yacc.cc"
     break;
 
   case 730: /* key_or_index: KEY_SYM  */
 #line 5519 "sql_yacc.yy"
                   {}
-#line 20318 "sql_yacc.cc"
+#line 21567 "sql_yacc.cc"
     break;
 
   case 731: /* key_or_index: INDEX_SYM  */
 #line 5520 "sql_yacc.yy"
                     {}
-#line 20324 "sql_yacc.cc"
+#line 21573 "sql_yacc.cc"
     break;
 
   case 732: /* opt_key_or_index: %empty  */
 #line 5524 "sql_yacc.yy"
                       {}
-#line 20330 "sql_yacc.cc"
+#line 21579 "sql_yacc.cc"
     break;
 
   case 734: /* keys_or_index: KEYS  */
 #line 5529 "sql_yacc.yy"
                {}
-#line 20336 "sql_yacc.cc"
+#line 21585 "sql_yacc.cc"
     break;
 
   case 735: /* keys_or_index: INDEX_SYM  */
 #line 5530 "sql_yacc.yy"
                     {}
-#line 20342 "sql_yacc.cc"
+#line 21591 "sql_yacc.cc"
     break;
 
   case 736: /* keys_or_index: INDEXES  */
 #line 5531 "sql_yacc.yy"
                   {}
-#line 20348 "sql_yacc.cc"
+#line 21597 "sql_yacc.cc"
     break;
 
   case 737: /* opt_unique: %empty  */
 #line 5535 "sql_yacc.yy"
                        { (yyval.key_type)= Key::MULTIPLE; }
-#line 20354 "sql_yacc.cc"
+#line 21603 "sql_yacc.cc"
     break;
 
   case 738: /* opt_unique: UNIQUE_SYM  */
 #line 5536 "sql_yacc.yy"
                        { (yyval.key_type)= Key::UNIQUE; }
-#line 20360 "sql_yacc.cc"
+#line 21609 "sql_yacc.cc"
     break;
 
   case 739: /* fulltext: FULLTEXT_SYM  */
 #line 5540 "sql_yacc.yy"
                        { (yyval.key_type)= Key::FULLTEXT;}
-#line 20366 "sql_yacc.cc"
+#line 21615 "sql_yacc.cc"
     break;
 
   case 740: /* spatial: SPATIAL_SYM  */
@@ -20376,7 +21625,7 @@ yyreduce:
             MYSQL_YYABORT;
 #endif
           }
-#line 20380 "sql_yacc.cc"
+#line 21629 "sql_yacc.cc"
     break;
 
   case 741: /* init_key_options: %empty  */
@@ -20384,43 +21633,43 @@ yyreduce:
           {
             Lex->key_create_info= default_key_create_info;
           }
-#line 20388 "sql_yacc.cc"
+#line 21637 "sql_yacc.cc"
     break;
 
   case 744: /* normal_key_options: %empty  */
 #line 5574 "sql_yacc.yy"
                       {}
-#line 20394 "sql_yacc.cc"
+#line 21643 "sql_yacc.cc"
     break;
 
   case 746: /* fulltext_key_options: %empty  */
 #line 5579 "sql_yacc.yy"
                       {}
-#line 20400 "sql_yacc.cc"
+#line 21649 "sql_yacc.cc"
     break;
 
   case 748: /* spatial_key_options: %empty  */
 #line 5584 "sql_yacc.yy"
                       {}
-#line 20406 "sql_yacc.cc"
+#line 21655 "sql_yacc.cc"
     break;
 
   case 756: /* key_using_alg: USING btree_or_rtree  */
 #line 5604 "sql_yacc.yy"
                                    { Lex->key_create_info.algorithm= (yyvsp[0].key_alg); }
-#line 20412 "sql_yacc.cc"
+#line 21661 "sql_yacc.cc"
     break;
 
   case 757: /* key_using_alg: TYPE_SYM btree_or_rtree  */
 #line 5605 "sql_yacc.yy"
                                    { Lex->key_create_info.algorithm= (yyvsp[0].key_alg); }
-#line 20418 "sql_yacc.cc"
+#line 21667 "sql_yacc.cc"
     break;
 
   case 758: /* all_key_opt: KEY_BLOCK_SIZE opt_equal ulong_num  */
 #line 5610 "sql_yacc.yy"
           { Lex->key_create_info.block_size= (yyvsp[0].ulong_num); }
-#line 20424 "sql_yacc.cc"
+#line 21673 "sql_yacc.cc"
     break;
 
   case 763: /* fulltext_key_opt: WITH PARSER_SYM IDENT_sys  */
@@ -20434,37 +21683,37 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 20438 "sql_yacc.cc"
+#line 21687 "sql_yacc.cc"
     break;
 
   case 764: /* btree_or_rtree: BTREE_SYM  */
 #line 5637 "sql_yacc.yy"
                     { (yyval.key_alg)= HA_KEY_ALG_BTREE; }
-#line 20444 "sql_yacc.cc"
+#line 21693 "sql_yacc.cc"
     break;
 
   case 765: /* btree_or_rtree: RTREE_SYM  */
 #line 5638 "sql_yacc.yy"
                     { (yyval.key_alg)= HA_KEY_ALG_RTREE; }
-#line 20450 "sql_yacc.cc"
+#line 21699 "sql_yacc.cc"
     break;
 
   case 766: /* btree_or_rtree: HASH_SYM  */
 #line 5639 "sql_yacc.yy"
                     { (yyval.key_alg)= HA_KEY_ALG_HASH; }
-#line 20456 "sql_yacc.cc"
+#line 21705 "sql_yacc.cc"
     break;
 
   case 767: /* key_list: key_list ',' key_part order_dir  */
 #line 5643 "sql_yacc.yy"
                                           { Lex->col_list.push_back((yyvsp[-1].key_part)); }
-#line 20462 "sql_yacc.cc"
+#line 21711 "sql_yacc.cc"
     break;
 
   case 768: /* key_list: key_part order_dir  */
 #line 5644 "sql_yacc.yy"
                              { Lex->col_list.push_back((yyvsp[-1].key_part)); }
-#line 20468 "sql_yacc.cc"
+#line 21717 "sql_yacc.cc"
     break;
 
   case 769: /* key_part: ident  */
@@ -20474,7 +21723,7 @@ yyreduce:
             if ((yyval.key_part) == NULL)
               MYSQL_YYABORT;
           }
-#line 20478 "sql_yacc.cc"
+#line 21727 "sql_yacc.cc"
     break;
 
   case 770: /* key_part: ident '(' NUM ')'  */
@@ -20489,43 +21738,43 @@ yyreduce:
             if ((yyval.key_part) == NULL)
               MYSQL_YYABORT;
           }
-#line 20493 "sql_yacc.cc"
+#line 21742 "sql_yacc.cc"
     break;
 
   case 771: /* opt_ident: %empty  */
 #line 5668 "sql_yacc.yy"
                       { (yyval.simple_string)=(char*) 0; /* Default length */ }
-#line 20499 "sql_yacc.cc"
+#line 21748 "sql_yacc.cc"
     break;
 
   case 772: /* opt_ident: field_ident  */
 #line 5669 "sql_yacc.yy"
                       { (yyval.simple_string)=(yyvsp[0].lex_str).str; }
-#line 20505 "sql_yacc.cc"
+#line 21754 "sql_yacc.cc"
     break;
 
   case 773: /* opt_component: %empty  */
 #line 5673 "sql_yacc.yy"
                          { (yyval.lex_str)= null_lex_str; }
-#line 20511 "sql_yacc.cc"
+#line 21760 "sql_yacc.cc"
     break;
 
   case 774: /* opt_component: '.' ident  */
 #line 5674 "sql_yacc.yy"
                          { (yyval.lex_str)= (yyvsp[0].lex_str); }
-#line 20517 "sql_yacc.cc"
+#line 21766 "sql_yacc.cc"
     break;
 
   case 775: /* string_list: text_string  */
 #line 5678 "sql_yacc.yy"
                       { Lex->interval_list.push_back((yyvsp[0].string)); }
-#line 20523 "sql_yacc.cc"
+#line 21772 "sql_yacc.cc"
     break;
 
   case 776: /* string_list: string_list ',' text_string  */
 #line 5679 "sql_yacc.yy"
                                       { Lex->interval_list.push_back((yyvsp[0].string)); }
-#line 20529 "sql_yacc.cc"
+#line 21778 "sql_yacc.cc"
     break;
 
   case 777: /* $@59: %empty  */
@@ -20552,13 +21801,13 @@ yyreduce:
             lex->no_write_to_binlog= 0;
             lex->create_info.storage_media= HA_SM_DEFAULT;
           }
-#line 20556 "sql_yacc.cc"
+#line 21805 "sql_yacc.cc"
     break;
 
   case 778: /* alter: ALTER opt_ignore TABLE_SYM table_ident $@59 alter_commands  */
 #line 5710 "sql_yacc.yy"
           {}
-#line 20562 "sql_yacc.cc"
+#line 21811 "sql_yacc.cc"
     break;
 
   case 779: /* $@60: %empty  */
@@ -20567,7 +21816,7 @@ yyreduce:
             Lex->create_info.default_table_charset= NULL;
             Lex->create_info.used_fields= 0;
           }
-#line 20571 "sql_yacc.cc"
+#line 21820 "sql_yacc.cc"
     break;
 
   case 780: /* alter: ALTER DATABASE ident_or_empty $@60 create_database_options  */
@@ -20580,7 +21829,7 @@ yyreduce:
                 lex->copy_db_to(&lex->name.str, &lex->name.length))
               MYSQL_YYABORT;
           }
-#line 20584 "sql_yacc.cc"
+#line 21833 "sql_yacc.cc"
     break;
 
   case 781: /* alter: ALTER DATABASE ident UPGRADE_SYM DATA_SYM DIRECTORY_SYM NAME_SYM  */
@@ -20595,7 +21844,7 @@ yyreduce:
             lex->sql_command= SQLCOM_ALTER_DB_UPGRADE;
             lex->name= (yyvsp[-4].lex_str);
           }
-#line 20599 "sql_yacc.cc"
+#line 21848 "sql_yacc.cc"
     break;
 
   case 782: /* $@61: %empty  */
@@ -20610,7 +21859,7 @@ yyreduce:
             }
             bzero((char *)&lex->sp_chistics, sizeof(st_sp_chistics));
           }
-#line 20614 "sql_yacc.cc"
+#line 21863 "sql_yacc.cc"
     break;
 
   case 783: /* alter: ALTER PROCEDURE sp_name $@61 sp_a_chistics  */
@@ -20621,7 +21870,7 @@ yyreduce:
             lex->sql_command= SQLCOM_ALTER_PROCEDURE;
             lex->spname= (yyvsp[-2].spname);
           }
-#line 20625 "sql_yacc.cc"
+#line 21874 "sql_yacc.cc"
     break;
 
   case 784: /* $@62: %empty  */
@@ -20636,7 +21885,7 @@ yyreduce:
             }
             bzero((char *)&lex->sp_chistics, sizeof(st_sp_chistics));
           }
-#line 20640 "sql_yacc.cc"
+#line 21889 "sql_yacc.cc"
     break;
 
   case 785: /* alter: ALTER FUNCTION_SYM sp_name $@62 sp_a_chistics  */
@@ -20647,7 +21896,7 @@ yyreduce:
             lex->sql_command= SQLCOM_ALTER_FUNCTION;
             lex->spname= (yyvsp[-2].spname);
           }
-#line 20651 "sql_yacc.cc"
+#line 21900 "sql_yacc.cc"
     break;
 
   case 786: /* $@63: %empty  */
@@ -20662,13 +21911,13 @@ yyreduce:
             }
             lex->create_view_mode= VIEW_ALTER;
           }
-#line 20666 "sql_yacc.cc"
+#line 21915 "sql_yacc.cc"
     break;
 
   case 787: /* alter: ALTER view_algorithm definer_opt $@63 view_tail  */
 #line 5784 "sql_yacc.yy"
           {}
-#line 20672 "sql_yacc.cc"
+#line 21921 "sql_yacc.cc"
     break;
 
   case 788: /* $@64: %empty  */
@@ -20684,13 +21933,13 @@ yyreduce:
             lex->create_view_algorithm= VIEW_ALGORITHM_UNDEFINED;
             lex->create_view_mode= VIEW_ALTER;
           }
-#line 20688 "sql_yacc.cc"
+#line 21937 "sql_yacc.cc"
     break;
 
   case 789: /* alter: ALTER definer_opt $@64 view_tail  */
 #line 5803 "sql_yacc.yy"
           {}
-#line 20694 "sql_yacc.cc"
+#line 21943 "sql_yacc.cc"
     break;
 
   case 790: /* $@65: %empty  */
@@ -20710,7 +21959,7 @@ yyreduce:
 
             Lex->sql_command= SQLCOM_ALTER_EVENT;
           }
-#line 20714 "sql_yacc.cc"
+#line 21963 "sql_yacc.cc"
     break;
 
   case 791: /* alter: ALTER definer_opt EVENT_SYM sp_name $@65 ev_alter_on_schedule_completion opt_ev_rename_to opt_ev_status opt_ev_comment opt_ev_sql_stmt  */
@@ -20727,7 +21976,7 @@ yyreduce:
             */
             Lex->sql_command= SQLCOM_ALTER_EVENT;
           }
-#line 20731 "sql_yacc.cc"
+#line 21980 "sql_yacc.cc"
     break;
 
   case 792: /* alter: ALTER TABLESPACE alter_tablespace_info  */
@@ -20736,7 +21985,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->ts_cmd_type= ALTER_TABLESPACE;
           }
-#line 20740 "sql_yacc.cc"
+#line 21989 "sql_yacc.cc"
     break;
 
   case 793: /* alter: ALTER LOGFILE_SYM GROUP_SYM alter_logfile_group_info  */
@@ -20745,7 +21994,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->ts_cmd_type= ALTER_LOGFILE_GROUP;
           }
-#line 20749 "sql_yacc.cc"
+#line 21998 "sql_yacc.cc"
     break;
 
   case 794: /* alter: ALTER TABLESPACE change_tablespace_info  */
@@ -20754,7 +22003,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->ts_cmd_type= CHANGE_FILE_TABLESPACE;
           }
-#line 20758 "sql_yacc.cc"
+#line 22007 "sql_yacc.cc"
     break;
 
   case 795: /* alter: ALTER TABLESPACE change_tablespace_access  */
@@ -20763,7 +22012,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->ts_cmd_type= ALTER_ACCESS_MODE_TABLESPACE;
           }
-#line 20767 "sql_yacc.cc"
+#line 22016 "sql_yacc.cc"
     break;
 
   case 796: /* alter: ALTER SERVER_SYM ident_or_text OPTIONS_SYM '(' server_options_list ')'  */
@@ -20774,37 +22023,37 @@ yyreduce:
             lex->server_options.server_name= (yyvsp[-4].lex_str).str;
             lex->server_options.server_name_length= (yyvsp[-4].lex_str).length;
           }
-#line 20778 "sql_yacc.cc"
+#line 22027 "sql_yacc.cc"
     break;
 
   case 797: /* ev_alter_on_schedule_completion: %empty  */
 #line 5867 "sql_yacc.yy"
                       { (yyval.num)= 0;}
-#line 20784 "sql_yacc.cc"
+#line 22033 "sql_yacc.cc"
     break;
 
   case 798: /* ev_alter_on_schedule_completion: ON SCHEDULE_SYM ev_schedule_time  */
 #line 5868 "sql_yacc.yy"
                                            { (yyval.num)= 1; }
-#line 20790 "sql_yacc.cc"
+#line 22039 "sql_yacc.cc"
     break;
 
   case 799: /* ev_alter_on_schedule_completion: ev_on_completion  */
 #line 5869 "sql_yacc.yy"
                            { (yyval.num)= 1; }
-#line 20796 "sql_yacc.cc"
+#line 22045 "sql_yacc.cc"
     break;
 
   case 800: /* ev_alter_on_schedule_completion: ON SCHEDULE_SYM ev_schedule_time ev_on_completion  */
 #line 5870 "sql_yacc.yy"
                                                             { (yyval.num)= 1; }
-#line 20802 "sql_yacc.cc"
+#line 22051 "sql_yacc.cc"
     break;
 
   case 801: /* opt_ev_rename_to: %empty  */
 #line 5874 "sql_yacc.yy"
                       { (yyval.num)= 0;}
-#line 20808 "sql_yacc.cc"
+#line 22057 "sql_yacc.cc"
     break;
 
   case 802: /* opt_ev_rename_to: RENAME TO_SYM sp_name  */
@@ -20817,43 +22066,43 @@ yyreduce:
             Lex->spname= (yyvsp[0].spname); 
             (yyval.num)= 1;
           }
-#line 20821 "sql_yacc.cc"
+#line 22070 "sql_yacc.cc"
     break;
 
   case 803: /* opt_ev_sql_stmt: %empty  */
 #line 5887 "sql_yacc.yy"
                      { (yyval.num)= 0;}
-#line 20827 "sql_yacc.cc"
+#line 22076 "sql_yacc.cc"
     break;
 
   case 804: /* opt_ev_sql_stmt: DO_SYM ev_sql_stmt  */
 #line 5888 "sql_yacc.yy"
                              { (yyval.num)= 1; }
-#line 20833 "sql_yacc.cc"
+#line 22082 "sql_yacc.cc"
     break;
 
   case 805: /* ident_or_empty: %empty  */
 #line 5892 "sql_yacc.yy"
                       { (yyval.lex_str).str= 0; (yyval.lex_str).length= 0; }
-#line 20839 "sql_yacc.cc"
+#line 22088 "sql_yacc.cc"
     break;
 
   case 806: /* ident_or_empty: ident  */
 #line 5893 "sql_yacc.yy"
                 { (yyval.lex_str)= (yyvsp[0].lex_str); }
-#line 20845 "sql_yacc.cc"
+#line 22094 "sql_yacc.cc"
     break;
 
   case 808: /* alter_commands: DISCARD TABLESPACE  */
 #line 5898 "sql_yacc.yy"
                              { Lex->alter_info.tablespace_op= DISCARD_TABLESPACE; }
-#line 20851 "sql_yacc.cc"
+#line 22100 "sql_yacc.cc"
     break;
 
   case 809: /* alter_commands: IMPORT TABLESPACE  */
 #line 5899 "sql_yacc.yy"
                             { Lex->alter_info.tablespace_op= IMPORT_TABLESPACE; }
-#line 20857 "sql_yacc.cc"
+#line 22106 "sql_yacc.cc"
     break;
 
   case 815: /* alter_commands: DROP PARTITION_SYM alt_part_name_list  */
@@ -20861,7 +22110,7 @@ yyreduce:
           {
             Lex->alter_info.flags|= ALTER_DROP_PARTITION;
           }
-#line 20865 "sql_yacc.cc"
+#line 22114 "sql_yacc.cc"
     break;
 
   case 816: /* alter_commands: REBUILD_SYM PARTITION_SYM opt_no_write_to_binlog all_or_alt_part_name_list  */
@@ -20871,7 +22120,7 @@ yyreduce:
             lex->alter_info.flags|= ALTER_REBUILD_PARTITION;
             lex->no_write_to_binlog= (yyvsp[-1].num);
           }
-#line 20875 "sql_yacc.cc"
+#line 22124 "sql_yacc.cc"
     break;
 
   case 817: /* $@66: %empty  */
@@ -20883,7 +22132,7 @@ yyreduce:
             lex->no_write_to_binlog= (yyvsp[-1].num);
             lex->check_opt.init();
           }
-#line 20887 "sql_yacc.cc"
+#line 22136 "sql_yacc.cc"
     break;
 
   case 819: /* alter_commands: ANALYZE_SYM PARTITION_SYM opt_no_write_to_binlog all_or_alt_part_name_list  */
@@ -20895,7 +22144,7 @@ yyreduce:
             lex->no_write_to_binlog= (yyvsp[-1].num);
             lex->check_opt.init();
           }
-#line 20899 "sql_yacc.cc"
+#line 22148 "sql_yacc.cc"
     break;
 
   case 820: /* $@67: %empty  */
@@ -20906,7 +22155,7 @@ yyreduce:
             lex->alter_info.flags|= ALTER_ADMIN_PARTITION;
             lex->check_opt.init();
           }
-#line 20910 "sql_yacc.cc"
+#line 22159 "sql_yacc.cc"
     break;
 
   case 822: /* $@68: %empty  */
@@ -20918,7 +22167,7 @@ yyreduce:
             lex->no_write_to_binlog= (yyvsp[-1].num);
             lex->check_opt.init();
           }
-#line 20922 "sql_yacc.cc"
+#line 22171 "sql_yacc.cc"
     break;
 
   case 824: /* alter_commands: COALESCE PARTITION_SYM opt_no_write_to_binlog real_ulong_num  */
@@ -20929,7 +22178,7 @@ yyreduce:
             lex->no_write_to_binlog= (yyvsp[-1].num);
             lex->alter_info.no_parts= (yyvsp[0].ulong_num);
           }
-#line 20933 "sql_yacc.cc"
+#line 22182 "sql_yacc.cc"
     break;
 
   case 826: /* remove_partitioning: REMOVE_SYM PARTITIONING_SYM  */
@@ -20937,7 +22186,7 @@ yyreduce:
           {
             Lex->alter_info.flags|= ALTER_REMOVE_PARTITIONING;
           }
-#line 20941 "sql_yacc.cc"
+#line 22190 "sql_yacc.cc"
     break;
 
   case 827: /* all_or_alt_part_name_list: ALL  */
@@ -20945,7 +22194,7 @@ yyreduce:
           {
             Lex->alter_info.flags|= ALTER_ALL_PARTITION;
           }
-#line 20949 "sql_yacc.cc"
+#line 22198 "sql_yacc.cc"
     break;
 
   case 829: /* $@69: %empty  */
@@ -20961,13 +22210,13 @@ yyreduce:
             lex->alter_info.flags|= ALTER_ADD_PARTITION;
             lex->no_write_to_binlog= (yyvsp[0].num);
           }
-#line 20965 "sql_yacc.cc"
+#line 22214 "sql_yacc.cc"
     break;
 
   case 830: /* add_partition_rule: ADD PARTITION_SYM opt_no_write_to_binlog $@69 add_part_extra  */
 #line 6002 "sql_yacc.yy"
           {}
-#line 20971 "sql_yacc.cc"
+#line 22220 "sql_yacc.cc"
     break;
 
   case 832: /* add_part_extra: '(' part_def_list ')'  */
@@ -20976,7 +22225,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->part_info->no_parts= lex->part_info->partitions.elements;
           }
-#line 20980 "sql_yacc.cc"
+#line 22229 "sql_yacc.cc"
     break;
 
   case 833: /* add_part_extra: PARTITIONS_SYM real_ulong_num  */
@@ -20985,7 +22234,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->part_info->no_parts= (yyvsp[0].ulong_num);
           }
-#line 20989 "sql_yacc.cc"
+#line 22238 "sql_yacc.cc"
     break;
 
   case 834: /* $@70: %empty  */
@@ -21000,7 +22249,7 @@ yyreduce:
             }
             lex->no_write_to_binlog= (yyvsp[0].num);
           }
-#line 21004 "sql_yacc.cc"
+#line 22253 "sql_yacc.cc"
     break;
 
   case 836: /* reorg_parts_rule: %empty  */
@@ -21008,7 +22257,7 @@ yyreduce:
           {
             Lex->alter_info.flags|= ALTER_TABLE_REORG;
           }
-#line 21012 "sql_yacc.cc"
+#line 22261 "sql_yacc.cc"
     break;
 
   case 837: /* $@71: %empty  */
@@ -21016,7 +22265,7 @@ yyreduce:
           {
             Lex->alter_info.flags|= ALTER_REORGANIZE_PARTITION;
           }
-#line 21020 "sql_yacc.cc"
+#line 22269 "sql_yacc.cc"
     break;
 
   case 838: /* reorg_parts_rule: alt_part_name_list $@71 INTO '(' part_def_list ')'  */
@@ -21025,19 +22274,19 @@ yyreduce:
             LEX *lex= Lex;
             lex->part_info->no_parts= lex->part_info->partitions.elements;
           }
-#line 21029 "sql_yacc.cc"
+#line 22278 "sql_yacc.cc"
     break;
 
   case 839: /* alt_part_name_list: alt_part_name_item  */
 #line 6051 "sql_yacc.yy"
                              {}
-#line 21035 "sql_yacc.cc"
+#line 22284 "sql_yacc.cc"
     break;
 
   case 840: /* alt_part_name_list: alt_part_name_list ',' alt_part_name_item  */
 #line 6052 "sql_yacc.yy"
                                                     {}
-#line 21041 "sql_yacc.cc"
+#line 22290 "sql_yacc.cc"
     break;
 
   case 841: /* alt_part_name_item: ident  */
@@ -21049,7 +22298,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 21053 "sql_yacc.cc"
+#line 22302 "sql_yacc.cc"
     break;
 
   case 844: /* add_column: ADD opt_column  */
@@ -21059,13 +22308,13 @@ yyreduce:
             lex->change=0;
             lex->alter_info.flags|= ALTER_ADD_COLUMN;
           }
-#line 21063 "sql_yacc.cc"
+#line 22312 "sql_yacc.cc"
     break;
 
   case 845: /* alter_list_item: add_column column_def opt_place  */
 #line 6085 "sql_yacc.yy"
                                           { }
-#line 21069 "sql_yacc.cc"
+#line 22318 "sql_yacc.cc"
     break;
 
   case 846: /* alter_list_item: ADD key_def  */
@@ -21073,7 +22322,7 @@ yyreduce:
           {
             Lex->alter_info.flags|= ALTER_ADD_INDEX;
           }
-#line 21077 "sql_yacc.cc"
+#line 22326 "sql_yacc.cc"
     break;
 
   case 847: /* alter_list_item: add_column '(' field_list ')'  */
@@ -21081,7 +22330,7 @@ yyreduce:
           {
             Lex->alter_info.flags|= ALTER_ADD_COLUMN | ALTER_ADD_INDEX;
           }
-#line 21085 "sql_yacc.cc"
+#line 22334 "sql_yacc.cc"
     break;
 
   case 848: /* $@72: %empty  */
@@ -21091,7 +22340,7 @@ yyreduce:
             lex->change= (yyvsp[0].lex_str).str;
             lex->alter_info.flags|= ALTER_CHANGE_COLUMN;
           }
-#line 21095 "sql_yacc.cc"
+#line 22344 "sql_yacc.cc"
     break;
 
   case 850: /* $@73: %empty  */
@@ -21104,7 +22353,7 @@ yyreduce:
             lex->charset= NULL;
             lex->alter_info.flags|= ALTER_CHANGE_COLUMN;
           }
-#line 21108 "sql_yacc.cc"
+#line 22357 "sql_yacc.cc"
     break;
 
   case 851: /* $@74: %empty  */
@@ -21120,7 +22369,7 @@ yyreduce:
                                   lex->uint_geom_type))
               MYSQL_YYABORT;
           }
-#line 21124 "sql_yacc.cc"
+#line 22373 "sql_yacc.cc"
     break;
 
   case 853: /* alter_list_item: DROP opt_column field_ident opt_restrict  */
@@ -21133,7 +22382,7 @@ yyreduce:
             lex->alter_info.drop_list.push_back(ad);
             lex->alter_info.flags|= ALTER_DROP_COLUMN;
           }
-#line 21137 "sql_yacc.cc"
+#line 22386 "sql_yacc.cc"
     break;
 
   case 854: /* alter_list_item: DROP FOREIGN KEY_SYM opt_ident  */
@@ -21141,7 +22390,7 @@ yyreduce:
           {
             Lex->alter_info.flags|= ALTER_DROP_INDEX | ALTER_FOREIGN_KEY;
           }
-#line 21145 "sql_yacc.cc"
+#line 22394 "sql_yacc.cc"
     break;
 
   case 855: /* alter_list_item: DROP PRIMARY_SYM KEY_SYM  */
@@ -21154,7 +22403,7 @@ yyreduce:
             lex->alter_info.drop_list.push_back(ad);
             lex->alter_info.flags|= ALTER_DROP_INDEX;
           }
-#line 21158 "sql_yacc.cc"
+#line 22407 "sql_yacc.cc"
     break;
 
   case 856: /* alter_list_item: DROP key_or_index field_ident  */
@@ -21167,7 +22416,7 @@ yyreduce:
             lex->alter_info.drop_list.push_back(ad);
             lex->alter_info.flags|= ALTER_DROP_INDEX;
           }
-#line 21171 "sql_yacc.cc"
+#line 22420 "sql_yacc.cc"
     break;
 
   case 857: /* alter_list_item: DISABLE_SYM KEYS  */
@@ -21177,7 +22426,7 @@ yyreduce:
             lex->alter_info.keys_onoff= DISABLE;
             lex->alter_info.flags|= ALTER_KEYS_ONOFF;
           }
-#line 21181 "sql_yacc.cc"
+#line 22430 "sql_yacc.cc"
     break;
 
   case 858: /* alter_list_item: ENABLE_SYM KEYS  */
@@ -21187,7 +22436,7 @@ yyreduce:
             lex->alter_info.keys_onoff= ENABLE;
             lex->alter_info.flags|= ALTER_KEYS_ONOFF;
           }
-#line 21191 "sql_yacc.cc"
+#line 22440 "sql_yacc.cc"
     break;
 
   case 859: /* alter_list_item: ALTER opt_column field_ident SET DEFAULT signed_literal  */
@@ -21200,7 +22449,7 @@ yyreduce:
             lex->alter_info.alter_list.push_back(ac);
             lex->alter_info.flags|= ALTER_CHANGE_COLUMN_DEFAULT;
           }
-#line 21204 "sql_yacc.cc"
+#line 22453 "sql_yacc.cc"
     break;
 
   case 860: /* alter_list_item: ALTER opt_column field_ident DROP DEFAULT  */
@@ -21213,7 +22462,7 @@ yyreduce:
             lex->alter_info.alter_list.push_back(ac);
             lex->alter_info.flags|= ALTER_CHANGE_COLUMN_DEFAULT;
           }
-#line 21217 "sql_yacc.cc"
+#line 22466 "sql_yacc.cc"
     break;
 
   case 861: /* alter_list_item: RENAME opt_to table_ident  */
@@ -21236,7 +22485,7 @@ yyreduce:
             lex->name= (yyvsp[0].table)->table;
             lex->alter_info.flags|= ALTER_RENAME;
           }
-#line 21240 "sql_yacc.cc"
+#line 22489 "sql_yacc.cc"
     break;
 
   case 862: /* alter_list_item: CONVERT_SYM TO_SYM charset charset_name_or_default opt_collate  */
@@ -21261,7 +22510,7 @@ yyreduce:
               HA_CREATE_USED_DEFAULT_CHARSET);
             lex->alter_info.flags|= ALTER_CONVERT;
           }
-#line 21265 "sql_yacc.cc"
+#line 22514 "sql_yacc.cc"
     break;
 
   case 863: /* alter_list_item: create_table_options_space_separated  */
@@ -21270,7 +22519,7 @@ yyreduce:
             LEX *lex=Lex;
             lex->alter_info.flags|= ALTER_OPTIONS;
           }
-#line 21274 "sql_yacc.cc"
+#line 22523 "sql_yacc.cc"
     break;
 
   case 864: /* alter_list_item: FORCE_SYM  */
@@ -21278,7 +22527,7 @@ yyreduce:
           {
             Lex->alter_info.flags|= ALTER_FORCE;
           }
-#line 21282 "sql_yacc.cc"
+#line 22531 "sql_yacc.cc"
     break;
 
   case 865: /* alter_list_item: alter_order_clause  */
@@ -21287,103 +22536,103 @@ yyreduce:
             LEX *lex=Lex;
             lex->alter_info.flags|= ALTER_ORDER;
           }
-#line 21291 "sql_yacc.cc"
+#line 22540 "sql_yacc.cc"
     break;
 
   case 866: /* opt_column: %empty  */
 #line 6241 "sql_yacc.yy"
                       {}
-#line 21297 "sql_yacc.cc"
+#line 22546 "sql_yacc.cc"
     break;
 
   case 867: /* opt_column: COLUMN_SYM  */
 #line 6242 "sql_yacc.yy"
                      {}
-#line 21303 "sql_yacc.cc"
+#line 22552 "sql_yacc.cc"
     break;
 
   case 868: /* opt_ignore: %empty  */
 #line 6246 "sql_yacc.yy"
                       { Lex->ignore= 0;}
-#line 21309 "sql_yacc.cc"
+#line 22558 "sql_yacc.cc"
     break;
 
   case 869: /* opt_ignore: IGNORE_SYM  */
 #line 6247 "sql_yacc.yy"
                      { Lex->ignore= 1;}
-#line 21315 "sql_yacc.cc"
+#line 22564 "sql_yacc.cc"
     break;
 
   case 870: /* opt_async_commit: %empty  */
 #line 6251 "sql_yacc.yy"
                             { Lex->async_commit= 0;}
-#line 21321 "sql_yacc.cc"
+#line 22570 "sql_yacc.cc"
     break;
 
   case 871: /* opt_async_commit: ASYNC_COMMIT_SYM  */
 #line 6252 "sql_yacc.yy"
                             { Lex->async_commit= 1;}
-#line 21327 "sql_yacc.cc"
+#line 22576 "sql_yacc.cc"
     break;
 
   case 872: /* opt_restrict: %empty  */
 #line 6256 "sql_yacc.yy"
                       { Lex->drop_mode= DROP_DEFAULT; }
-#line 21333 "sql_yacc.cc"
+#line 22582 "sql_yacc.cc"
     break;
 
   case 873: /* opt_restrict: RESTRICT  */
 #line 6257 "sql_yacc.yy"
                       { Lex->drop_mode= DROP_RESTRICT; }
-#line 21339 "sql_yacc.cc"
+#line 22588 "sql_yacc.cc"
     break;
 
   case 874: /* opt_restrict: CASCADE  */
 #line 6258 "sql_yacc.yy"
                       { Lex->drop_mode= DROP_CASCADE; }
-#line 21345 "sql_yacc.cc"
+#line 22594 "sql_yacc.cc"
     break;
 
   case 875: /* opt_place: %empty  */
 #line 6262 "sql_yacc.yy"
                       {}
-#line 21351 "sql_yacc.cc"
+#line 22600 "sql_yacc.cc"
     break;
 
   case 876: /* opt_place: AFTER_SYM ident  */
 #line 6263 "sql_yacc.yy"
                           { store_position_for_column((yyvsp[0].lex_str).str); }
-#line 21357 "sql_yacc.cc"
+#line 22606 "sql_yacc.cc"
     break;
 
   case 877: /* opt_place: FIRST_SYM  */
 #line 6264 "sql_yacc.yy"
                      { store_position_for_column(first_keyword); }
-#line 21363 "sql_yacc.cc"
+#line 22612 "sql_yacc.cc"
     break;
 
   case 878: /* opt_to: %empty  */
 #line 6268 "sql_yacc.yy"
                       {}
-#line 21369 "sql_yacc.cc"
+#line 22618 "sql_yacc.cc"
     break;
 
   case 879: /* opt_to: TO_SYM  */
 #line 6269 "sql_yacc.yy"
                  {}
-#line 21375 "sql_yacc.cc"
+#line 22624 "sql_yacc.cc"
     break;
 
   case 880: /* opt_to: EQ  */
 #line 6270 "sql_yacc.yy"
              {}
-#line 21381 "sql_yacc.cc"
+#line 22630 "sql_yacc.cc"
     break;
 
   case 881: /* opt_to: AS  */
 #line 6271 "sql_yacc.yy"
              {}
-#line 21387 "sql_yacc.cc"
+#line 22636 "sql_yacc.cc"
     break;
 
   case 882: /* $@75: %empty  */
@@ -21396,13 +22645,13 @@ yyreduce:
             bzero((char*) &lex->mi, sizeof(lex->mi));
             /* If you change this code don't forget to update SLAVE START too */
           }
-#line 21400 "sql_yacc.cc"
+#line 22649 "sql_yacc.cc"
     break;
 
   case 883: /* slave: START_SYM SLAVE slave_thread_opts $@75 slave_until  */
 #line 6289 "sql_yacc.yy"
           {}
-#line 21406 "sql_yacc.cc"
+#line 22655 "sql_yacc.cc"
     break;
 
   case 884: /* slave: STOP_SYM SLAVE slave_thread_opts  */
@@ -21413,7 +22662,7 @@ yyreduce:
             lex->type = 0;
             /* If you change this code don't forget to update SLAVE STOP too */
           }
-#line 21417 "sql_yacc.cc"
+#line 22666 "sql_yacc.cc"
     break;
 
   case 885: /* $@76: %empty  */
@@ -21425,13 +22674,13 @@ yyreduce:
             /* We'll use mi structure for UNTIL options */
             bzero((char*) &lex->mi, sizeof(lex->mi));
           }
-#line 21429 "sql_yacc.cc"
+#line 22678 "sql_yacc.cc"
     break;
 
   case 886: /* slave: SLAVE START_SYM slave_thread_opts $@76 slave_until  */
 #line 6306 "sql_yacc.yy"
           {}
-#line 21435 "sql_yacc.cc"
+#line 22684 "sql_yacc.cc"
     break;
 
   case 887: /* slave: SLAVE STOP_SYM slave_thread_opts  */
@@ -21441,7 +22690,7 @@ yyreduce:
             lex->sql_command = SQLCOM_SLAVE_STOP;
             lex->type = 0;
           }
-#line 21445 "sql_yacc.cc"
+#line 22694 "sql_yacc.cc"
     break;
 
   case 888: /* start: START_SYM TRANSACTION_SYM start_transaction_opts  */
@@ -21451,13 +22700,13 @@ yyreduce:
             lex->sql_command= SQLCOM_BEGIN;
             lex->start_transaction_opt= (yyvsp[0].num);
           }
-#line 21455 "sql_yacc.cc"
+#line 22704 "sql_yacc.cc"
     break;
 
   case 889: /* start_transaction_opts: %empty  */
 #line 6325 "sql_yacc.yy"
                     { (yyval.num) = 0; }
-#line 21461 "sql_yacc.cc"
+#line 22710 "sql_yacc.cc"
     break;
 
   case 890: /* start_transaction_opts: WITH CONSISTENT_SYM SNAPSHOT_SYM  */
@@ -21465,7 +22714,7 @@ yyreduce:
           {
             (yyval.num)= MYSQL_START_TRANS_OPT_WITH_CONS_SNAPSHOT;
           }
-#line 21469 "sql_yacc.cc"
+#line 22718 "sql_yacc.cc"
     break;
 
   case 891: /* start_transaction_opts: WITH CONSISTENT_SYM INNOBASE_SYM SNAPSHOT_SYM  */
@@ -21473,43 +22722,43 @@ yyreduce:
           {
              (yyval.num)= MYSQL_START_TRANS_OPT_WITH_CONS_INNODB_SNAPSHOT;
           }
-#line 21477 "sql_yacc.cc"
+#line 22726 "sql_yacc.cc"
     break;
 
   case 892: /* $@77: %empty  */
 #line 6337 "sql_yacc.yy"
           { Lex->slave_thd_opt= 0; }
-#line 21483 "sql_yacc.cc"
+#line 22732 "sql_yacc.cc"
     break;
 
   case 893: /* slave_thread_opts: $@77 slave_thread_opt_list  */
 #line 6339 "sql_yacc.yy"
           {}
-#line 21489 "sql_yacc.cc"
+#line 22738 "sql_yacc.cc"
     break;
 
   case 896: /* slave_thread_opt: %empty  */
 #line 6348 "sql_yacc.yy"
                     {}
-#line 21495 "sql_yacc.cc"
+#line 22744 "sql_yacc.cc"
     break;
 
   case 897: /* slave_thread_opt: SQL_THREAD  */
 #line 6349 "sql_yacc.yy"
                        { Lex->slave_thd_opt|=SLAVE_SQL; }
-#line 21501 "sql_yacc.cc"
+#line 22750 "sql_yacc.cc"
     break;
 
   case 898: /* slave_thread_opt: RELAY_THREAD  */
 #line 6350 "sql_yacc.yy"
                        { Lex->slave_thd_opt|=SLAVE_IO; }
-#line 21507 "sql_yacc.cc"
+#line 22756 "sql_yacc.cc"
     break;
 
   case 899: /* slave_until: %empty  */
 #line 6354 "sql_yacc.yy"
                     {}
-#line 21513 "sql_yacc.cc"
+#line 22762 "sql_yacc.cc"
     break;
 
   case 900: /* slave_until: UNTIL_SYM slave_until_opts  */
@@ -21526,7 +22775,7 @@ yyreduce:
                MYSQL_YYABORT;
             }
           }
-#line 21530 "sql_yacc.cc"
+#line 22779 "sql_yacc.cc"
     break;
 
   case 903: /* $@78: %empty  */
@@ -21534,7 +22783,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_RESTORE_TABLE;
           }
-#line 21538 "sql_yacc.cc"
+#line 22787 "sql_yacc.cc"
     break;
 
   case 904: /* restore: RESTORE_SYM table_or_tables $@78 table_list FROM TEXT_STRING_sys  */
@@ -21542,7 +22791,7 @@ yyreduce:
           {
             Lex->backup_dir = (yyvsp[0].lex_str).str;
           }
-#line 21546 "sql_yacc.cc"
+#line 22795 "sql_yacc.cc"
     break;
 
   case 905: /* $@79: %empty  */
@@ -21550,7 +22799,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_BACKUP_TABLE;
           }
-#line 21554 "sql_yacc.cc"
+#line 22803 "sql_yacc.cc"
     break;
 
   case 906: /* backup: BACKUP_SYM table_or_tables $@79 table_list TO_SYM TEXT_STRING_sys  */
@@ -21558,7 +22807,7 @@ yyreduce:
           {
             Lex->backup_dir = (yyvsp[0].lex_str).str;
           }
-#line 21562 "sql_yacc.cc"
+#line 22811 "sql_yacc.cc"
     break;
 
   case 907: /* $@80: %empty  */
@@ -21567,31 +22816,31 @@ yyreduce:
             LEX *lex=Lex;
             lex->sql_command = SQLCOM_CHECKSUM;
           }
-#line 21571 "sql_yacc.cc"
+#line 22820 "sql_yacc.cc"
     break;
 
   case 908: /* checksum: CHECKSUM_SYM table_or_tables $@80 table_list opt_checksum_type  */
 #line 6404 "sql_yacc.yy"
           {}
-#line 21577 "sql_yacc.cc"
+#line 22826 "sql_yacc.cc"
     break;
 
   case 909: /* opt_checksum_type: %empty  */
 #line 6408 "sql_yacc.yy"
                         { Lex->check_opt.flags= 0; }
-#line 21583 "sql_yacc.cc"
+#line 22832 "sql_yacc.cc"
     break;
 
   case 910: /* opt_checksum_type: QUICK  */
 #line 6409 "sql_yacc.yy"
                         { Lex->check_opt.flags= T_QUICK; }
-#line 21589 "sql_yacc.cc"
+#line 22838 "sql_yacc.cc"
     break;
 
   case 911: /* opt_checksum_type: EXTENDED_SYM  */
 #line 6410 "sql_yacc.yy"
                         { Lex->check_opt.flags= T_EXTEND; }
-#line 21595 "sql_yacc.cc"
+#line 22844 "sql_yacc.cc"
     break;
 
   case 912: /* $@81: %empty  */
@@ -21603,55 +22852,55 @@ yyreduce:
             lex->check_opt.init();
             lex->alter_info.reset();
           }
-#line 21607 "sql_yacc.cc"
+#line 22856 "sql_yacc.cc"
     break;
 
   case 913: /* repair: REPAIR opt_no_write_to_binlog table_or_tables $@81 table_list opt_mi_repair_type  */
 #line 6423 "sql_yacc.yy"
           {}
-#line 21613 "sql_yacc.cc"
+#line 22862 "sql_yacc.cc"
     break;
 
   case 914: /* opt_mi_repair_type: %empty  */
 #line 6427 "sql_yacc.yy"
                       { Lex->check_opt.flags = T_MEDIUM; }
-#line 21619 "sql_yacc.cc"
+#line 22868 "sql_yacc.cc"
     break;
 
   case 915: /* opt_mi_repair_type: mi_repair_types  */
 #line 6428 "sql_yacc.yy"
                           {}
-#line 21625 "sql_yacc.cc"
+#line 22874 "sql_yacc.cc"
     break;
 
   case 916: /* mi_repair_types: mi_repair_type  */
 #line 6432 "sql_yacc.yy"
                          {}
-#line 21631 "sql_yacc.cc"
+#line 22880 "sql_yacc.cc"
     break;
 
   case 917: /* mi_repair_types: mi_repair_type mi_repair_types  */
 #line 6433 "sql_yacc.yy"
                                          {}
-#line 21637 "sql_yacc.cc"
+#line 22886 "sql_yacc.cc"
     break;
 
   case 918: /* mi_repair_type: QUICK  */
 #line 6437 "sql_yacc.yy"
                        { Lex->check_opt.flags|= T_QUICK; }
-#line 21643 "sql_yacc.cc"
+#line 22892 "sql_yacc.cc"
     break;
 
   case 919: /* mi_repair_type: EXTENDED_SYM  */
 #line 6438 "sql_yacc.yy"
                        { Lex->check_opt.flags|= T_EXTEND; }
-#line 21649 "sql_yacc.cc"
+#line 22898 "sql_yacc.cc"
     break;
 
   case 920: /* mi_repair_type: USE_FRM  */
 #line 6439 "sql_yacc.yy"
                        { Lex->check_opt.sql_flags|= TT_USEFRM; }
-#line 21655 "sql_yacc.cc"
+#line 22904 "sql_yacc.cc"
     break;
 
   case 921: /* $@82: %empty  */
@@ -21663,13 +22912,13 @@ yyreduce:
             lex->check_opt.init();
             lex->alter_info.reset();
           }
-#line 21667 "sql_yacc.cc"
+#line 22916 "sql_yacc.cc"
     break;
 
   case 922: /* analyze: ANALYZE_SYM opt_no_write_to_binlog table_or_tables $@82 table_list  */
 #line 6452 "sql_yacc.yy"
           {}
-#line 21673 "sql_yacc.cc"
+#line 22922 "sql_yacc.cc"
     break;
 
   case 923: /* binlog_base64_event: BINLOG_SYM TEXT_STRING_sys  */
@@ -21678,7 +22927,7 @@ yyreduce:
             Lex->sql_command = SQLCOM_BINLOG_BASE64_EVENT;
             Lex->comment= (yyvsp[0].lex_str);
           }
-#line 21682 "sql_yacc.cc"
+#line 22931 "sql_yacc.cc"
     break;
 
   case 924: /* $@83: %empty  */
@@ -21695,73 +22944,73 @@ yyreduce:
             lex->check_opt.init();
             lex->alter_info.reset();
           }
-#line 21699 "sql_yacc.cc"
+#line 22948 "sql_yacc.cc"
     break;
 
   case 925: /* check: CHECK_SYM table_or_tables $@83 table_list opt_mi_check_type  */
 #line 6478 "sql_yacc.yy"
           {}
-#line 21705 "sql_yacc.cc"
+#line 22954 "sql_yacc.cc"
     break;
 
   case 926: /* opt_mi_check_type: %empty  */
 #line 6482 "sql_yacc.yy"
                       { Lex->check_opt.flags = T_MEDIUM; }
-#line 21711 "sql_yacc.cc"
+#line 22960 "sql_yacc.cc"
     break;
 
   case 927: /* opt_mi_check_type: mi_check_types  */
 #line 6483 "sql_yacc.yy"
                          {}
-#line 21717 "sql_yacc.cc"
+#line 22966 "sql_yacc.cc"
     break;
 
   case 928: /* mi_check_types: mi_check_type  */
 #line 6487 "sql_yacc.yy"
                         {}
-#line 21723 "sql_yacc.cc"
+#line 22972 "sql_yacc.cc"
     break;
 
   case 929: /* mi_check_types: mi_check_type mi_check_types  */
 #line 6488 "sql_yacc.yy"
                                        {}
-#line 21729 "sql_yacc.cc"
+#line 22978 "sql_yacc.cc"
     break;
 
   case 930: /* mi_check_type: QUICK  */
 #line 6492 "sql_yacc.yy"
                               { Lex->check_opt.flags|= T_QUICK; }
-#line 21735 "sql_yacc.cc"
+#line 22984 "sql_yacc.cc"
     break;
 
   case 931: /* mi_check_type: FAST_SYM  */
 #line 6493 "sql_yacc.yy"
                               { Lex->check_opt.flags|= T_FAST; }
-#line 21741 "sql_yacc.cc"
+#line 22990 "sql_yacc.cc"
     break;
 
   case 932: /* mi_check_type: MEDIUM_SYM  */
 #line 6494 "sql_yacc.yy"
                               { Lex->check_opt.flags|= T_MEDIUM; }
-#line 21747 "sql_yacc.cc"
+#line 22996 "sql_yacc.cc"
     break;
 
   case 933: /* mi_check_type: EXTENDED_SYM  */
 #line 6495 "sql_yacc.yy"
                               { Lex->check_opt.flags|= T_EXTEND; }
-#line 21753 "sql_yacc.cc"
+#line 23002 "sql_yacc.cc"
     break;
 
   case 934: /* mi_check_type: CHANGED  */
 #line 6496 "sql_yacc.yy"
                               { Lex->check_opt.flags|= T_CHECK_ONLY_CHANGED; }
-#line 21759 "sql_yacc.cc"
+#line 23008 "sql_yacc.cc"
     break;
 
   case 935: /* mi_check_type: FOR_SYM UPGRADE_SYM  */
 #line 6497 "sql_yacc.yy"
                               { Lex->check_opt.sql_flags|= TT_FOR_UPGRADE; }
-#line 21765 "sql_yacc.cc"
+#line 23014 "sql_yacc.cc"
     break;
 
   case 936: /* $@84: %empty  */
@@ -21773,31 +23022,31 @@ yyreduce:
             lex->check_opt.init();
             lex->alter_info.reset();
           }
-#line 21777 "sql_yacc.cc"
+#line 23026 "sql_yacc.cc"
     break;
 
   case 937: /* optimize: OPTIMIZE opt_no_write_to_binlog table_or_tables $@84 table_list  */
 #line 6510 "sql_yacc.yy"
           {}
-#line 21783 "sql_yacc.cc"
+#line 23032 "sql_yacc.cc"
     break;
 
   case 938: /* opt_no_write_to_binlog: %empty  */
 #line 6514 "sql_yacc.yy"
                       { (yyval.num)= 0; }
-#line 21789 "sql_yacc.cc"
+#line 23038 "sql_yacc.cc"
     break;
 
   case 939: /* opt_no_write_to_binlog: NO_WRITE_TO_BINLOG  */
 #line 6515 "sql_yacc.yy"
                              { (yyval.num)= 1; }
-#line 21795 "sql_yacc.cc"
+#line 23044 "sql_yacc.cc"
     break;
 
   case 940: /* opt_no_write_to_binlog: LOCAL_SYM  */
 #line 6516 "sql_yacc.yy"
                     { (yyval.num)= 1; }
-#line 21801 "sql_yacc.cc"
+#line 23050 "sql_yacc.cc"
     break;
 
   case 941: /* $@85: %empty  */
@@ -21805,13 +23054,13 @@ yyreduce:
           {
             Lex->sql_command= SQLCOM_RENAME_TABLE;
           }
-#line 21809 "sql_yacc.cc"
+#line 23058 "sql_yacc.cc"
     break;
 
   case 942: /* rename: RENAME table_or_tables $@85 table_to_table_list  */
 #line 6525 "sql_yacc.yy"
           {}
-#line 21815 "sql_yacc.cc"
+#line 23064 "sql_yacc.cc"
     break;
 
   case 943: /* rename: RENAME USER clear_privileges rename_list  */
@@ -21819,7 +23068,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_RENAME_USER;
           }
-#line 21823 "sql_yacc.cc"
+#line 23072 "sql_yacc.cc"
     break;
 
   case 944: /* rename_list: user TO_SYM user  */
@@ -21828,7 +23077,7 @@ yyreduce:
             if (Lex->users_list.push_back((yyvsp[-2].lex_user)) || Lex->users_list.push_back((yyvsp[0].lex_user)))
               MYSQL_YYABORT;
           }
-#line 21832 "sql_yacc.cc"
+#line 23081 "sql_yacc.cc"
     break;
 
   case 945: /* rename_list: rename_list ',' user TO_SYM user  */
@@ -21837,7 +23086,7 @@ yyreduce:
             if (Lex->users_list.push_back((yyvsp[-2].lex_user)) || Lex->users_list.push_back((yyvsp[0].lex_user)))
               MYSQL_YYABORT;
           }
-#line 21841 "sql_yacc.cc"
+#line 23090 "sql_yacc.cc"
     break;
 
   case 948: /* table_to_table: table_ident TO_SYM table_ident  */
@@ -21851,7 +23100,7 @@ yyreduce:
                                        TL_IGNORE))
               MYSQL_YYABORT;
           }
-#line 21855 "sql_yacc.cc"
+#line 23104 "sql_yacc.cc"
     break;
 
   case 949: /* keycache: CACHE_SYM INDEX_SYM keycache_list IN_SYM key_cache_name  */
@@ -21861,7 +23110,7 @@ yyreduce:
             lex->sql_command= SQLCOM_ASSIGN_TO_KEYCACHE;
             lex->ident= (yyvsp[0].lex_str);
           }
-#line 21865 "sql_yacc.cc"
+#line 23114 "sql_yacc.cc"
     break;
 
   case 952: /* assign_to_keycache: table_ident cache_keys_spec  */
@@ -21871,19 +23120,19 @@ yyreduce:
                                            Select->pop_index_hints()))
               MYSQL_YYABORT;
           }
-#line 21875 "sql_yacc.cc"
+#line 23124 "sql_yacc.cc"
     break;
 
   case 953: /* key_cache_name: ident  */
 #line 6587 "sql_yacc.yy"
                    { (yyval.lex_str)= (yyvsp[0].lex_str); }
-#line 21881 "sql_yacc.cc"
+#line 23130 "sql_yacc.cc"
     break;
 
   case 954: /* key_cache_name: DEFAULT  */
 #line 6588 "sql_yacc.yy"
                    { (yyval.lex_str) = default_key_cache_base; }
-#line 21887 "sql_yacc.cc"
+#line 23136 "sql_yacc.cc"
     break;
 
   case 955: /* $@86: %empty  */
@@ -21892,13 +23141,13 @@ yyreduce:
             LEX *lex=Lex;
             lex->sql_command=SQLCOM_PRELOAD_KEYS;
           }
-#line 21896 "sql_yacc.cc"
+#line 23145 "sql_yacc.cc"
     break;
 
   case 956: /* preload: LOAD INDEX_SYM INTO CACHE_SYM $@86 preload_list  */
 #line 6598 "sql_yacc.yy"
           {}
-#line 21902 "sql_yacc.cc"
+#line 23151 "sql_yacc.cc"
     break;
 
   case 959: /* preload_keys: table_ident cache_keys_spec opt_ignore_leaves  */
@@ -21908,7 +23157,7 @@ yyreduce:
                                            Select->pop_index_hints()))
               MYSQL_YYABORT;
           }
-#line 21912 "sql_yacc.cc"
+#line 23161 "sql_yacc.cc"
     break;
 
   case 960: /* $@87: %empty  */
@@ -21920,25 +23169,25 @@ yyreduce:
                                         INDEX_HINT_MASK_JOIN : 
                                         INDEX_HINT_MASK_ALL);
           }
-#line 21924 "sql_yacc.cc"
+#line 23173 "sql_yacc.cc"
     break;
 
   case 962: /* cache_key_list_or_empty: %empty  */
 #line 6627 "sql_yacc.yy"
                       { }
-#line 21930 "sql_yacc.cc"
+#line 23179 "sql_yacc.cc"
     break;
 
   case 964: /* opt_ignore_leaves: %empty  */
 #line 6633 "sql_yacc.yy"
           { (yyval.num)= 0; }
-#line 21936 "sql_yacc.cc"
+#line 23185 "sql_yacc.cc"
     break;
 
   case 965: /* opt_ignore_leaves: IGNORE_SYM LEAVES  */
 #line 6634 "sql_yacc.yy"
                             { (yyval.num)= TL_OPTION_IGNORE_LEAVES; }
-#line 21942 "sql_yacc.cc"
+#line 23191 "sql_yacc.cc"
     break;
 
   case 966: /* select: select_init  */
@@ -21947,7 +23196,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->sql_command= SQLCOM_SELECT;
           }
-#line 21951 "sql_yacc.cc"
+#line 23200 "sql_yacc.cc"
     break;
 
   case 969: /* select_paren: SELECT_SYM select_part2  */
@@ -21981,7 +23230,7 @@ yyreduce:
               sel->master_unit()->global_parameters=
                  sel->master_unit()->fake_select_lex;
           }
-#line 21985 "sql_yacc.cc"
+#line 23234 "sql_yacc.cc"
     break;
 
   case 971: /* $@88: %empty  */
@@ -22001,7 +23250,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 22005 "sql_yacc.cc"
+#line 23254 "sql_yacc.cc"
     break;
 
   case 973: /* $@89: %empty  */
@@ -22013,7 +23262,7 @@ yyreduce:
               mysql_init_select(lex);
             lex->current_select->parsing_place= SELECT_LIST;
           }
-#line 22017 "sql_yacc.cc"
+#line 23266 "sql_yacc.cc"
     break;
 
   case 974: /* $@90: %empty  */
@@ -22021,13 +23270,13 @@ yyreduce:
           {
             Select->parsing_place= NO_MATTER;
           }
-#line 22025 "sql_yacc.cc"
+#line 23274 "sql_yacc.cc"
     break;
 
   case 976: /* select_into: opt_order_clause opt_limit_clause  */
 #line 6726 "sql_yacc.yy"
                                             {}
-#line 22031 "sql_yacc.cc"
+#line 23280 "sql_yacc.cc"
     break;
 
   case 981: /* select_from: FROM join_table_list where_clause group_clause having_clause opt_order_clause opt_limit_clause procedure_clause  */
@@ -22037,7 +23286,7 @@ yyreduce:
               Select->context.first_name_resolution_table= 
                 (TABLE_LIST *) Select->table_list.first;
           }
-#line 22041 "sql_yacc.cc"
+#line 23290 "sql_yacc.cc"
     break;
 
   case 984: /* select_options: select_option_list  */
@@ -22049,13 +23298,13 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 22053 "sql_yacc.cc"
+#line 23302 "sql_yacc.cc"
     break;
 
   case 987: /* select_option: STRAIGHT_JOIN  */
 #line 6766 "sql_yacc.yy"
                         { Select->options|= SELECT_STRAIGHT_JOIN; }
-#line 22059 "sql_yacc.cc"
+#line 23308 "sql_yacc.cc"
     break;
 
   case 988: /* select_option: HIGH_PRIORITY  */
@@ -22066,25 +23315,25 @@ yyreduce:
             Lex->lock_option=  TL_READ_HIGH_PRIORITY;
             Lex->current_select->lock_option= TL_READ_HIGH_PRIORITY;
           }
-#line 22070 "sql_yacc.cc"
+#line 23319 "sql_yacc.cc"
     break;
 
   case 989: /* select_option: DISTINCT  */
 #line 6774 "sql_yacc.yy"
                            { Select->options|= SELECT_DISTINCT; }
-#line 22076 "sql_yacc.cc"
+#line 23325 "sql_yacc.cc"
     break;
 
   case 990: /* select_option: SQL_SMALL_RESULT  */
 #line 6775 "sql_yacc.yy"
                            { Select->options|= SELECT_SMALL_RESULT; }
-#line 22082 "sql_yacc.cc"
+#line 23331 "sql_yacc.cc"
     break;
 
   case 991: /* select_option: SQL_BIG_RESULT  */
 #line 6776 "sql_yacc.yy"
                            { Select->options|= SELECT_BIG_RESULT; }
-#line 22088 "sql_yacc.cc"
+#line 23337 "sql_yacc.cc"
     break;
 
   case 992: /* select_option: SQL_BUFFER_RESULT  */
@@ -22094,7 +23343,7 @@ yyreduce:
               MYSQL_YYABORT;
             Select->options|= OPTION_BUFFER_RESULT;
           }
-#line 22098 "sql_yacc.cc"
+#line 23347 "sql_yacc.cc"
     break;
 
   case 993: /* select_option: SQL_CALC_FOUND_ROWS  */
@@ -22104,7 +23353,7 @@ yyreduce:
               MYSQL_YYABORT;
             Select->options|= OPTION_FOUND_ROWS;
           }
-#line 22108 "sql_yacc.cc"
+#line 23357 "sql_yacc.cc"
     break;
 
   case 994: /* select_option: SQL_NO_CACHE_SYM  */
@@ -22114,7 +23363,7 @@ yyreduce:
             Lex->select_lex.options&= ~OPTION_TO_QUERY_CACHE;
             Lex->select_lex.sql_cache= SELECT_LEX::SQL_NO_CACHE;
           }
-#line 22118 "sql_yacc.cc"
+#line 23367 "sql_yacc.cc"
     break;
 
   case 995: /* select_option: SQL_NO_FCACHE_SYM  */
@@ -22122,7 +23371,7 @@ yyreduce:
           {
             Lex->disable_flashcache= TRUE;
           }
-#line 22126 "sql_yacc.cc"
+#line 23375 "sql_yacc.cc"
     break;
 
   case 996: /* select_option: SQL_CACHE_SYM  */
@@ -22140,13 +23389,13 @@ yyreduce:
               Lex->select_lex.sql_cache= SELECT_LEX::SQL_CACHE;
             }
           }
-#line 22144 "sql_yacc.cc"
+#line 23393 "sql_yacc.cc"
     break;
 
   case 997: /* select_option: ALL  */
 #line 6813 "sql_yacc.yy"
               { Select->options|= SELECT_ALL; }
-#line 22150 "sql_yacc.cc"
+#line 23399 "sql_yacc.cc"
     break;
 
   case 999: /* select_lock_type: FOR_SYM UPDATE_SYM  */
@@ -22158,7 +23407,7 @@ yyreduce:
             lex->safe_to_cache_query=0;
             lex->protect_against_global_read_lock= TRUE;
           }
-#line 22162 "sql_yacc.cc"
+#line 23411 "sql_yacc.cc"
     break;
 
   case 1000: /* select_lock_type: LOCK_SYM IN_SYM SHARE_SYM MODE_SYM  */
@@ -22170,7 +23419,7 @@ yyreduce:
             lex->current_select->lock_option= TL_READ_WITH_SHARED_LOCKS;
             lex->safe_to_cache_query=0;
           }
-#line 22174 "sql_yacc.cc"
+#line 23423 "sql_yacc.cc"
     break;
 
   case 1003: /* select_item_list: '*'  */
@@ -22186,7 +23435,7 @@ yyreduce:
               MYSQL_YYABORT;
             (thd->lex->current_select->with_wild)++;
           }
-#line 22190 "sql_yacc.cc"
+#line 23439 "sql_yacc.cc"
     break;
 
   case 1004: /* select_item: remember_name select_item2 remember_end select_alias  */
@@ -22213,7 +23462,7 @@ yyreduce:
               (yyvsp[-2].item)->set_name((yyvsp[-3].simple_string), (uint) ((yyvsp[-1].simple_string) - (yyvsp[-3].simple_string)), thd->charset());
             }
           }
-#line 22217 "sql_yacc.cc"
+#line 23466 "sql_yacc.cc"
     break;
 
   case 1005: /* remember_name: %empty  */
@@ -22221,7 +23470,7 @@ yyreduce:
           {
             (yyval.simple_string)= (char*) YYLIP->get_cpp_tok_start();
           }
-#line 22225 "sql_yacc.cc"
+#line 23474 "sql_yacc.cc"
     break;
 
   case 1006: /* remember_end: %empty  */
@@ -22229,61 +23478,61 @@ yyreduce:
           {
             (yyval.simple_string)= (char*) YYLIP->get_cpp_tok_end();
           }
-#line 22233 "sql_yacc.cc"
+#line 23482 "sql_yacc.cc"
     break;
 
   case 1007: /* select_item2: table_wild  */
 #line 6892 "sql_yacc.yy"
                      { (yyval.item)=(yyvsp[0].item); /* table.* */ }
-#line 22239 "sql_yacc.cc"
+#line 23488 "sql_yacc.cc"
     break;
 
   case 1008: /* select_item2: expr  */
 #line 6893 "sql_yacc.yy"
                { (yyval.item)=(yyvsp[0].item); }
-#line 22245 "sql_yacc.cc"
+#line 23494 "sql_yacc.cc"
     break;
 
   case 1009: /* select_alias: %empty  */
 #line 6897 "sql_yacc.yy"
                       { (yyval.lex_str)=null_lex_str;}
-#line 22251 "sql_yacc.cc"
+#line 23500 "sql_yacc.cc"
     break;
 
   case 1010: /* select_alias: AS ident  */
 #line 6898 "sql_yacc.yy"
                    { (yyval.lex_str)=(yyvsp[0].lex_str); }
-#line 22257 "sql_yacc.cc"
+#line 23506 "sql_yacc.cc"
     break;
 
   case 1011: /* select_alias: AS TEXT_STRING_sys  */
 #line 6899 "sql_yacc.yy"
                              { (yyval.lex_str)=(yyvsp[0].lex_str); }
-#line 22263 "sql_yacc.cc"
+#line 23512 "sql_yacc.cc"
     break;
 
   case 1012: /* select_alias: ident  */
 #line 6900 "sql_yacc.yy"
                 { (yyval.lex_str)=(yyvsp[0].lex_str); }
-#line 22269 "sql_yacc.cc"
+#line 23518 "sql_yacc.cc"
     break;
 
   case 1013: /* select_alias: TEXT_STRING_sys  */
 #line 6901 "sql_yacc.yy"
                           { (yyval.lex_str)=(yyvsp[0].lex_str); }
-#line 22275 "sql_yacc.cc"
+#line 23524 "sql_yacc.cc"
     break;
 
   case 1014: /* optional_braces: %empty  */
 #line 6905 "sql_yacc.yy"
                       {}
-#line 22281 "sql_yacc.cc"
+#line 23530 "sql_yacc.cc"
     break;
 
   case 1015: /* optional_braces: '(' ')'  */
 #line 6906 "sql_yacc.yy"
                   {}
-#line 22287 "sql_yacc.cc"
+#line 23536 "sql_yacc.cc"
     break;
 
   case 1016: /* expr: expr or expr  */
@@ -22338,7 +23587,7 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 22342 "sql_yacc.cc"
+#line 23591 "sql_yacc.cc"
     break;
 
   case 1017: /* expr: expr XOR expr  */
@@ -22349,7 +23598,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22353 "sql_yacc.cc"
+#line 23602 "sql_yacc.cc"
     break;
 
   case 1018: /* expr: expr and expr  */
@@ -22396,7 +23645,7 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 22400 "sql_yacc.cc"
+#line 23649 "sql_yacc.cc"
     break;
 
   case 1019: /* expr: NOT_SYM expr  */
@@ -22406,7 +23655,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22410 "sql_yacc.cc"
+#line 23659 "sql_yacc.cc"
     break;
 
   case 1020: /* expr: bool_pri IS TRUE_SYM  */
@@ -22416,7 +23665,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22420 "sql_yacc.cc"
+#line 23669 "sql_yacc.cc"
     break;
 
   case 1021: /* expr: bool_pri IS not TRUE_SYM  */
@@ -22426,7 +23675,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22430 "sql_yacc.cc"
+#line 23679 "sql_yacc.cc"
     break;
 
   case 1022: /* expr: bool_pri IS FALSE_SYM  */
@@ -22436,7 +23685,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22440 "sql_yacc.cc"
+#line 23689 "sql_yacc.cc"
     break;
 
   case 1023: /* expr: bool_pri IS not FALSE_SYM  */
@@ -22446,7 +23695,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22450 "sql_yacc.cc"
+#line 23699 "sql_yacc.cc"
     break;
 
   case 1024: /* expr: bool_pri IS UNKNOWN_SYM  */
@@ -22456,7 +23705,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22460 "sql_yacc.cc"
+#line 23709 "sql_yacc.cc"
     break;
 
   case 1025: /* expr: bool_pri IS not UNKNOWN_SYM  */
@@ -22466,7 +23715,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22470 "sql_yacc.cc"
+#line 23719 "sql_yacc.cc"
     break;
 
   case 1027: /* bool_pri: bool_pri IS NULL_SYM  */
@@ -22476,7 +23725,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22480 "sql_yacc.cc"
+#line 23729 "sql_yacc.cc"
     break;
 
   case 1028: /* bool_pri: bool_pri IS not NULL_SYM  */
@@ -22486,7 +23735,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22490 "sql_yacc.cc"
+#line 23739 "sql_yacc.cc"
     break;
 
   case 1029: /* bool_pri: bool_pri EQUAL_SYM predicate  */
@@ -22496,7 +23745,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22500 "sql_yacc.cc"
+#line 23749 "sql_yacc.cc"
     break;
 
   case 1030: /* bool_pri: bool_pri comp_op predicate  */
@@ -22506,7 +23755,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22510 "sql_yacc.cc"
+#line 23759 "sql_yacc.cc"
     break;
 
   case 1031: /* bool_pri: bool_pri comp_op all_or_any '(' subselect ')'  */
@@ -22516,7 +23765,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22520 "sql_yacc.cc"
+#line 23769 "sql_yacc.cc"
     break;
 
   case 1033: /* predicate: bit_expr IN_SYM '(' subselect ')'  */
@@ -22526,7 +23775,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22530 "sql_yacc.cc"
+#line 23779 "sql_yacc.cc"
     break;
 
   case 1034: /* predicate: bit_expr not IN_SYM '(' subselect ')'  */
@@ -22540,7 +23789,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22544 "sql_yacc.cc"
+#line 23793 "sql_yacc.cc"
     break;
 
   case 1035: /* predicate: bit_expr IN_SYM '(' expr ')'  */
@@ -22550,7 +23799,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22554 "sql_yacc.cc"
+#line 23803 "sql_yacc.cc"
     break;
 
   case 1036: /* predicate: bit_expr IN_SYM '(' expr ',' expr_list ')'  */
@@ -22562,7 +23811,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22566 "sql_yacc.cc"
+#line 23815 "sql_yacc.cc"
     break;
 
   case 1037: /* predicate: bit_expr not IN_SYM '(' expr ')'  */
@@ -22572,7 +23821,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22576 "sql_yacc.cc"
+#line 23825 "sql_yacc.cc"
     break;
 
   case 1038: /* predicate: bit_expr not IN_SYM '(' expr ',' expr_list ')'  */
@@ -22586,7 +23835,7 @@ yyreduce:
             item->negate();
             (yyval.item)= item;
           }
-#line 22590 "sql_yacc.cc"
+#line 23839 "sql_yacc.cc"
     break;
 
   case 1039: /* predicate: bit_expr BETWEEN_SYM bit_expr AND_SYM predicate  */
@@ -22596,7 +23845,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22600 "sql_yacc.cc"
+#line 23849 "sql_yacc.cc"
     break;
 
   case 1040: /* predicate: bit_expr not BETWEEN_SYM bit_expr AND_SYM predicate  */
@@ -22609,7 +23858,7 @@ yyreduce:
             item->negate();
             (yyval.item)= item;
           }
-#line 22613 "sql_yacc.cc"
+#line 23862 "sql_yacc.cc"
     break;
 
   case 1041: /* predicate: bit_expr SOUNDS_SYM LIKE bit_expr  */
@@ -22623,7 +23872,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22627 "sql_yacc.cc"
+#line 23876 "sql_yacc.cc"
     break;
 
   case 1042: /* predicate: bit_expr LIKE simple_expr opt_escape  */
@@ -22633,7 +23882,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22637 "sql_yacc.cc"
+#line 23886 "sql_yacc.cc"
     break;
 
   case 1043: /* predicate: bit_expr not LIKE simple_expr opt_escape  */
@@ -22647,7 +23896,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22651 "sql_yacc.cc"
+#line 23900 "sql_yacc.cc"
     break;
 
   case 1044: /* predicate: bit_expr REGEXP bit_expr  */
@@ -22657,7 +23906,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22661 "sql_yacc.cc"
+#line 23910 "sql_yacc.cc"
     break;
 
   case 1045: /* predicate: bit_expr not REGEXP bit_expr  */
@@ -22670,7 +23919,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22674 "sql_yacc.cc"
+#line 23923 "sql_yacc.cc"
     break;
 
   case 1047: /* bit_expr: bit_expr '|' bit_expr  */
@@ -22680,7 +23929,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22684 "sql_yacc.cc"
+#line 23933 "sql_yacc.cc"
     break;
 
   case 1048: /* bit_expr: bit_expr '&' bit_expr  */
@@ -22690,7 +23939,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22694 "sql_yacc.cc"
+#line 23943 "sql_yacc.cc"
     break;
 
   case 1049: /* bit_expr: bit_expr SHIFT_LEFT bit_expr  */
@@ -22700,7 +23949,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22704 "sql_yacc.cc"
+#line 23953 "sql_yacc.cc"
     break;
 
   case 1050: /* bit_expr: bit_expr SHIFT_RIGHT bit_expr  */
@@ -22710,7 +23959,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22714 "sql_yacc.cc"
+#line 23963 "sql_yacc.cc"
     break;
 
   case 1051: /* bit_expr: bit_expr '+' bit_expr  */
@@ -22720,7 +23969,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22724 "sql_yacc.cc"
+#line 23973 "sql_yacc.cc"
     break;
 
   case 1052: /* bit_expr: bit_expr '-' bit_expr  */
@@ -22730,7 +23979,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22734 "sql_yacc.cc"
+#line 23983 "sql_yacc.cc"
     break;
 
   case 1053: /* bit_expr: bit_expr '+' INTERVAL_SYM expr interval  */
@@ -22740,7 +23989,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22744 "sql_yacc.cc"
+#line 23993 "sql_yacc.cc"
     break;
 
   case 1054: /* bit_expr: bit_expr '-' INTERVAL_SYM expr interval  */
@@ -22750,7 +23999,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22754 "sql_yacc.cc"
+#line 24003 "sql_yacc.cc"
     break;
 
   case 1055: /* bit_expr: bit_expr '*' bit_expr  */
@@ -22760,7 +24009,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22764 "sql_yacc.cc"
+#line 24013 "sql_yacc.cc"
     break;
 
   case 1056: /* bit_expr: bit_expr '/' bit_expr  */
@@ -22770,7 +24019,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22774 "sql_yacc.cc"
+#line 24023 "sql_yacc.cc"
     break;
 
   case 1057: /* bit_expr: bit_expr '%' bit_expr  */
@@ -22780,7 +24029,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22784 "sql_yacc.cc"
+#line 24033 "sql_yacc.cc"
     break;
 
   case 1058: /* bit_expr: bit_expr DIV_SYM bit_expr  */
@@ -22790,7 +24039,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22794 "sql_yacc.cc"
+#line 24043 "sql_yacc.cc"
     break;
 
   case 1059: /* bit_expr: bit_expr MOD_SYM bit_expr  */
@@ -22800,7 +24049,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22804 "sql_yacc.cc"
+#line 24053 "sql_yacc.cc"
     break;
 
   case 1060: /* bit_expr: bit_expr '^' bit_expr  */
@@ -22810,55 +24059,55 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22814 "sql_yacc.cc"
+#line 24063 "sql_yacc.cc"
     break;
 
   case 1070: /* comp_op: EQ  */
 #line 7306 "sql_yacc.yy"
                  { (yyval.boolfunc2creator) = &comp_eq_creator; }
-#line 22820 "sql_yacc.cc"
+#line 24069 "sql_yacc.cc"
     break;
 
   case 1071: /* comp_op: GE  */
 #line 7307 "sql_yacc.yy"
                  { (yyval.boolfunc2creator) = &comp_ge_creator; }
-#line 22826 "sql_yacc.cc"
+#line 24075 "sql_yacc.cc"
     break;
 
   case 1072: /* comp_op: GT_SYM  */
 #line 7308 "sql_yacc.yy"
                  { (yyval.boolfunc2creator) = &comp_gt_creator; }
-#line 22832 "sql_yacc.cc"
+#line 24081 "sql_yacc.cc"
     break;
 
   case 1073: /* comp_op: LE  */
 #line 7309 "sql_yacc.yy"
                  { (yyval.boolfunc2creator) = &comp_le_creator; }
-#line 22838 "sql_yacc.cc"
+#line 24087 "sql_yacc.cc"
     break;
 
   case 1074: /* comp_op: LT  */
 #line 7310 "sql_yacc.yy"
                  { (yyval.boolfunc2creator) = &comp_lt_creator; }
-#line 22844 "sql_yacc.cc"
+#line 24093 "sql_yacc.cc"
     break;
 
   case 1075: /* comp_op: NE  */
 #line 7311 "sql_yacc.yy"
                  { (yyval.boolfunc2creator) = &comp_ne_creator; }
-#line 22850 "sql_yacc.cc"
+#line 24099 "sql_yacc.cc"
     break;
 
   case 1076: /* all_or_any: ALL  */
 #line 7315 "sql_yacc.yy"
                   { (yyval.num) = 1; }
-#line 22856 "sql_yacc.cc"
+#line 24105 "sql_yacc.cc"
     break;
 
   case 1077: /* all_or_any: ANY_SYM  */
 #line 7316 "sql_yacc.yy"
                   { (yyval.num) = 0; }
-#line 22862 "sql_yacc.cc"
+#line 24111 "sql_yacc.cc"
     break;
 
   case 1083: /* simple_expr: simple_expr COLLATE_SYM ident_or_text  */
@@ -22874,7 +24123,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22878 "sql_yacc.cc"
+#line 24127 "sql_yacc.cc"
     break;
 
   case 1088: /* simple_expr: simple_expr OR_OR_SYM simple_expr  */
@@ -22884,7 +24133,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22888 "sql_yacc.cc"
+#line 24137 "sql_yacc.cc"
     break;
 
   case 1089: /* simple_expr: '+' simple_expr  */
@@ -22892,7 +24141,7 @@ yyreduce:
           {
             (yyval.item)= (yyvsp[0].item);
           }
-#line 22896 "sql_yacc.cc"
+#line 24145 "sql_yacc.cc"
     break;
 
   case 1090: /* simple_expr: '-' simple_expr  */
@@ -22902,7 +24151,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22906 "sql_yacc.cc"
+#line 24155 "sql_yacc.cc"
     break;
 
   case 1091: /* simple_expr: '~' simple_expr  */
@@ -22912,7 +24161,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22916 "sql_yacc.cc"
+#line 24165 "sql_yacc.cc"
     break;
 
   case 1092: /* simple_expr: not2 simple_expr  */
@@ -22922,7 +24171,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22926 "sql_yacc.cc"
+#line 24175 "sql_yacc.cc"
     break;
 
   case 1093: /* simple_expr: '(' subselect ')'  */
@@ -22932,13 +24181,13 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22936 "sql_yacc.cc"
+#line 24185 "sql_yacc.cc"
     break;
 
   case 1094: /* simple_expr: '(' expr ')'  */
 #line 7376 "sql_yacc.yy"
           { (yyval.item)= (yyvsp[-1].item); }
-#line 22942 "sql_yacc.cc"
+#line 24191 "sql_yacc.cc"
     break;
 
   case 1095: /* simple_expr: '(' expr ',' expr_list ')'  */
@@ -22949,7 +24198,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22953 "sql_yacc.cc"
+#line 24202 "sql_yacc.cc"
     break;
 
   case 1096: /* simple_expr: ROW_SYM '(' expr ',' expr_list ')'  */
@@ -22960,7 +24209,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22964 "sql_yacc.cc"
+#line 24213 "sql_yacc.cc"
     break;
 
   case 1097: /* simple_expr: EXISTS '(' subselect ')'  */
@@ -22970,13 +24219,13 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 22974 "sql_yacc.cc"
+#line 24223 "sql_yacc.cc"
     break;
 
   case 1098: /* simple_expr: '{' ident expr '}'  */
 #line 7398 "sql_yacc.yy"
           { (yyval.item)= (yyvsp[-1].item); }
-#line 22980 "sql_yacc.cc"
+#line 24229 "sql_yacc.cc"
     break;
 
   case 1099: /* simple_expr: MATCH ident_list_arg AGAINST '(' bit_expr fulltext_options ')'  */
@@ -22989,7 +24238,7 @@ yyreduce:
             Select->add_ftfunc_to_list(i1);
             (yyval.item)= i1;
           }
-#line 22993 "sql_yacc.cc"
+#line 24242 "sql_yacc.cc"
     break;
 
   case 1100: /* simple_expr: BINARY simple_expr  */
@@ -23000,7 +24249,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23004 "sql_yacc.cc"
+#line 24253 "sql_yacc.cc"
     break;
 
   case 1101: /* simple_expr: CAST_SYM '(' expr AS cast_type ')'  */
@@ -23012,7 +24261,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23016 "sql_yacc.cc"
+#line 24265 "sql_yacc.cc"
     break;
 
   case 1102: /* simple_expr: CASE_SYM opt_expr when_list opt_else END  */
@@ -23022,7 +24271,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23026 "sql_yacc.cc"
+#line 24275 "sql_yacc.cc"
     break;
 
   case 1103: /* simple_expr: CONVERT_SYM '(' expr ',' cast_type ')'  */
@@ -23033,7 +24282,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23037 "sql_yacc.cc"
+#line 24286 "sql_yacc.cc"
     break;
 
   case 1104: /* simple_expr: CONVERT_SYM '(' expr USING charset_name ')'  */
@@ -23043,7 +24292,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23047 "sql_yacc.cc"
+#line 24296 "sql_yacc.cc"
     break;
 
   case 1105: /* simple_expr: DEFAULT '(' simple_ident ')'  */
@@ -23061,7 +24310,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23065 "sql_yacc.cc"
+#line 24314 "sql_yacc.cc"
     break;
 
   case 1106: /* simple_expr: VALUES '(' simple_ident_nospvar ')'  */
@@ -23072,7 +24321,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23076 "sql_yacc.cc"
+#line 24325 "sql_yacc.cc"
     break;
 
   case 1107: /* simple_expr: INTERVAL_SYM expr interval '+' expr  */
@@ -23082,7 +24331,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23086 "sql_yacc.cc"
+#line 24335 "sql_yacc.cc"
     break;
 
   case 1108: /* function_call_keyword: CHAR_SYM '(' expr_list ')'  */
@@ -23092,7 +24341,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23096 "sql_yacc.cc"
+#line 24345 "sql_yacc.cc"
     break;
 
   case 1109: /* function_call_keyword: CHAR_SYM '(' expr_list USING charset_name ')'  */
@@ -23102,7 +24351,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23106 "sql_yacc.cc"
+#line 24355 "sql_yacc.cc"
     break;
 
   case 1110: /* function_call_keyword: CURRENT_USER optional_braces  */
@@ -23114,7 +24363,7 @@ yyreduce:
             Lex->set_stmt_unsafe();
             Lex->safe_to_cache_query= 0;
           }
-#line 23118 "sql_yacc.cc"
+#line 24367 "sql_yacc.cc"
     break;
 
   case 1111: /* function_call_keyword: DATE_SYM '(' expr ')'  */
@@ -23124,7 +24373,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23128 "sql_yacc.cc"
+#line 24377 "sql_yacc.cc"
     break;
 
   case 1112: /* function_call_keyword: DAY_SYM '(' expr ')'  */
@@ -23134,7 +24383,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23138 "sql_yacc.cc"
+#line 24387 "sql_yacc.cc"
     break;
 
   case 1113: /* function_call_keyword: HOUR_SYM '(' expr ')'  */
@@ -23144,7 +24393,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23148 "sql_yacc.cc"
+#line 24397 "sql_yacc.cc"
     break;
 
   case 1114: /* function_call_keyword: INSERT '(' expr ',' expr ',' expr ',' expr ')'  */
@@ -23154,7 +24403,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23158 "sql_yacc.cc"
+#line 24407 "sql_yacc.cc"
     break;
 
   case 1115: /* function_call_keyword: INTERVAL_SYM '(' expr ',' expr ')'  */
@@ -23173,7 +24422,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23177 "sql_yacc.cc"
+#line 24426 "sql_yacc.cc"
     break;
 
   case 1116: /* function_call_keyword: INTERVAL_SYM '(' expr ',' expr ',' expr_list ')'  */
@@ -23189,7 +24438,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23193 "sql_yacc.cc"
+#line 24442 "sql_yacc.cc"
     break;
 
   case 1117: /* function_call_keyword: LEFT '(' expr ',' expr ')'  */
@@ -23199,7 +24448,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23203 "sql_yacc.cc"
+#line 24452 "sql_yacc.cc"
     break;
 
   case 1118: /* function_call_keyword: MINUTE_SYM '(' expr ')'  */
@@ -23209,7 +24458,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23213 "sql_yacc.cc"
+#line 24462 "sql_yacc.cc"
     break;
 
   case 1119: /* function_call_keyword: MONTH_SYM '(' expr ')'  */
@@ -23219,7 +24468,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23223 "sql_yacc.cc"
+#line 24472 "sql_yacc.cc"
     break;
 
   case 1120: /* function_call_keyword: RIGHT '(' expr ',' expr ')'  */
@@ -23229,7 +24478,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23233 "sql_yacc.cc"
+#line 24482 "sql_yacc.cc"
     break;
 
   case 1121: /* function_call_keyword: SECOND_SYM '(' expr ')'  */
@@ -23239,7 +24488,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23243 "sql_yacc.cc"
+#line 24492 "sql_yacc.cc"
     break;
 
   case 1122: /* function_call_keyword: TIME_SYM '(' expr ')'  */
@@ -23249,7 +24498,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23253 "sql_yacc.cc"
+#line 24502 "sql_yacc.cc"
     break;
 
   case 1123: /* function_call_keyword: TIMESTAMP '(' expr ')'  */
@@ -23259,7 +24508,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23263 "sql_yacc.cc"
+#line 24512 "sql_yacc.cc"
     break;
 
   case 1124: /* function_call_keyword: TIMESTAMP '(' expr ',' expr ')'  */
@@ -23269,7 +24518,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23273 "sql_yacc.cc"
+#line 24522 "sql_yacc.cc"
     break;
 
   case 1125: /* function_call_keyword: TRIM '(' expr ')'  */
@@ -23279,7 +24528,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23283 "sql_yacc.cc"
+#line 24532 "sql_yacc.cc"
     break;
 
   case 1126: /* function_call_keyword: TRIM '(' LEADING expr FROM expr ')'  */
@@ -23289,7 +24538,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23293 "sql_yacc.cc"
+#line 24542 "sql_yacc.cc"
     break;
 
   case 1127: /* function_call_keyword: TRIM '(' TRAILING expr FROM expr ')'  */
@@ -23299,7 +24548,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23303 "sql_yacc.cc"
+#line 24552 "sql_yacc.cc"
     break;
 
   case 1128: /* function_call_keyword: TRIM '(' BOTH expr FROM expr ')'  */
@@ -23309,7 +24558,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23313 "sql_yacc.cc"
+#line 24562 "sql_yacc.cc"
     break;
 
   case 1129: /* function_call_keyword: TRIM '(' LEADING FROM expr ')'  */
@@ -23319,7 +24568,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23323 "sql_yacc.cc"
+#line 24572 "sql_yacc.cc"
     break;
 
   case 1130: /* function_call_keyword: TRIM '(' TRAILING FROM expr ')'  */
@@ -23329,7 +24578,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23333 "sql_yacc.cc"
+#line 24582 "sql_yacc.cc"
     break;
 
   case 1131: /* function_call_keyword: TRIM '(' BOTH FROM expr ')'  */
@@ -23339,7 +24588,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23343 "sql_yacc.cc"
+#line 24592 "sql_yacc.cc"
     break;
 
   case 1132: /* function_call_keyword: TRIM '(' expr FROM expr ')'  */
@@ -23349,7 +24598,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23353 "sql_yacc.cc"
+#line 24602 "sql_yacc.cc"
     break;
 
   case 1133: /* function_call_keyword: USER '(' ')'  */
@@ -23361,7 +24610,7 @@ yyreduce:
             Lex->set_stmt_unsafe();
             Lex->safe_to_cache_query=0;
           }
-#line 23365 "sql_yacc.cc"
+#line 24614 "sql_yacc.cc"
     break;
 
   case 1134: /* function_call_keyword: YEAR_SYM '(' expr ')'  */
@@ -23371,7 +24620,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23375 "sql_yacc.cc"
+#line 24624 "sql_yacc.cc"
     break;
 
   case 1135: /* function_call_nonkeyword: ADDDATE_SYM '(' expr ',' expr ')'  */
@@ -23382,7 +24631,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23386 "sql_yacc.cc"
+#line 24635 "sql_yacc.cc"
     break;
 
   case 1136: /* function_call_nonkeyword: ADDDATE_SYM '(' expr ',' INTERVAL_SYM expr interval ')'  */
@@ -23392,7 +24641,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23396 "sql_yacc.cc"
+#line 24645 "sql_yacc.cc"
     break;
 
   case 1137: /* function_call_nonkeyword: CURDATE optional_braces  */
@@ -23403,7 +24652,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23407 "sql_yacc.cc"
+#line 24656 "sql_yacc.cc"
     break;
 
   case 1138: /* function_call_nonkeyword: CURTIME optional_braces  */
@@ -23414,7 +24663,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23418 "sql_yacc.cc"
+#line 24667 "sql_yacc.cc"
     break;
 
   case 1139: /* function_call_nonkeyword: CURTIME '(' expr ')'  */
@@ -23425,7 +24674,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23429 "sql_yacc.cc"
+#line 24678 "sql_yacc.cc"
     break;
 
   case 1140: /* function_call_nonkeyword: DATE_ADD_INTERVAL '(' expr ',' INTERVAL_SYM expr interval ')'  */
@@ -23435,7 +24684,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23439 "sql_yacc.cc"
+#line 24688 "sql_yacc.cc"
     break;
 
   case 1141: /* function_call_nonkeyword: DATE_SUB_INTERVAL '(' expr ',' INTERVAL_SYM expr interval ')'  */
@@ -23445,7 +24694,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23449 "sql_yacc.cc"
+#line 24698 "sql_yacc.cc"
     break;
 
   case 1142: /* function_call_nonkeyword: EXTRACT_SYM '(' interval FROM expr ')'  */
@@ -23455,7 +24704,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23459 "sql_yacc.cc"
+#line 24708 "sql_yacc.cc"
     break;
 
   case 1143: /* function_call_nonkeyword: GET_FORMAT '(' date_time_type ',' expr ')'  */
@@ -23465,7 +24714,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23469 "sql_yacc.cc"
+#line 24718 "sql_yacc.cc"
     break;
 
   case 1144: /* function_call_nonkeyword: NOW_SYM optional_braces  */
@@ -23476,7 +24725,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23480 "sql_yacc.cc"
+#line 24729 "sql_yacc.cc"
     break;
 
   case 1145: /* function_call_nonkeyword: NOW_SYM '(' expr ')'  */
@@ -23487,7 +24736,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23491 "sql_yacc.cc"
+#line 24740 "sql_yacc.cc"
     break;
 
   case 1146: /* function_call_nonkeyword: POSITION_SYM '(' bit_expr IN_SYM expr ')'  */
@@ -23497,7 +24746,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23501 "sql_yacc.cc"
+#line 24750 "sql_yacc.cc"
     break;
 
   case 1147: /* function_call_nonkeyword: SUBDATE_SYM '(' expr ',' expr ')'  */
@@ -23508,7 +24757,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23512 "sql_yacc.cc"
+#line 24761 "sql_yacc.cc"
     break;
 
   case 1148: /* function_call_nonkeyword: SUBDATE_SYM '(' expr ',' INTERVAL_SYM expr interval ')'  */
@@ -23518,7 +24767,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23522 "sql_yacc.cc"
+#line 24771 "sql_yacc.cc"
     break;
 
   case 1149: /* function_call_nonkeyword: SUBSTRING '(' expr ',' expr ',' expr ')'  */
@@ -23528,7 +24777,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23532 "sql_yacc.cc"
+#line 24781 "sql_yacc.cc"
     break;
 
   case 1150: /* function_call_nonkeyword: SUBSTRING '(' expr ',' expr ')'  */
@@ -23538,7 +24787,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23542 "sql_yacc.cc"
+#line 24791 "sql_yacc.cc"
     break;
 
   case 1151: /* function_call_nonkeyword: SUBSTRING '(' expr FROM expr FOR_SYM expr ')'  */
@@ -23548,7 +24797,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23552 "sql_yacc.cc"
+#line 24801 "sql_yacc.cc"
     break;
 
   case 1152: /* function_call_nonkeyword: SUBSTRING '(' expr FROM expr ')'  */
@@ -23558,7 +24807,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23562 "sql_yacc.cc"
+#line 24811 "sql_yacc.cc"
     break;
 
   case 1153: /* function_call_nonkeyword: SYSDATE optional_braces  */
@@ -23580,7 +24829,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23584 "sql_yacc.cc"
+#line 24833 "sql_yacc.cc"
     break;
 
   case 1154: /* function_call_nonkeyword: SYSDATE '(' expr ')'  */
@@ -23594,7 +24843,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23598 "sql_yacc.cc"
+#line 24847 "sql_yacc.cc"
     break;
 
   case 1155: /* function_call_nonkeyword: TIMESTAMP_ADD '(' interval_time_stamp ',' expr ',' expr ')'  */
@@ -23604,7 +24853,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23608 "sql_yacc.cc"
+#line 24857 "sql_yacc.cc"
     break;
 
   case 1156: /* function_call_nonkeyword: TIMESTAMP_DIFF '(' interval_time_stamp ',' expr ',' expr ')'  */
@@ -23614,7 +24863,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23618 "sql_yacc.cc"
+#line 24867 "sql_yacc.cc"
     break;
 
   case 1157: /* function_call_nonkeyword: UTC_DATE_SYM optional_braces  */
@@ -23625,7 +24874,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23629 "sql_yacc.cc"
+#line 24878 "sql_yacc.cc"
     break;
 
   case 1158: /* function_call_nonkeyword: UTC_TIME_SYM optional_braces  */
@@ -23636,7 +24885,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23640 "sql_yacc.cc"
+#line 24889 "sql_yacc.cc"
     break;
 
   case 1159: /* function_call_nonkeyword: UTC_TIMESTAMP_SYM optional_braces  */
@@ -23647,7 +24896,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23651 "sql_yacc.cc"
+#line 24900 "sql_yacc.cc"
     break;
 
   case 1160: /* function_call_conflict: ASCII_SYM '(' expr ')'  */
@@ -23657,7 +24906,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23661 "sql_yacc.cc"
+#line 24910 "sql_yacc.cc"
     break;
 
   case 1161: /* function_call_conflict: CHARSET '(' expr ')'  */
@@ -23667,7 +24916,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23671 "sql_yacc.cc"
+#line 24920 "sql_yacc.cc"
     break;
 
   case 1162: /* function_call_conflict: COALESCE '(' expr_list ')'  */
@@ -23677,7 +24926,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23681 "sql_yacc.cc"
+#line 24930 "sql_yacc.cc"
     break;
 
   case 1163: /* function_call_conflict: COLLATION_SYM '(' expr ')'  */
@@ -23687,7 +24936,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23691 "sql_yacc.cc"
+#line 24940 "sql_yacc.cc"
     break;
 
   case 1164: /* function_call_conflict: DATABASE '(' ')'  */
@@ -23698,7 +24947,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->safe_to_cache_query=0;
           }
-#line 23702 "sql_yacc.cc"
+#line 24951 "sql_yacc.cc"
     break;
 
   case 1165: /* function_call_conflict: IF '(' expr ',' expr ',' expr ')'  */
@@ -23708,7 +24957,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23712 "sql_yacc.cc"
+#line 24961 "sql_yacc.cc"
     break;
 
   case 1166: /* function_call_conflict: MICROSECOND_SYM '(' expr ')'  */
@@ -23718,7 +24967,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23722 "sql_yacc.cc"
+#line 24971 "sql_yacc.cc"
     break;
 
   case 1167: /* function_call_conflict: MOD_SYM '(' expr ',' expr ')'  */
@@ -23728,7 +24977,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23732 "sql_yacc.cc"
+#line 24981 "sql_yacc.cc"
     break;
 
   case 1168: /* function_call_conflict: OLD_PASSWORD '(' expr ')'  */
@@ -23738,7 +24987,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23742 "sql_yacc.cc"
+#line 24991 "sql_yacc.cc"
     break;
 
   case 1169: /* function_call_conflict: PASSWORD '(' expr ')'  */
@@ -23754,7 +25003,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.item)= i1;
           }
-#line 23758 "sql_yacc.cc"
+#line 25007 "sql_yacc.cc"
     break;
 
   case 1170: /* function_call_conflict: QUARTER_SYM '(' expr ')'  */
@@ -23764,7 +25013,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23768 "sql_yacc.cc"
+#line 25017 "sql_yacc.cc"
     break;
 
   case 1171: /* function_call_conflict: REPEAT_SYM '(' expr ',' expr ')'  */
@@ -23774,7 +25023,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23778 "sql_yacc.cc"
+#line 25027 "sql_yacc.cc"
     break;
 
   case 1172: /* function_call_conflict: REPLACE '(' expr ',' expr ',' expr ')'  */
@@ -23784,7 +25033,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23788 "sql_yacc.cc"
+#line 25037 "sql_yacc.cc"
     break;
 
   case 1173: /* function_call_conflict: TRUNCATE_SYM '(' expr ',' expr ')'  */
@@ -23794,7 +25043,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23798 "sql_yacc.cc"
+#line 25047 "sql_yacc.cc"
     break;
 
   case 1174: /* function_call_conflict: WEEK_SYM '(' expr ')'  */
@@ -23810,7 +25059,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23814 "sql_yacc.cc"
+#line 25063 "sql_yacc.cc"
     break;
 
   case 1175: /* function_call_conflict: WEEK_SYM '(' expr ',' expr ')'  */
@@ -23820,7 +25069,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 23824 "sql_yacc.cc"
+#line 25073 "sql_yacc.cc"
     break;
 
   case 1176: /* function_call_conflict: geometry_function  */
@@ -23837,7 +25086,7 @@ yyreduce:
             MYSQL_YYABORT;
 #endif
           }
-#line 23841 "sql_yacc.cc"
+#line 25090 "sql_yacc.cc"
     break;
 
   case 1177: /* geometry_function: CONTAINS_SYM '(' expr ',' expr ')'  */
@@ -23847,7 +25096,7 @@ yyreduce:
                          Item_func_spatial_rel((yyvsp[-3].item), (yyvsp[-1].item),
                                                Item_func::SP_CONTAINS_FUNC));
           }
-#line 23851 "sql_yacc.cc"
+#line 25100 "sql_yacc.cc"
     break;
 
   case 1178: /* geometry_function: GEOMETRYCOLLECTION '(' expr_list ')'  */
@@ -23858,7 +25107,7 @@ yyreduce:
                            Geometry::wkb_geometrycollection,
                            Geometry::wkb_point));
           }
-#line 23862 "sql_yacc.cc"
+#line 25111 "sql_yacc.cc"
     break;
 
   case 1179: /* geometry_function: LINESTRING '(' expr_list ')'  */
@@ -23869,7 +25118,7 @@ yyreduce:
                            Geometry::wkb_linestring,
                            Geometry::wkb_point));
           }
-#line 23873 "sql_yacc.cc"
+#line 25122 "sql_yacc.cc"
     break;
 
   case 1180: /* geometry_function: MULTILINESTRING '(' expr_list ')'  */
@@ -23880,7 +25129,7 @@ yyreduce:
                            Geometry::wkb_multilinestring,
                            Geometry::wkb_linestring));
           }
-#line 23884 "sql_yacc.cc"
+#line 25133 "sql_yacc.cc"
     break;
 
   case 1181: /* geometry_function: MULTIPOINT '(' expr_list ')'  */
@@ -23891,7 +25140,7 @@ yyreduce:
                            Geometry::wkb_multipoint,
                            Geometry::wkb_point));
           }
-#line 23895 "sql_yacc.cc"
+#line 25144 "sql_yacc.cc"
     break;
 
   case 1182: /* geometry_function: MULTIPOLYGON '(' expr_list ')'  */
@@ -23902,7 +25151,7 @@ yyreduce:
                            Geometry::wkb_multipolygon,
                            Geometry::wkb_polygon));
           }
-#line 23906 "sql_yacc.cc"
+#line 25155 "sql_yacc.cc"
     break;
 
   case 1183: /* geometry_function: POINT_SYM '(' expr ',' expr ')'  */
@@ -23910,7 +25159,7 @@ yyreduce:
           {
             (yyval.item)= GEOM_NEW(YYTHD, Item_func_point((yyvsp[-3].item),(yyvsp[-1].item)));
           }
-#line 23914 "sql_yacc.cc"
+#line 25163 "sql_yacc.cc"
     break;
 
   case 1184: /* geometry_function: POLYGON '(' expr_list ')'  */
@@ -23921,7 +25170,7 @@ yyreduce:
                            Geometry::wkb_polygon,
                            Geometry::wkb_linestring));
           }
-#line 23925 "sql_yacc.cc"
+#line 25174 "sql_yacc.cc"
     break;
 
   case 1185: /* @91: %empty  */
@@ -23944,7 +25193,7 @@ yyreduce:
             (yyval.udf)= udf;
 #endif
           }
-#line 23948 "sql_yacc.cc"
+#line 25197 "sql_yacc.cc"
     break;
 
   case 1186: /* function_call_generic: IDENT_sys '(' @91 opt_udf_expr_list ')'  */
@@ -24002,7 +25251,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 24006 "sql_yacc.cc"
+#line 25255 "sql_yacc.cc"
     break;
 
   case 1187: /* function_call_generic: ident '.' ident '(' opt_expr_list ')'  */
@@ -24045,55 +25294,55 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 24049 "sql_yacc.cc"
+#line 25298 "sql_yacc.cc"
     break;
 
   case 1188: /* fulltext_options: opt_natural_language_mode opt_query_expansion  */
 #line 8166 "sql_yacc.yy"
           { (yyval.num)= (yyvsp[-1].num) | (yyvsp[0].num); }
-#line 24055 "sql_yacc.cc"
+#line 25304 "sql_yacc.cc"
     break;
 
   case 1189: /* fulltext_options: IN_SYM BOOLEAN_SYM MODE_SYM  */
 #line 8168 "sql_yacc.yy"
           { (yyval.num)= FT_BOOL; }
-#line 24061 "sql_yacc.cc"
+#line 25310 "sql_yacc.cc"
     break;
 
   case 1190: /* opt_natural_language_mode: %empty  */
 #line 8172 "sql_yacc.yy"
                                                 { (yyval.num)= FT_NL; }
-#line 24067 "sql_yacc.cc"
+#line 25316 "sql_yacc.cc"
     break;
 
   case 1191: /* opt_natural_language_mode: IN_SYM NATURAL LANGUAGE_SYM MODE_SYM  */
 #line 8173 "sql_yacc.yy"
                                                 { (yyval.num)= FT_NL; }
-#line 24073 "sql_yacc.cc"
+#line 25322 "sql_yacc.cc"
     break;
 
   case 1192: /* opt_query_expansion: %empty  */
 #line 8177 "sql_yacc.yy"
                                                 { (yyval.num)= 0;         }
-#line 24079 "sql_yacc.cc"
+#line 25328 "sql_yacc.cc"
     break;
 
   case 1193: /* opt_query_expansion: WITH QUERY_SYM EXPANSION_SYM  */
 #line 8178 "sql_yacc.yy"
                                                 { (yyval.num)= FT_EXPAND; }
-#line 24085 "sql_yacc.cc"
+#line 25334 "sql_yacc.cc"
     break;
 
   case 1194: /* opt_udf_expr_list: %empty  */
 #line 8182 "sql_yacc.yy"
                         { (yyval.item_list)= NULL; }
-#line 24091 "sql_yacc.cc"
+#line 25340 "sql_yacc.cc"
     break;
 
   case 1195: /* opt_udf_expr_list: udf_expr_list  */
 #line 8183 "sql_yacc.yy"
                         { (yyval.item_list)= (yyvsp[0].item_list); }
-#line 24097 "sql_yacc.cc"
+#line 25346 "sql_yacc.cc"
     break;
 
   case 1196: /* udf_expr_list: udf_expr  */
@@ -24104,7 +25353,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.item_list)->push_back((yyvsp[0].item));
           }
-#line 24108 "sql_yacc.cc"
+#line 25357 "sql_yacc.cc"
     break;
 
   case 1197: /* udf_expr_list: udf_expr_list ',' udf_expr  */
@@ -24113,7 +25362,7 @@ yyreduce:
             (yyvsp[-2].item_list)->push_back((yyvsp[0].item));
             (yyval.item_list)= (yyvsp[-2].item_list);
           }
-#line 24117 "sql_yacc.cc"
+#line 25366 "sql_yacc.cc"
     break;
 
   case 1198: /* udf_expr: remember_name expr remember_end select_alias  */
@@ -24140,7 +25389,7 @@ yyreduce:
               (yyvsp[-2].item)->set_name((yyvsp[-3].simple_string), (uint) ((yyvsp[-1].simple_string) - (yyvsp[-3].simple_string)), YYTHD->charset());
             (yyval.item)= (yyvsp[-2].item);
           }
-#line 24144 "sql_yacc.cc"
+#line 25393 "sql_yacc.cc"
     break;
 
   case 1199: /* sum_expr: AVG_SYM '(' in_sum_expr ')'  */
@@ -24150,7 +25399,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24154 "sql_yacc.cc"
+#line 25403 "sql_yacc.cc"
     break;
 
   case 1200: /* sum_expr: AVG_SYM '(' DISTINCT in_sum_expr ')'  */
@@ -24160,7 +25409,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24164 "sql_yacc.cc"
+#line 25413 "sql_yacc.cc"
     break;
 
   case 1201: /* sum_expr: BIT_AND '(' in_sum_expr ')'  */
@@ -24170,7 +25419,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24174 "sql_yacc.cc"
+#line 25423 "sql_yacc.cc"
     break;
 
   case 1202: /* sum_expr: BIT_OR '(' in_sum_expr ')'  */
@@ -24180,7 +25429,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24184 "sql_yacc.cc"
+#line 25433 "sql_yacc.cc"
     break;
 
   case 1203: /* sum_expr: BIT_XOR '(' in_sum_expr ')'  */
@@ -24190,7 +25439,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24194 "sql_yacc.cc"
+#line 25443 "sql_yacc.cc"
     break;
 
   case 1204: /* sum_expr: COUNT_SYM '(' opt_all '*' ')'  */
@@ -24203,7 +25452,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24207 "sql_yacc.cc"
+#line 25456 "sql_yacc.cc"
     break;
 
   case 1205: /* sum_expr: COUNT_SYM '(' in_sum_expr ')'  */
@@ -24213,19 +25462,19 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24217 "sql_yacc.cc"
+#line 25466 "sql_yacc.cc"
     break;
 
   case 1206: /* $@92: %empty  */
 #line 8274 "sql_yacc.yy"
           { Select->in_sum_expr++; }
-#line 24223 "sql_yacc.cc"
+#line 25472 "sql_yacc.cc"
     break;
 
   case 1207: /* $@93: %empty  */
 #line 8276 "sql_yacc.yy"
           { Select->in_sum_expr--; }
-#line 24229 "sql_yacc.cc"
+#line 25478 "sql_yacc.cc"
     break;
 
   case 1208: /* sum_expr: COUNT_SYM '(' DISTINCT $@92 expr_list $@93 ')'  */
@@ -24235,7 +25484,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24239 "sql_yacc.cc"
+#line 25488 "sql_yacc.cc"
     break;
 
   case 1209: /* sum_expr: MIN_SYM '(' in_sum_expr ')'  */
@@ -24245,7 +25494,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24249 "sql_yacc.cc"
+#line 25498 "sql_yacc.cc"
     break;
 
   case 1210: /* sum_expr: MIN_SYM '(' DISTINCT in_sum_expr ')'  */
@@ -24255,7 +25504,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24259 "sql_yacc.cc"
+#line 25508 "sql_yacc.cc"
     break;
 
   case 1211: /* sum_expr: MAX_SYM '(' in_sum_expr ')'  */
@@ -24265,7 +25514,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24269 "sql_yacc.cc"
+#line 25518 "sql_yacc.cc"
     break;
 
   case 1212: /* sum_expr: MAX_SYM '(' DISTINCT in_sum_expr ')'  */
@@ -24275,7 +25524,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24279 "sql_yacc.cc"
+#line 25528 "sql_yacc.cc"
     break;
 
   case 1213: /* sum_expr: STD_SYM '(' in_sum_expr ')'  */
@@ -24285,7 +25534,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24289 "sql_yacc.cc"
+#line 25538 "sql_yacc.cc"
     break;
 
   case 1214: /* sum_expr: VARIANCE_SYM '(' in_sum_expr ')'  */
@@ -24295,7 +25544,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24299 "sql_yacc.cc"
+#line 25548 "sql_yacc.cc"
     break;
 
   case 1215: /* sum_expr: STDDEV_SAMP_SYM '(' in_sum_expr ')'  */
@@ -24305,7 +25554,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24309 "sql_yacc.cc"
+#line 25558 "sql_yacc.cc"
     break;
 
   case 1216: /* sum_expr: VAR_SAMP_SYM '(' in_sum_expr ')'  */
@@ -24315,7 +25564,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24319 "sql_yacc.cc"
+#line 25568 "sql_yacc.cc"
     break;
 
   case 1217: /* sum_expr: SUM_SYM '(' in_sum_expr ')'  */
@@ -24325,7 +25574,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24329 "sql_yacc.cc"
+#line 25578 "sql_yacc.cc"
     break;
 
   case 1218: /* sum_expr: SUM_SYM '(' DISTINCT in_sum_expr ')'  */
@@ -24335,13 +25584,13 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 24339 "sql_yacc.cc"
+#line 25588 "sql_yacc.cc"
     break;
 
   case 1219: /* $@94: %empty  */
 #line 8349 "sql_yacc.yy"
           { Select->in_sum_expr++; }
-#line 24345 "sql_yacc.cc"
+#line 25594 "sql_yacc.cc"
     break;
 
   case 1220: /* sum_expr: GROUP_CONCAT_SYM '(' opt_distinct $@94 expr_list opt_gorder_clause opt_gconcat_separator ')'  */
@@ -24356,7 +25605,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyvsp[-3].item_list)->empty();
           }
-#line 24360 "sql_yacc.cc"
+#line 25609 "sql_yacc.cc"
     break;
 
   case 1221: /* $@95: %empty  */
@@ -24368,7 +25617,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 24372 "sql_yacc.cc"
+#line 25621 "sql_yacc.cc"
     break;
 
   case 1222: /* variable: '@' $@95 variable_aux  */
@@ -24376,7 +25625,7 @@ yyreduce:
           {
             (yyval.item)= (yyvsp[0].item);
           }
-#line 24380 "sql_yacc.cc"
+#line 25629 "sql_yacc.cc"
     break;
 
   case 1223: /* variable_aux: ident_or_text SET_VAR expr  */
@@ -24390,7 +25639,7 @@ yyreduce:
             lex->uncacheable(UNCACHEABLE_RAND);
             lex->set_var_list.push_back(item);
           }
-#line 24394 "sql_yacc.cc"
+#line 25643 "sql_yacc.cc"
     break;
 
   case 1224: /* variable_aux: ident_or_text  */
@@ -24402,7 +25651,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->uncacheable(UNCACHEABLE_RAND);
           }
-#line 24406 "sql_yacc.cc"
+#line 25655 "sql_yacc.cc"
     break;
 
   case 1225: /* variable_aux: '@' opt_var_ident_type ident_or_text opt_component  */
@@ -24419,19 +25668,19 @@ yyreduce:
             if (!((Item_func_get_system_var*) (yyval.item))->is_written_to_binlog())
               Lex->set_stmt_unsafe();
           }
-#line 24423 "sql_yacc.cc"
+#line 25672 "sql_yacc.cc"
     break;
 
   case 1226: /* opt_distinct: %empty  */
 #line 8415 "sql_yacc.yy"
                       { (yyval.num) = 0; }
-#line 24429 "sql_yacc.cc"
+#line 25678 "sql_yacc.cc"
     break;
 
   case 1227: /* opt_distinct: DISTINCT  */
 #line 8416 "sql_yacc.yy"
                       { (yyval.num) = 1; }
-#line 24435 "sql_yacc.cc"
+#line 25684 "sql_yacc.cc"
     break;
 
   case 1228: /* opt_gconcat_separator: %empty  */
@@ -24441,13 +25690,13 @@ yyreduce:
             if ((yyval.string) == NULL)
               MYSQL_YYABORT;
           }
-#line 24445 "sql_yacc.cc"
+#line 25694 "sql_yacc.cc"
     break;
 
   case 1229: /* opt_gconcat_separator: SEPARATOR_SYM text_string  */
 #line 8426 "sql_yacc.yy"
                                     { (yyval.string) = (yyvsp[0].string); }
-#line 24451 "sql_yacc.cc"
+#line 25700 "sql_yacc.cc"
     break;
 
   case 1230: /* opt_gorder_clause: %empty  */
@@ -24455,7 +25704,7 @@ yyreduce:
           {
             Select->gorder_list = NULL;
           }
-#line 24459 "sql_yacc.cc"
+#line 25708 "sql_yacc.cc"
     break;
 
   case 1231: /* opt_gorder_clause: order_clause  */
@@ -24468,7 +25717,7 @@ yyreduce:
               MYSQL_YYABORT;
             select->order_list.empty();
           }
-#line 24472 "sql_yacc.cc"
+#line 25721 "sql_yacc.cc"
     break;
 
   case 1232: /* $@96: %empty  */
@@ -24481,7 +25730,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 24485 "sql_yacc.cc"
+#line 25734 "sql_yacc.cc"
     break;
 
   case 1233: /* in_sum_expr: opt_all $@96 expr  */
@@ -24490,85 +25739,85 @@ yyreduce:
             Select->in_sum_expr--;
             (yyval.item)= (yyvsp[0].item);
           }
-#line 24494 "sql_yacc.cc"
+#line 25743 "sql_yacc.cc"
     break;
 
   case 1234: /* cast_type: BINARY opt_field_length  */
 #line 8464 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_CHAR; Lex->charset= &my_charset_bin; Lex->dec= 0; }
-#line 24500 "sql_yacc.cc"
+#line 25749 "sql_yacc.cc"
     break;
 
   case 1235: /* cast_type: CHAR_SYM opt_field_length opt_binary  */
 #line 8466 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_CHAR; Lex->dec= 0; }
-#line 24506 "sql_yacc.cc"
+#line 25755 "sql_yacc.cc"
     break;
 
   case 1236: /* cast_type: NCHAR_SYM opt_field_length  */
 #line 8468 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_CHAR; Lex->charset= national_charset_info; Lex->dec=0; }
-#line 24512 "sql_yacc.cc"
+#line 25761 "sql_yacc.cc"
     break;
 
   case 1237: /* cast_type: SIGNED_SYM  */
 #line 8470 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_SIGNED_INT; Lex->charset= NULL; Lex->dec=Lex->length= (char*)0; }
-#line 24518 "sql_yacc.cc"
+#line 25767 "sql_yacc.cc"
     break;
 
   case 1238: /* cast_type: SIGNED_SYM INT_SYM  */
 #line 8472 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_SIGNED_INT; Lex->charset= NULL; Lex->dec=Lex->length= (char*)0; }
-#line 24524 "sql_yacc.cc"
+#line 25773 "sql_yacc.cc"
     break;
 
   case 1239: /* cast_type: UNSIGNED  */
 #line 8474 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_UNSIGNED_INT; Lex->charset= NULL; Lex->dec=Lex->length= (char*)0; }
-#line 24530 "sql_yacc.cc"
+#line 25779 "sql_yacc.cc"
     break;
 
   case 1240: /* cast_type: UNSIGNED INT_SYM  */
 #line 8476 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_UNSIGNED_INT; Lex->charset= NULL; Lex->dec=Lex->length= (char*)0; }
-#line 24536 "sql_yacc.cc"
+#line 25785 "sql_yacc.cc"
     break;
 
   case 1241: /* cast_type: DATE_SYM  */
 #line 8478 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_DATE; Lex->charset= NULL; Lex->dec=Lex->length= (char*)0; }
-#line 24542 "sql_yacc.cc"
+#line 25791 "sql_yacc.cc"
     break;
 
   case 1242: /* cast_type: TIME_SYM  */
 #line 8480 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_TIME; Lex->charset= NULL; Lex->dec=Lex->length= (char*)0; }
-#line 24548 "sql_yacc.cc"
+#line 25797 "sql_yacc.cc"
     break;
 
   case 1243: /* cast_type: DATETIME  */
 #line 8482 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_DATETIME; Lex->charset= NULL; Lex->dec=Lex->length= (char*)0; }
-#line 24554 "sql_yacc.cc"
+#line 25803 "sql_yacc.cc"
     break;
 
   case 1244: /* cast_type: DECIMAL_SYM float_options  */
 #line 8484 "sql_yacc.yy"
           { (yyval.cast_type)=ITEM_CAST_DECIMAL; Lex->charset= NULL; }
-#line 24560 "sql_yacc.cc"
+#line 25809 "sql_yacc.cc"
     break;
 
   case 1245: /* opt_expr_list: %empty  */
 #line 8488 "sql_yacc.yy"
                       { (yyval.item_list)= NULL; }
-#line 24566 "sql_yacc.cc"
+#line 25815 "sql_yacc.cc"
     break;
 
   case 1246: /* opt_expr_list: expr_list  */
 #line 8489 "sql_yacc.yy"
                     { (yyval.item_list)= (yyvsp[0].item_list);}
-#line 24572 "sql_yacc.cc"
+#line 25821 "sql_yacc.cc"
     break;
 
   case 1247: /* expr_list: expr  */
@@ -24579,7 +25828,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.item_list)->push_back((yyvsp[0].item));
           }
-#line 24583 "sql_yacc.cc"
+#line 25832 "sql_yacc.cc"
     break;
 
   case 1248: /* expr_list: expr_list ',' expr  */
@@ -24588,19 +25837,19 @@ yyreduce:
             (yyvsp[-2].item_list)->push_back((yyvsp[0].item));
             (yyval.item_list)= (yyvsp[-2].item_list);
           }
-#line 24592 "sql_yacc.cc"
+#line 25841 "sql_yacc.cc"
     break;
 
   case 1249: /* ident_list_arg: ident_list  */
 #line 8508 "sql_yacc.yy"
                               { (yyval.item_list)= (yyvsp[0].item_list); }
-#line 24598 "sql_yacc.cc"
+#line 25847 "sql_yacc.cc"
     break;
 
   case 1250: /* ident_list_arg: '(' ident_list ')'  */
 #line 8509 "sql_yacc.yy"
                               { (yyval.item_list)= (yyvsp[-1].item_list); }
-#line 24604 "sql_yacc.cc"
+#line 25853 "sql_yacc.cc"
     break;
 
   case 1251: /* ident_list: simple_ident  */
@@ -24611,7 +25860,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.item_list)->push_back((yyvsp[0].item));
           }
-#line 24615 "sql_yacc.cc"
+#line 25864 "sql_yacc.cc"
     break;
 
   case 1252: /* ident_list: ident_list ',' simple_ident  */
@@ -24620,31 +25869,31 @@ yyreduce:
             (yyvsp[-2].item_list)->push_back((yyvsp[0].item));
             (yyval.item_list)= (yyvsp[-2].item_list);
           }
-#line 24624 "sql_yacc.cc"
+#line 25873 "sql_yacc.cc"
     break;
 
   case 1253: /* opt_expr: %empty  */
 #line 8528 "sql_yacc.yy"
                          { (yyval.item)= NULL; }
-#line 24630 "sql_yacc.cc"
+#line 25879 "sql_yacc.cc"
     break;
 
   case 1254: /* opt_expr: expr  */
 #line 8529 "sql_yacc.yy"
                          { (yyval.item)= (yyvsp[0].item); }
-#line 24636 "sql_yacc.cc"
+#line 25885 "sql_yacc.cc"
     break;
 
   case 1255: /* opt_else: %empty  */
 #line 8533 "sql_yacc.yy"
                        { (yyval.item)= NULL; }
-#line 24642 "sql_yacc.cc"
+#line 25891 "sql_yacc.cc"
     break;
 
   case 1256: /* opt_else: ELSE expr  */
 #line 8534 "sql_yacc.yy"
                        { (yyval.item)= (yyvsp[0].item); }
-#line 24648 "sql_yacc.cc"
+#line 25897 "sql_yacc.cc"
     break;
 
   case 1257: /* when_list: WHEN_SYM expr THEN_SYM expr  */
@@ -24656,7 +25905,7 @@ yyreduce:
             (yyval.item_list)->push_back((yyvsp[-2].item));
             (yyval.item_list)->push_back((yyvsp[0].item));
           }
-#line 24660 "sql_yacc.cc"
+#line 25909 "sql_yacc.cc"
     break;
 
   case 1258: /* when_list: when_list WHEN_SYM expr THEN_SYM expr  */
@@ -24666,13 +25915,13 @@ yyreduce:
             (yyvsp[-4].item_list)->push_back((yyvsp[0].item));
             (yyval.item_list)= (yyvsp[-4].item_list);
           }
-#line 24670 "sql_yacc.cc"
+#line 25919 "sql_yacc.cc"
     break;
 
   case 1259: /* table_ref: table_factor  */
 #line 8556 "sql_yacc.yy"
                        { (yyval.table_list)=(yyvsp[0].table_list); }
-#line 24676 "sql_yacc.cc"
+#line 25925 "sql_yacc.cc"
     break;
 
   case 1260: /* table_ref: join_table  */
@@ -24682,31 +25931,31 @@ yyreduce:
             if (!((yyval.table_list)= lex->current_select->nest_last_join(lex->thd)))
               MYSQL_YYABORT;
           }
-#line 24686 "sql_yacc.cc"
+#line 25935 "sql_yacc.cc"
     break;
 
   case 1261: /* join_table_list: derived_table_list  */
 #line 8566 "sql_yacc.yy"
                              { MYSQL_YYABORT_UNLESS((yyval.table_list)=(yyvsp[0].table_list)); }
-#line 24692 "sql_yacc.cc"
+#line 25941 "sql_yacc.cc"
     break;
 
   case 1262: /* esc_table_ref: table_ref  */
 #line 8577 "sql_yacc.yy"
                   { (yyval.table_list)=(yyvsp[0].table_list); }
-#line 24698 "sql_yacc.cc"
+#line 25947 "sql_yacc.cc"
     break;
 
   case 1263: /* esc_table_ref: '{' ident table_ref '}'  */
 #line 8578 "sql_yacc.yy"
                                 { (yyval.table_list)=(yyvsp[-1].table_list); }
-#line 24704 "sql_yacc.cc"
+#line 25953 "sql_yacc.cc"
     break;
 
   case 1264: /* derived_table_list: esc_table_ref  */
 #line 8583 "sql_yacc.yy"
                         { (yyval.table_list)=(yyvsp[0].table_list); }
-#line 24710 "sql_yacc.cc"
+#line 25959 "sql_yacc.cc"
     break;
 
   case 1265: /* derived_table_list: derived_table_list ',' esc_table_ref  */
@@ -24714,19 +25963,19 @@ yyreduce:
           {
             MYSQL_YYABORT_UNLESS((yyvsp[-2].table_list) && ((yyval.table_list)=(yyvsp[0].table_list)));
           }
-#line 24718 "sql_yacc.cc"
+#line 25967 "sql_yacc.cc"
     break;
 
   case 1266: /* join_table: table_ref normal_join table_ref  */
 #line 8605 "sql_yacc.yy"
           { MYSQL_YYABORT_UNLESS((yyvsp[-2].table_list) && ((yyval.table_list)=(yyvsp[0].table_list))); }
-#line 24724 "sql_yacc.cc"
+#line 25973 "sql_yacc.cc"
     break;
 
   case 1267: /* join_table: table_ref STRAIGHT_JOIN table_factor  */
 #line 8607 "sql_yacc.yy"
           { MYSQL_YYABORT_UNLESS((yyvsp[-2].table_list) && ((yyval.table_list)=(yyvsp[0].table_list))); (yyvsp[0].table_list)->straight=1; }
-#line 24730 "sql_yacc.cc"
+#line 25979 "sql_yacc.cc"
     break;
 
   case 1268: /* $@97: %empty  */
@@ -24738,7 +25987,7 @@ yyreduce:
               MYSQL_YYABORT;
             Select->parsing_place= IN_ON;
           }
-#line 24742 "sql_yacc.cc"
+#line 25991 "sql_yacc.cc"
     break;
 
   case 1269: /* join_table: table_ref normal_join table_ref ON $@97 expr  */
@@ -24748,7 +25997,7 @@ yyreduce:
             Lex->pop_context();
             Select->parsing_place= NO_MATTER;
           }
-#line 24752 "sql_yacc.cc"
+#line 26001 "sql_yacc.cc"
     break;
 
   case 1270: /* $@98: %empty  */
@@ -24760,7 +26009,7 @@ yyreduce:
               MYSQL_YYABORT;
             Select->parsing_place= IN_ON;
           }
-#line 24764 "sql_yacc.cc"
+#line 26013 "sql_yacc.cc"
     break;
 
   case 1271: /* join_table: table_ref STRAIGHT_JOIN table_factor ON $@98 expr  */
@@ -24771,7 +26020,7 @@ yyreduce:
             Lex->pop_context();
             Select->parsing_place= NO_MATTER;
           }
-#line 24775 "sql_yacc.cc"
+#line 26024 "sql_yacc.cc"
     break;
 
   case 1272: /* $@99: %empty  */
@@ -24779,13 +26028,13 @@ yyreduce:
           {
             MYSQL_YYABORT_UNLESS((yyvsp[-3].table_list) && (yyvsp[-1].table_list));
           }
-#line 24783 "sql_yacc.cc"
+#line 26032 "sql_yacc.cc"
     break;
 
   case 1273: /* join_table: table_ref normal_join table_ref USING $@99 '(' using_list ')'  */
 #line 8645 "sql_yacc.yy"
           { add_join_natural((yyvsp[-7].table_list),(yyvsp[-5].table_list),(yyvsp[-1].string_list),Select); (yyval.table_list)=(yyvsp[-5].table_list); }
-#line 24789 "sql_yacc.cc"
+#line 26038 "sql_yacc.cc"
     break;
 
   case 1274: /* join_table: table_ref NATURAL JOIN_SYM table_factor  */
@@ -24794,7 +26043,7 @@ yyreduce:
             MYSQL_YYABORT_UNLESS((yyvsp[-3].table_list) && ((yyval.table_list)=(yyvsp[0].table_list)));
             add_join_natural((yyvsp[-3].table_list),(yyvsp[0].table_list),NULL,Select);
           }
-#line 24798 "sql_yacc.cc"
+#line 26047 "sql_yacc.cc"
     break;
 
   case 1275: /* $@100: %empty  */
@@ -24806,7 +26055,7 @@ yyreduce:
               MYSQL_YYABORT;
             Select->parsing_place= IN_ON;
           }
-#line 24810 "sql_yacc.cc"
+#line 26059 "sql_yacc.cc"
     break;
 
   case 1276: /* join_table: table_ref LEFT opt_outer JOIN_SYM table_ref ON $@100 expr  */
@@ -24818,7 +26067,7 @@ yyreduce:
             (yyval.table_list)=(yyvsp[-3].table_list);
             Select->parsing_place= NO_MATTER;
           }
-#line 24822 "sql_yacc.cc"
+#line 26071 "sql_yacc.cc"
     break;
 
   case 1277: /* $@101: %empty  */
@@ -24826,7 +26075,7 @@ yyreduce:
           {
             MYSQL_YYABORT_UNLESS((yyvsp[-4].table_list) && (yyvsp[0].table_list));
           }
-#line 24830 "sql_yacc.cc"
+#line 26079 "sql_yacc.cc"
     break;
 
   case 1278: /* join_table: table_ref LEFT opt_outer JOIN_SYM table_factor $@101 USING '(' using_list ')'  */
@@ -24836,7 +26085,7 @@ yyreduce:
             (yyvsp[-5].table_list)->outer_join|=JOIN_TYPE_LEFT; 
             (yyval.table_list)=(yyvsp[-5].table_list); 
           }
-#line 24840 "sql_yacc.cc"
+#line 26089 "sql_yacc.cc"
     break;
 
   case 1279: /* join_table: table_ref NATURAL LEFT opt_outer JOIN_SYM table_factor  */
@@ -24847,7 +26096,7 @@ yyreduce:
             (yyvsp[0].table_list)->outer_join|=JOIN_TYPE_LEFT;
             (yyval.table_list)=(yyvsp[0].table_list);
           }
-#line 24851 "sql_yacc.cc"
+#line 26100 "sql_yacc.cc"
     break;
 
   case 1280: /* $@102: %empty  */
@@ -24859,7 +26108,7 @@ yyreduce:
               MYSQL_YYABORT;
             Select->parsing_place= IN_ON;
           }
-#line 24863 "sql_yacc.cc"
+#line 26112 "sql_yacc.cc"
     break;
 
   case 1281: /* join_table: table_ref RIGHT opt_outer JOIN_SYM table_ref ON $@102 expr  */
@@ -24872,7 +26121,7 @@ yyreduce:
             Lex->pop_context();
             Select->parsing_place= NO_MATTER;
           }
-#line 24876 "sql_yacc.cc"
+#line 26125 "sql_yacc.cc"
     break;
 
   case 1282: /* $@103: %empty  */
@@ -24880,7 +26129,7 @@ yyreduce:
           {
             MYSQL_YYABORT_UNLESS((yyvsp[-4].table_list) && (yyvsp[0].table_list));
           }
-#line 24884 "sql_yacc.cc"
+#line 26133 "sql_yacc.cc"
     break;
 
   case 1283: /* join_table: table_ref RIGHT opt_outer JOIN_SYM table_factor $@103 USING '(' using_list ')'  */
@@ -24891,7 +26140,7 @@ yyreduce:
               MYSQL_YYABORT;
             add_join_natural((yyval.table_list),(yyvsp[-5].table_list),(yyvsp[-1].string_list),Select);
           }
-#line 24895 "sql_yacc.cc"
+#line 26144 "sql_yacc.cc"
     break;
 
   case 1284: /* join_table: table_ref NATURAL RIGHT opt_outer JOIN_SYM table_factor  */
@@ -24903,25 +26152,25 @@ yyreduce:
             if (!((yyval.table_list)= lex->current_select->convert_right_join()))
               MYSQL_YYABORT;
           }
-#line 24907 "sql_yacc.cc"
+#line 26156 "sql_yacc.cc"
     break;
 
   case 1285: /* normal_join: JOIN_SYM  */
 #line 8729 "sql_yacc.yy"
                    {}
-#line 24913 "sql_yacc.cc"
+#line 26162 "sql_yacc.cc"
     break;
 
   case 1286: /* normal_join: INNER_SYM JOIN_SYM  */
 #line 8730 "sql_yacc.yy"
                              {}
-#line 24919 "sql_yacc.cc"
+#line 26168 "sql_yacc.cc"
     break;
 
   case 1287: /* normal_join: CROSS JOIN_SYM  */
 #line 8731 "sql_yacc.yy"
                          {}
-#line 24925 "sql_yacc.cc"
+#line 26174 "sql_yacc.cc"
     break;
 
   case 1288: /* $@104: %empty  */
@@ -24930,7 +26179,7 @@ yyreduce:
             SELECT_LEX *sel= Select;
             sel->table_join_options= 0;
           }
-#line 24934 "sql_yacc.cc"
+#line 26183 "sql_yacc.cc"
     break;
 
   case 1289: /* table_factor: $@104 table_ident opt_table_alias opt_key_definition  */
@@ -24943,7 +26192,7 @@ yyreduce:
               MYSQL_YYABORT;
             Select->add_joined_table((yyval.table_list));
           }
-#line 24947 "sql_yacc.cc"
+#line 26196 "sql_yacc.cc"
     break;
 
   case 1290: /* table_factor: select_derived_init get_select_lex select_derived2  */
@@ -24969,7 +26218,7 @@ yyreduce:
             /* incomplete derived tables return NULL, we must be
                nested in select_derived rule to be here. */
           }
-#line 24973 "sql_yacc.cc"
+#line 26222 "sql_yacc.cc"
     break;
 
   case 1291: /* table_factor: '(' get_select_lex select_derived union_opt ')' opt_table_alias  */
@@ -25021,7 +26270,7 @@ yyreduce:
               (yyval.table_list)= (yyvsp[-3].table_list);
             }
           }
-#line 25025 "sql_yacc.cc"
+#line 26274 "sql_yacc.cc"
     break;
 
   case 1292: /* $@105: %empty  */
@@ -25031,7 +26280,7 @@ yyreduce:
             if ((yyvsp[0].select_lex)->init_nested_join(lex->thd))
               MYSQL_YYABORT;
           }
-#line 25035 "sql_yacc.cc"
+#line 26284 "sql_yacc.cc"
     break;
 
   case 1293: /* select_derived: get_select_lex $@105 derived_table_list  */
@@ -25049,7 +26298,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 25053 "sql_yacc.cc"
+#line 26302 "sql_yacc.cc"
     break;
 
   case 1294: /* $@106: %empty  */
@@ -25070,7 +26319,7 @@ yyreduce:
             lex->current_select->linkage= DERIVED_TABLE_TYPE;
             lex->current_select->parsing_place= SELECT_LIST;
           }
-#line 25074 "sql_yacc.cc"
+#line 26323 "sql_yacc.cc"
     break;
 
   case 1295: /* $@107: %empty  */
@@ -25078,13 +26327,13 @@ yyreduce:
           {
             Select->parsing_place= NO_MATTER;
           }
-#line 25082 "sql_yacc.cc"
+#line 26331 "sql_yacc.cc"
     break;
 
   case 1297: /* get_select_lex: %empty  */
 #line 8870 "sql_yacc.yy"
                       { (yyval.select_lex)= Select; }
-#line 25088 "sql_yacc.cc"
+#line 26337 "sql_yacc.cc"
     break;
 
   case 1298: /* select_derived_init: SELECT_SYM  */
@@ -25111,19 +26360,19 @@ yyreduce:
                 !embedding->nested_join->join_list.elements;
             /* return true if we are deeply nested */
           }
-#line 25115 "sql_yacc.cc"
+#line 26364 "sql_yacc.cc"
     break;
 
   case 1299: /* opt_outer: %empty  */
 #line 8900 "sql_yacc.yy"
                       {}
-#line 25121 "sql_yacc.cc"
+#line 26370 "sql_yacc.cc"
     break;
 
   case 1300: /* opt_outer: OUTER  */
 #line 8901 "sql_yacc.yy"
                 {}
-#line 25127 "sql_yacc.cc"
+#line 26376 "sql_yacc.cc"
     break;
 
   case 1301: /* index_hint_clause: %empty  */
@@ -25132,37 +26381,37 @@ yyreduce:
             (yyval.num)= global_system_variables.old_mode ? 
                   INDEX_HINT_MASK_JOIN : INDEX_HINT_MASK_ALL; 
           }
-#line 25136 "sql_yacc.cc"
+#line 26385 "sql_yacc.cc"
     break;
 
   case 1302: /* index_hint_clause: FOR_SYM JOIN_SYM  */
 #line 8910 "sql_yacc.yy"
                                 { (yyval.num)= INDEX_HINT_MASK_JOIN;  }
-#line 25142 "sql_yacc.cc"
+#line 26391 "sql_yacc.cc"
     break;
 
   case 1303: /* index_hint_clause: FOR_SYM ORDER_SYM BY  */
 #line 8911 "sql_yacc.yy"
                                 { (yyval.num)= INDEX_HINT_MASK_ORDER; }
-#line 25148 "sql_yacc.cc"
+#line 26397 "sql_yacc.cc"
     break;
 
   case 1304: /* index_hint_clause: FOR_SYM GROUP_SYM BY  */
 #line 8912 "sql_yacc.yy"
                                 { (yyval.num)= INDEX_HINT_MASK_GROUP; }
-#line 25154 "sql_yacc.cc"
+#line 26403 "sql_yacc.cc"
     break;
 
   case 1305: /* index_hint_type: FORCE_SYM  */
 #line 8916 "sql_yacc.yy"
                      { (yyval.index_hint)= INDEX_HINT_FORCE; }
-#line 25160 "sql_yacc.cc"
+#line 26409 "sql_yacc.cc"
     break;
 
   case 1306: /* index_hint_type: IGNORE_SYM  */
 #line 8917 "sql_yacc.yy"
                      { (yyval.index_hint)= INDEX_HINT_IGNORE; }
-#line 25166 "sql_yacc.cc"
+#line 26415 "sql_yacc.cc"
     break;
 
   case 1307: /* $@108: %empty  */
@@ -25170,7 +26419,7 @@ yyreduce:
           {
             Select->set_index_hint_type((yyvsp[-2].index_hint), (yyvsp[0].num));
           }
-#line 25174 "sql_yacc.cc"
+#line 26423 "sql_yacc.cc"
     break;
 
   case 1309: /* $@109: %empty  */
@@ -25178,43 +26427,43 @@ yyreduce:
           {
             Select->set_index_hint_type(INDEX_HINT_USE, (yyvsp[0].num));
           }
-#line 25182 "sql_yacc.cc"
+#line 26431 "sql_yacc.cc"
     break;
 
   case 1314: /* $@110: %empty  */
 #line 8940 "sql_yacc.yy"
           { Select->alloc_index_hints(YYTHD); }
-#line 25188 "sql_yacc.cc"
+#line 26437 "sql_yacc.cc"
     break;
 
   case 1316: /* $@111: %empty  */
 #line 8944 "sql_yacc.yy"
           {  Select->clear_index_hints(); }
-#line 25194 "sql_yacc.cc"
+#line 26443 "sql_yacc.cc"
     break;
 
   case 1318: /* opt_key_usage_list: %empty  */
 #line 8949 "sql_yacc.yy"
                       { Select->add_index_hint(YYTHD, NULL, 0); }
-#line 25200 "sql_yacc.cc"
+#line 26449 "sql_yacc.cc"
     break;
 
   case 1319: /* opt_key_usage_list: key_usage_list  */
 #line 8950 "sql_yacc.yy"
                          {}
-#line 25206 "sql_yacc.cc"
+#line 26455 "sql_yacc.cc"
     break;
 
   case 1320: /* key_usage_element: ident  */
 #line 8955 "sql_yacc.yy"
           { Select->add_index_hint(YYTHD, (yyvsp[0].lex_str).str, (yyvsp[0].lex_str).length); }
-#line 25212 "sql_yacc.cc"
+#line 26461 "sql_yacc.cc"
     break;
 
   case 1321: /* key_usage_element: PRIMARY_SYM  */
 #line 8957 "sql_yacc.yy"
           { Select->add_index_hint(YYTHD, (char *)"PRIMARY", 7); }
-#line 25218 "sql_yacc.cc"
+#line 26467 "sql_yacc.cc"
     break;
 
   case 1324: /* using_list: ident  */
@@ -25229,7 +26478,7 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.string_list)->push_back(s);
           }
-#line 25233 "sql_yacc.cc"
+#line 26482 "sql_yacc.cc"
     break;
 
   case 1325: /* using_list: using_list ',' ident  */
@@ -25243,85 +26492,85 @@ yyreduce:
             (yyvsp[-2].string_list)->push_back(s);
             (yyval.string_list)= (yyvsp[-2].string_list);
           }
-#line 25247 "sql_yacc.cc"
+#line 26496 "sql_yacc.cc"
     break;
 
   case 1326: /* interval: interval_time_st  */
 #line 8990 "sql_yacc.yy"
                            {}
-#line 25253 "sql_yacc.cc"
+#line 26502 "sql_yacc.cc"
     break;
 
   case 1327: /* interval: DAY_HOUR_SYM  */
 #line 8991 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_DAY_HOUR; }
-#line 25259 "sql_yacc.cc"
+#line 26508 "sql_yacc.cc"
     break;
 
   case 1328: /* interval: DAY_MICROSECOND_SYM  */
 #line 8992 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_DAY_MICROSECOND; }
-#line 25265 "sql_yacc.cc"
+#line 26514 "sql_yacc.cc"
     break;
 
   case 1329: /* interval: DAY_MINUTE_SYM  */
 #line 8993 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_DAY_MINUTE; }
-#line 25271 "sql_yacc.cc"
+#line 26520 "sql_yacc.cc"
     break;
 
   case 1330: /* interval: DAY_SECOND_SYM  */
 #line 8994 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_DAY_SECOND; }
-#line 25277 "sql_yacc.cc"
+#line 26526 "sql_yacc.cc"
     break;
 
   case 1331: /* interval: HOUR_MICROSECOND_SYM  */
 #line 8995 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_HOUR_MICROSECOND; }
-#line 25283 "sql_yacc.cc"
+#line 26532 "sql_yacc.cc"
     break;
 
   case 1332: /* interval: HOUR_MINUTE_SYM  */
 #line 8996 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_HOUR_MINUTE; }
-#line 25289 "sql_yacc.cc"
+#line 26538 "sql_yacc.cc"
     break;
 
   case 1333: /* interval: HOUR_SECOND_SYM  */
 #line 8997 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_HOUR_SECOND; }
-#line 25295 "sql_yacc.cc"
+#line 26544 "sql_yacc.cc"
     break;
 
   case 1334: /* interval: MINUTE_MICROSECOND_SYM  */
 #line 8998 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_MINUTE_MICROSECOND; }
-#line 25301 "sql_yacc.cc"
+#line 26550 "sql_yacc.cc"
     break;
 
   case 1335: /* interval: MINUTE_SECOND_SYM  */
 #line 8999 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_MINUTE_SECOND; }
-#line 25307 "sql_yacc.cc"
+#line 26556 "sql_yacc.cc"
     break;
 
   case 1336: /* interval: SECOND_MICROSECOND_SYM  */
 #line 9000 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_SECOND_MICROSECOND; }
-#line 25313 "sql_yacc.cc"
+#line 26562 "sql_yacc.cc"
     break;
 
   case 1337: /* interval: YEAR_MONTH_SYM  */
 #line 9001 "sql_yacc.yy"
                                  { (yyval.interval)=INTERVAL_YEAR_MONTH; }
-#line 25319 "sql_yacc.cc"
+#line 26568 "sql_yacc.cc"
     break;
 
   case 1338: /* interval_time_stamp: interval_time_st  */
 #line 9005 "sql_yacc.yy"
                                 {}
-#line 25325 "sql_yacc.cc"
+#line 26574 "sql_yacc.cc"
     break;
 
   case 1339: /* interval_time_stamp: FRAC_SECOND_SYM  */
@@ -25342,91 +26591,91 @@ yyreduce:
                                   */
                                   WARN_DEPRECATED(yythd, VER_CELOSIA, "FRAC_SECOND", "MICROSECOND");
                                 }
-#line 25346 "sql_yacc.cc"
+#line 26595 "sql_yacc.cc"
     break;
 
   case 1340: /* interval_time_st: DAY_SYM  */
 #line 9025 "sql_yacc.yy"
                           { (yyval.interval_time_st)=INTERVAL_DAY; }
-#line 25352 "sql_yacc.cc"
+#line 26601 "sql_yacc.cc"
     break;
 
   case 1341: /* interval_time_st: WEEK_SYM  */
 #line 9026 "sql_yacc.yy"
                           { (yyval.interval_time_st)=INTERVAL_WEEK; }
-#line 25358 "sql_yacc.cc"
+#line 26607 "sql_yacc.cc"
     break;
 
   case 1342: /* interval_time_st: HOUR_SYM  */
 #line 9027 "sql_yacc.yy"
                           { (yyval.interval_time_st)=INTERVAL_HOUR; }
-#line 25364 "sql_yacc.cc"
+#line 26613 "sql_yacc.cc"
     break;
 
   case 1343: /* interval_time_st: MINUTE_SYM  */
 #line 9028 "sql_yacc.yy"
                           { (yyval.interval_time_st)=INTERVAL_MINUTE; }
-#line 25370 "sql_yacc.cc"
+#line 26619 "sql_yacc.cc"
     break;
 
   case 1344: /* interval_time_st: MONTH_SYM  */
 #line 9029 "sql_yacc.yy"
                           { (yyval.interval_time_st)=INTERVAL_MONTH; }
-#line 25376 "sql_yacc.cc"
+#line 26625 "sql_yacc.cc"
     break;
 
   case 1345: /* interval_time_st: QUARTER_SYM  */
 #line 9030 "sql_yacc.yy"
                           { (yyval.interval_time_st)=INTERVAL_QUARTER; }
-#line 25382 "sql_yacc.cc"
+#line 26631 "sql_yacc.cc"
     break;
 
   case 1346: /* interval_time_st: SECOND_SYM  */
 #line 9031 "sql_yacc.yy"
                           { (yyval.interval_time_st)=INTERVAL_SECOND; }
-#line 25388 "sql_yacc.cc"
+#line 26637 "sql_yacc.cc"
     break;
 
   case 1347: /* interval_time_st: MICROSECOND_SYM  */
 #line 9032 "sql_yacc.yy"
                           { (yyval.interval_time_st)=INTERVAL_MICROSECOND; }
-#line 25394 "sql_yacc.cc"
+#line 26643 "sql_yacc.cc"
     break;
 
   case 1348: /* interval_time_st: YEAR_SYM  */
 #line 9033 "sql_yacc.yy"
                           { (yyval.interval_time_st)=INTERVAL_YEAR; }
-#line 25400 "sql_yacc.cc"
+#line 26649 "sql_yacc.cc"
     break;
 
   case 1349: /* date_time_type: DATE_SYM  */
 #line 9037 "sql_yacc.yy"
                     {(yyval.date_time_type)=MYSQL_TIMESTAMP_DATE;}
-#line 25406 "sql_yacc.cc"
+#line 26655 "sql_yacc.cc"
     break;
 
   case 1350: /* date_time_type: TIME_SYM  */
 #line 9038 "sql_yacc.yy"
                     {(yyval.date_time_type)=MYSQL_TIMESTAMP_TIME;}
-#line 25412 "sql_yacc.cc"
+#line 26661 "sql_yacc.cc"
     break;
 
   case 1351: /* date_time_type: DATETIME  */
 #line 9039 "sql_yacc.yy"
                     {(yyval.date_time_type)=MYSQL_TIMESTAMP_DATETIME;}
-#line 25418 "sql_yacc.cc"
+#line 26667 "sql_yacc.cc"
     break;
 
   case 1352: /* date_time_type: TIMESTAMP  */
 #line 9040 "sql_yacc.yy"
                     {(yyval.date_time_type)=MYSQL_TIMESTAMP_DATETIME;}
-#line 25424 "sql_yacc.cc"
+#line 26673 "sql_yacc.cc"
     break;
 
   case 1356: /* opt_table_alias: %empty  */
 #line 9050 "sql_yacc.yy"
                       { (yyval.lex_str_ptr)=0; }
-#line 25430 "sql_yacc.cc"
+#line 26679 "sql_yacc.cc"
     break;
 
   case 1357: /* opt_table_alias: table_alias ident  */
@@ -25436,13 +26685,13 @@ yyreduce:
             if ((yyval.lex_str_ptr) == NULL)
               MYSQL_YYABORT;
           }
-#line 25440 "sql_yacc.cc"
+#line 26689 "sql_yacc.cc"
     break;
 
   case 1360: /* where_clause: %empty  */
 #line 9065 "sql_yacc.yy"
                        { Select->where= 0; }
-#line 25446 "sql_yacc.cc"
+#line 26695 "sql_yacc.cc"
     break;
 
   case 1361: /* $@112: %empty  */
@@ -25450,7 +26699,7 @@ yyreduce:
           {
             Select->parsing_place= IN_WHERE;
           }
-#line 25454 "sql_yacc.cc"
+#line 26703 "sql_yacc.cc"
     break;
 
   case 1362: /* where_clause: WHERE $@112 expr  */
@@ -25462,7 +26711,7 @@ yyreduce:
             if ((yyvsp[0].item))
               (yyvsp[0].item)->top_level_item();
           }
-#line 25466 "sql_yacc.cc"
+#line 26715 "sql_yacc.cc"
     break;
 
   case 1364: /* $@113: %empty  */
@@ -25470,7 +26719,7 @@ yyreduce:
           {
             Select->parsing_place= IN_HAVING;
           }
-#line 25474 "sql_yacc.cc"
+#line 26723 "sql_yacc.cc"
     break;
 
   case 1365: /* having_clause: HAVING $@113 expr  */
@@ -25482,7 +26731,7 @@ yyreduce:
             if ((yyvsp[0].item))
               (yyvsp[0].item)->top_level_item();
           }
-#line 25486 "sql_yacc.cc"
+#line 26735 "sql_yacc.cc"
     break;
 
   case 1366: /* opt_escape: ESCAPE_SYM simple_expr  */
@@ -25491,7 +26740,7 @@ yyreduce:
             Lex->escape_used= TRUE;
             (yyval.item)= (yyvsp[0].item);
           }
-#line 25495 "sql_yacc.cc"
+#line 26744 "sql_yacc.cc"
     break;
 
   case 1367: /* opt_escape: %empty  */
@@ -25505,25 +26754,25 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 25509 "sql_yacc.cc"
+#line 26758 "sql_yacc.cc"
     break;
 
   case 1370: /* group_list: group_list ',' order_ident order_dir  */
 #line 9125 "sql_yacc.yy"
           { if (add_group_to_list(YYTHD, (yyvsp[-1].item),(bool) (yyvsp[0].num))) MYSQL_YYABORT; }
-#line 25515 "sql_yacc.cc"
+#line 26764 "sql_yacc.cc"
     break;
 
   case 1371: /* group_list: order_ident order_dir  */
 #line 9127 "sql_yacc.yy"
           { if (add_group_to_list(YYTHD, (yyvsp[-1].item),(bool) (yyvsp[0].num))) MYSQL_YYABORT; }
-#line 25521 "sql_yacc.cc"
+#line 26770 "sql_yacc.cc"
     break;
 
   case 1372: /* olap_opt: %empty  */
 #line 9131 "sql_yacc.yy"
                       {}
-#line 25527 "sql_yacc.cc"
+#line 26776 "sql_yacc.cc"
     break;
 
   case 1373: /* olap_opt: WITH CUBE_SYM  */
@@ -25540,7 +26789,7 @@ yyreduce:
             my_error(ER_NOT_SUPPORTED_YET, MYF(0), "CUBE");
             MYSQL_YYABORT; /* To be deleted in 5.1 */
           }
-#line 25544 "sql_yacc.cc"
+#line 26793 "sql_yacc.cc"
     break;
 
   case 1374: /* olap_opt: WITH ROLLUP_SYM  */
@@ -25555,7 +26804,7 @@ yyreduce:
             }
             lex->current_select->olap= ROLLUP_TYPE;
           }
-#line 25559 "sql_yacc.cc"
+#line 26808 "sql_yacc.cc"
     break;
 
   case 1378: /* alter_order_item: simple_ident_nospvar order_dir  */
@@ -25566,7 +26815,7 @@ yyreduce:
             if (add_order_to_list(thd, (yyvsp[-1].item), ascending))
               MYSQL_YYABORT;
           }
-#line 25570 "sql_yacc.cc"
+#line 26819 "sql_yacc.cc"
     break;
 
   case 1381: /* $@114: %empty  */
@@ -25601,37 +26850,37 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 25605 "sql_yacc.cc"
+#line 26854 "sql_yacc.cc"
     break;
 
   case 1383: /* order_list: order_list ',' order_ident order_dir  */
 #line 9227 "sql_yacc.yy"
           { if (add_order_to_list(YYTHD, (yyvsp[-1].item),(bool) (yyvsp[0].num))) MYSQL_YYABORT; }
-#line 25611 "sql_yacc.cc"
+#line 26860 "sql_yacc.cc"
     break;
 
   case 1384: /* order_list: order_ident order_dir  */
 #line 9229 "sql_yacc.yy"
           { if (add_order_to_list(YYTHD, (yyvsp[-1].item),(bool) (yyvsp[0].num))) MYSQL_YYABORT; }
-#line 25617 "sql_yacc.cc"
+#line 26866 "sql_yacc.cc"
     break;
 
   case 1385: /* order_dir: %empty  */
 #line 9233 "sql_yacc.yy"
                       { (yyval.num) =  1; }
-#line 25623 "sql_yacc.cc"
+#line 26872 "sql_yacc.cc"
     break;
 
   case 1386: /* order_dir: ASC  */
 #line 9234 "sql_yacc.yy"
                { (yyval.num) =1; }
-#line 25629 "sql_yacc.cc"
+#line 26878 "sql_yacc.cc"
     break;
 
   case 1387: /* order_dir: DESC  */
 #line 9235 "sql_yacc.yy"
                { (yyval.num) =0; }
-#line 25635 "sql_yacc.cc"
+#line 26884 "sql_yacc.cc"
     break;
 
   case 1388: /* opt_limit_clause_init: %empty  */
@@ -25642,31 +26891,31 @@ yyreduce:
             sel->offset_limit= 0;
             sel->select_limit= 0;
           }
-#line 25646 "sql_yacc.cc"
+#line 26895 "sql_yacc.cc"
     break;
 
   case 1389: /* opt_limit_clause_init: limit_clause  */
 #line 9246 "sql_yacc.yy"
                        {}
-#line 25652 "sql_yacc.cc"
+#line 26901 "sql_yacc.cc"
     break;
 
   case 1390: /* opt_limit_clause: %empty  */
 #line 9250 "sql_yacc.yy"
                       {}
-#line 25658 "sql_yacc.cc"
+#line 26907 "sql_yacc.cc"
     break;
 
   case 1391: /* opt_limit_clause: limit_clause  */
 #line 9251 "sql_yacc.yy"
                        {}
-#line 25664 "sql_yacc.cc"
+#line 26913 "sql_yacc.cc"
     break;
 
   case 1392: /* limit_clause: LIMIT limit_options  */
 #line 9255 "sql_yacc.yy"
                               {}
-#line 25670 "sql_yacc.cc"
+#line 26919 "sql_yacc.cc"
     break;
 
   case 1393: /* limit_options: limit_option  */
@@ -25677,7 +26926,7 @@ yyreduce:
             sel->offset_limit= 0;
             sel->explicit_limit= 1;
           }
-#line 25681 "sql_yacc.cc"
+#line 26930 "sql_yacc.cc"
     break;
 
   case 1394: /* limit_options: limit_option ',' limit_option  */
@@ -25688,7 +26937,7 @@ yyreduce:
             sel->offset_limit= (yyvsp[-2].item);
             sel->explicit_limit= 1;
           }
-#line 25692 "sql_yacc.cc"
+#line 26941 "sql_yacc.cc"
     break;
 
   case 1395: /* limit_options: limit_option OFFSET_SYM limit_option  */
@@ -25699,7 +26948,7 @@ yyreduce:
             sel->offset_limit= (yyvsp[0].item);
             sel->explicit_limit= 1;
           }
-#line 25703 "sql_yacc.cc"
+#line 26952 "sql_yacc.cc"
     break;
 
   case 1396: /* limit_option: param_marker  */
@@ -25707,7 +26956,7 @@ yyreduce:
         {
           ((Item_param *) (yyvsp[0].item))->limit_clause_param= TRUE;
         }
-#line 25711 "sql_yacc.cc"
+#line 26960 "sql_yacc.cc"
     break;
 
   case 1397: /* limit_option: ULONGLONG_NUM  */
@@ -25717,7 +26966,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 25721 "sql_yacc.cc"
+#line 26970 "sql_yacc.cc"
     break;
 
   case 1398: /* limit_option: LONG_NUM  */
@@ -25727,7 +26976,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 25731 "sql_yacc.cc"
+#line 26980 "sql_yacc.cc"
     break;
 
   case 1399: /* limit_option: NUM  */
@@ -25737,7 +26986,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 25741 "sql_yacc.cc"
+#line 26990 "sql_yacc.cc"
     break;
 
   case 1400: /* delete_limit_clause: %empty  */
@@ -25746,7 +26995,7 @@ yyreduce:
             LEX *lex=Lex;
             lex->current_select->select_limit= 0;
           }
-#line 25750 "sql_yacc.cc"
+#line 26999 "sql_yacc.cc"
     break;
 
   case 1401: /* delete_limit_clause: LIMIT limit_option  */
@@ -25756,133 +27005,133 @@ yyreduce:
             sel->select_limit= (yyvsp[0].item);
             sel->explicit_limit= 1;
           }
-#line 25760 "sql_yacc.cc"
+#line 27009 "sql_yacc.cc"
     break;
 
   case 1402: /* ulong_num: NUM  */
 #line 9322 "sql_yacc.yy"
                         { int error; (yyval.ulong_num)= (ulong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25766 "sql_yacc.cc"
+#line 27015 "sql_yacc.cc"
     break;
 
   case 1403: /* ulong_num: HEX_NUM  */
 #line 9323 "sql_yacc.yy"
                         { (yyval.ulong_num)= (ulong) strtol((yyvsp[0].lex_str).str, (char**) 0, 16); }
-#line 25772 "sql_yacc.cc"
+#line 27021 "sql_yacc.cc"
     break;
 
   case 1404: /* ulong_num: LONG_NUM  */
 #line 9324 "sql_yacc.yy"
                         { int error; (yyval.ulong_num)= (ulong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25778 "sql_yacc.cc"
+#line 27027 "sql_yacc.cc"
     break;
 
   case 1405: /* ulong_num: ULONGLONG_NUM  */
 #line 9325 "sql_yacc.yy"
                         { int error; (yyval.ulong_num)= (ulong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25784 "sql_yacc.cc"
+#line 27033 "sql_yacc.cc"
     break;
 
   case 1406: /* ulong_num: DECIMAL_NUM  */
 #line 9326 "sql_yacc.yy"
                         { int error; (yyval.ulong_num)= (ulong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25790 "sql_yacc.cc"
+#line 27039 "sql_yacc.cc"
     break;
 
   case 1407: /* ulong_num: FLOAT_NUM  */
 #line 9327 "sql_yacc.yy"
                         { int error; (yyval.ulong_num)= (ulong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25796 "sql_yacc.cc"
+#line 27045 "sql_yacc.cc"
     break;
 
   case 1408: /* real_ulong_num: NUM  */
 #line 9331 "sql_yacc.yy"
                         { int error; (yyval.ulong_num)= (ulong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25802 "sql_yacc.cc"
+#line 27051 "sql_yacc.cc"
     break;
 
   case 1409: /* real_ulong_num: HEX_NUM  */
 #line 9332 "sql_yacc.yy"
                         { (yyval.ulong_num)= (ulong) strtol((yyvsp[0].lex_str).str, (char**) 0, 16); }
-#line 25808 "sql_yacc.cc"
+#line 27057 "sql_yacc.cc"
     break;
 
   case 1410: /* real_ulong_num: LONG_NUM  */
 #line 9333 "sql_yacc.yy"
                         { int error; (yyval.ulong_num)= (ulong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25814 "sql_yacc.cc"
+#line 27063 "sql_yacc.cc"
     break;
 
   case 1411: /* real_ulong_num: ULONGLONG_NUM  */
 #line 9334 "sql_yacc.yy"
                         { int error; (yyval.ulong_num)= (ulong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25820 "sql_yacc.cc"
+#line 27069 "sql_yacc.cc"
     break;
 
   case 1412: /* real_ulong_num: dec_num_error  */
 #line 9335 "sql_yacc.yy"
                         { MYSQL_YYABORT; }
-#line 25826 "sql_yacc.cc"
+#line 27075 "sql_yacc.cc"
     break;
 
   case 1413: /* ulonglong_num: NUM  */
 #line 9339 "sql_yacc.yy"
                         { int error; (yyval.ulonglong_number)= (ulonglong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25832 "sql_yacc.cc"
+#line 27081 "sql_yacc.cc"
     break;
 
   case 1414: /* ulonglong_num: ULONGLONG_NUM  */
 #line 9340 "sql_yacc.yy"
                         { int error; (yyval.ulonglong_number)= (ulonglong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25838 "sql_yacc.cc"
+#line 27087 "sql_yacc.cc"
     break;
 
   case 1415: /* ulonglong_num: LONG_NUM  */
 #line 9341 "sql_yacc.yy"
                         { int error; (yyval.ulonglong_number)= (ulonglong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25844 "sql_yacc.cc"
+#line 27093 "sql_yacc.cc"
     break;
 
   case 1416: /* ulonglong_num: DECIMAL_NUM  */
 #line 9342 "sql_yacc.yy"
                         { int error; (yyval.ulonglong_number)= (ulonglong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25850 "sql_yacc.cc"
+#line 27099 "sql_yacc.cc"
     break;
 
   case 1417: /* ulonglong_num: FLOAT_NUM  */
 #line 9343 "sql_yacc.yy"
                         { int error; (yyval.ulonglong_number)= (ulonglong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25856 "sql_yacc.cc"
+#line 27105 "sql_yacc.cc"
     break;
 
   case 1418: /* real_ulonglong_num: NUM  */
 #line 9347 "sql_yacc.yy"
                         { int error; (yyval.ulonglong_number)= (ulonglong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25862 "sql_yacc.cc"
+#line 27111 "sql_yacc.cc"
     break;
 
   case 1419: /* real_ulonglong_num: ULONGLONG_NUM  */
 #line 9348 "sql_yacc.yy"
                         { int error; (yyval.ulonglong_number)= (ulonglong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25868 "sql_yacc.cc"
+#line 27117 "sql_yacc.cc"
     break;
 
   case 1420: /* real_ulonglong_num: LONG_NUM  */
 #line 9349 "sql_yacc.yy"
                         { int error; (yyval.ulonglong_number)= (ulonglong) my_strtoll10((yyvsp[0].lex_str).str, (char**) 0, &error); }
-#line 25874 "sql_yacc.cc"
+#line 27123 "sql_yacc.cc"
     break;
 
   case 1421: /* real_ulonglong_num: dec_num_error  */
 #line 9350 "sql_yacc.yy"
                         { MYSQL_YYABORT; }
-#line 25880 "sql_yacc.cc"
+#line 27129 "sql_yacc.cc"
     break;
 
   case 1422: /* dec_num_error: dec_num  */
 #line 9355 "sql_yacc.yy"
           { my_parse_error(ER(ER_ONLY_INTEGERS_ALLOWED)); }
-#line 25886 "sql_yacc.cc"
+#line 27135 "sql_yacc.cc"
     break;
 
   case 1426: /* $@115: %empty  */
@@ -25913,19 +27162,19 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->uncacheable(UNCACHEABLE_SIDEEFFECT);
           }
-#line 25917 "sql_yacc.cc"
+#line 27166 "sql_yacc.cc"
     break;
 
   case 1428: /* procedure_list: %empty  */
 #line 9396 "sql_yacc.yy"
                       {}
-#line 25923 "sql_yacc.cc"
+#line 27172 "sql_yacc.cc"
     break;
 
   case 1429: /* procedure_list: procedure_list2  */
 #line 9397 "sql_yacc.yy"
                           {}
-#line 25929 "sql_yacc.cc"
+#line 27178 "sql_yacc.cc"
     break;
 
   case 1432: /* procedure_item: remember_name expr remember_end  */
@@ -25938,7 +27187,7 @@ yyreduce:
             if (!(yyvsp[-1].item)->name)
               (yyvsp[-1].item)->set_name((yyvsp[-2].simple_string), (uint) ((yyvsp[0].simple_string) - (yyvsp[-2].simple_string)), thd->charset());
           }
-#line 25942 "sql_yacc.cc"
+#line 27191 "sql_yacc.cc"
     break;
 
   case 1433: /* $@116: %empty  */
@@ -25949,19 +27198,19 @@ yyreduce:
                   (!(lex->result= new select_dumpvar(lex->nest_level))))
               MYSQL_YYABORT;
           }
-#line 25953 "sql_yacc.cc"
+#line 27202 "sql_yacc.cc"
     break;
 
   case 1434: /* select_var_list_init: $@116 select_var_list  */
 #line 9425 "sql_yacc.yy"
           {}
-#line 25959 "sql_yacc.cc"
+#line 27208 "sql_yacc.cc"
     break;
 
   case 1436: /* select_var_list: select_var_ident  */
 #line 9430 "sql_yacc.yy"
                            {}
-#line 25965 "sql_yacc.cc"
+#line 27214 "sql_yacc.cc"
     break;
 
   case 1437: /* select_var_ident: '@' ident_or_text  */
@@ -25984,7 +27233,7 @@ yyreduce:
               DBUG_ASSERT(lex->describe);
             }
           }
-#line 25988 "sql_yacc.cc"
+#line 27237 "sql_yacc.cc"
     break;
 
   case 1438: /* select_var_ident: ident_or_text  */
@@ -26017,7 +27266,7 @@ yyreduce:
               DBUG_ASSERT(lex->describe);
             }
           }
-#line 26021 "sql_yacc.cc"
+#line 27270 "sql_yacc.cc"
     break;
 
   case 1439: /* $@117: %empty  */
@@ -26029,7 +27278,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 26033 "sql_yacc.cc"
+#line 27282 "sql_yacc.cc"
     break;
 
   case 1441: /* $@118: %empty  */
@@ -26041,13 +27290,13 @@ yyreduce:
                 !(lex->result= new select_export(lex->exchange, lex->nest_level)))
               MYSQL_YYABORT;
           }
-#line 26045 "sql_yacc.cc"
+#line 27294 "sql_yacc.cc"
     break;
 
   case 1442: /* $@119: %empty  */
 #line 9506 "sql_yacc.yy"
           { Lex->exchange->cs= (yyvsp[0].charset); }
-#line 26051 "sql_yacc.cc"
+#line 27300 "sql_yacc.cc"
     break;
 
   case 1444: /* into_destination: DUMPFILE TEXT_STRING_filesystem  */
@@ -26063,7 +27312,7 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 26067 "sql_yacc.cc"
+#line 27316 "sql_yacc.cc"
     break;
 
   case 1445: /* into_destination: select_var_list_init  */
@@ -26071,7 +27320,7 @@ yyreduce:
           {
             Lex->uncacheable(UNCACHEABLE_SIDEEFFECT);
           }
-#line 26075 "sql_yacc.cc"
+#line 27324 "sql_yacc.cc"
     break;
 
   case 1446: /* $@120: %empty  */
@@ -26081,7 +27330,7 @@ yyreduce:
             lex->sql_command = SQLCOM_DO;
             mysql_init_select(lex);
           }
-#line 26085 "sql_yacc.cc"
+#line 27334 "sql_yacc.cc"
     break;
 
   case 1447: /* do: DO_SYM $@120 expr_list  */
@@ -26089,7 +27338,7 @@ yyreduce:
           {
             Lex->insert_list= (yyvsp[0].item_list);
           }
-#line 26093 "sql_yacc.cc"
+#line 27342 "sql_yacc.cc"
     break;
 
   case 1448: /* drop: DROP opt_temporary table_or_tables if_exists table_list opt_restrict  */
@@ -26100,13 +27349,13 @@ yyreduce:
             lex->drop_temporary= (yyvsp[-4].num);
             lex->drop_if_exists= (yyvsp[-2].num);
           }
-#line 26104 "sql_yacc.cc"
+#line 27353 "sql_yacc.cc"
     break;
 
   case 1449: /* $@121: %empty  */
 #line 9555 "sql_yacc.yy"
                                               {}
-#line 26110 "sql_yacc.cc"
+#line 27359 "sql_yacc.cc"
     break;
 
   case 1450: /* drop: DROP INDEX_SYM ident ON table_ident $@121  */
@@ -26124,7 +27373,7 @@ yyreduce:
                                                         TL_OPTION_UPDATING))
               MYSQL_YYABORT;
           }
-#line 26128 "sql_yacc.cc"
+#line 27377 "sql_yacc.cc"
     break;
 
   case 1451: /* drop: DROP DATABASE if_exists ident  */
@@ -26135,7 +27384,7 @@ yyreduce:
             lex->drop_if_exists=(yyvsp[-1].num);
             lex->name= (yyvsp[0].lex_str);
           }
-#line 26139 "sql_yacc.cc"
+#line 27388 "sql_yacc.cc"
     break;
 
   case 1452: /* drop: DROP FUNCTION_SYM if_exists ident '.' ident  */
@@ -26162,7 +27411,7 @@ yyreduce:
             spname->init_qname(thd);
             lex->spname= spname;
           }
-#line 26166 "sql_yacc.cc"
+#line 27415 "sql_yacc.cc"
     break;
 
   case 1453: /* drop: DROP FUNCTION_SYM if_exists ident  */
@@ -26187,7 +27436,7 @@ yyreduce:
             spname->init_qname(thd);
             lex->spname= spname;
           }
-#line 26191 "sql_yacc.cc"
+#line 27440 "sql_yacc.cc"
     break;
 
   case 1454: /* drop: DROP PROCEDURE if_exists sp_name  */
@@ -26203,7 +27452,7 @@ yyreduce:
             lex->drop_if_exists= (yyvsp[-1].num);
             lex->spname= (yyvsp[0].spname);
           }
-#line 26207 "sql_yacc.cc"
+#line 27456 "sql_yacc.cc"
     break;
 
   case 1455: /* drop: DROP USER clear_privileges user_list  */
@@ -26211,7 +27460,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_DROP_USER;
           }
-#line 26215 "sql_yacc.cc"
+#line 27464 "sql_yacc.cc"
     break;
 
   case 1456: /* drop: DROP VIEW_SYM if_exists table_list opt_restrict  */
@@ -26221,7 +27470,7 @@ yyreduce:
             lex->sql_command= SQLCOM_DROP_VIEW;
             lex->drop_if_exists= (yyvsp[-2].num);
           }
-#line 26225 "sql_yacc.cc"
+#line 27474 "sql_yacc.cc"
     break;
 
   case 1457: /* drop: DROP EVENT_SYM if_exists sp_name  */
@@ -26231,7 +27480,7 @@ yyreduce:
             Lex->spname= (yyvsp[0].spname);
             Lex->sql_command = SQLCOM_DROP_EVENT;
           }
-#line 26235 "sql_yacc.cc"
+#line 27484 "sql_yacc.cc"
     break;
 
   case 1458: /* drop: DROP TRIGGER_SYM if_exists sp_name  */
@@ -26242,7 +27491,7 @@ yyreduce:
             lex->drop_if_exists= (yyvsp[-1].num);
             lex->spname= (yyvsp[0].spname);
           }
-#line 26246 "sql_yacc.cc"
+#line 27495 "sql_yacc.cc"
     break;
 
   case 1459: /* drop: DROP TABLESPACE tablespace_name opt_ts_engine opt_ts_wait  */
@@ -26251,7 +27500,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->ts_cmd_type= DROP_TABLESPACE;
           }
-#line 26255 "sql_yacc.cc"
+#line 27504 "sql_yacc.cc"
     break;
 
   case 1460: /* drop: DROP LOGFILE_SYM GROUP_SYM logfile_group_name opt_ts_engine opt_ts_wait  */
@@ -26260,7 +27509,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->alter_tablespace_info->ts_cmd_type= DROP_LOGFILE_GROUP;
           }
-#line 26264 "sql_yacc.cc"
+#line 27513 "sql_yacc.cc"
     break;
 
   case 1461: /* drop: DROP SERVER_SYM if_exists ident_or_text  */
@@ -26271,7 +27520,7 @@ yyreduce:
             Lex->server_options.server_name= (yyvsp[0].lex_str).str;
             Lex->server_options.server_name_length= (yyvsp[0].lex_str).length;
           }
-#line 26275 "sql_yacc.cc"
+#line 27524 "sql_yacc.cc"
     break;
 
   case 1464: /* table_name: table_ident  */
@@ -26280,7 +27529,7 @@ yyreduce:
             if (!Select->add_table_to_list(YYTHD, (yyvsp[0].table), NULL, TL_OPTION_UPDATING))
               MYSQL_YYABORT;
           }
-#line 26284 "sql_yacc.cc"
+#line 27533 "sql_yacc.cc"
     break;
 
   case 1467: /* table_alias_ref: table_ident_opt_wild  */
@@ -26291,31 +27540,31 @@ yyreduce:
                                            Lex->lock_option ))
               MYSQL_YYABORT;
           }
-#line 26295 "sql_yacc.cc"
+#line 27544 "sql_yacc.cc"
     break;
 
   case 1468: /* if_exists: %empty  */
 #line 9703 "sql_yacc.yy"
                       { (yyval.num)= 0; }
-#line 26301 "sql_yacc.cc"
+#line 27550 "sql_yacc.cc"
     break;
 
   case 1469: /* if_exists: IF EXISTS  */
 #line 9704 "sql_yacc.yy"
                     { (yyval.num)= 1; }
-#line 26307 "sql_yacc.cc"
+#line 27556 "sql_yacc.cc"
     break;
 
   case 1470: /* opt_temporary: %empty  */
 #line 9708 "sql_yacc.yy"
                       { (yyval.num)= 0; }
-#line 26313 "sql_yacc.cc"
+#line 27562 "sql_yacc.cc"
     break;
 
   case 1471: /* opt_temporary: TEMPORARY  */
 #line 9709 "sql_yacc.yy"
                     { (yyval.num)= 1; }
-#line 26319 "sql_yacc.cc"
+#line 27568 "sql_yacc.cc"
     break;
 
   case 1472: /* $@122: %empty  */
@@ -26328,7 +27577,7 @@ yyreduce:
             /* for subselects */
             lex->lock_option= TL_READ_DEFAULT;
           }
-#line 26332 "sql_yacc.cc"
+#line 27581 "sql_yacc.cc"
     break;
 
   case 1473: /* $@123: %empty  */
@@ -26337,13 +27586,13 @@ yyreduce:
             Select->set_lock_for_tables((yyvsp[-2].lock_type));
             Lex->current_select= &Lex->select_lex;
           }
-#line 26341 "sql_yacc.cc"
+#line 27590 "sql_yacc.cc"
     break;
 
   case 1474: /* insert: INSERT $@122 insert_lock_option opt_ignore insert2 $@123 insert_field_spec opt_insert_update opt_change_options  */
 #line 9732 "sql_yacc.yy"
           {}
-#line 26347 "sql_yacc.cc"
+#line 27596 "sql_yacc.cc"
     break;
 
   case 1475: /* $@124: %empty  */
@@ -26354,7 +27603,7 @@ yyreduce:
             lex->duplicates= DUP_REPLACE;
             mysql_init_select(lex);
           }
-#line 26358 "sql_yacc.cc"
+#line 27607 "sql_yacc.cc"
     break;
 
   case 1476: /* $@125: %empty  */
@@ -26363,13 +27612,13 @@ yyreduce:
             Select->set_lock_for_tables((yyvsp[-1].lock_type));
             Lex->current_select= &Lex->select_lex;
           }
-#line 26367 "sql_yacc.cc"
+#line 27616 "sql_yacc.cc"
     break;
 
   case 1477: /* replace: REPLACE $@124 replace_lock_option insert2 $@125 insert_field_spec opt_change_options  */
 #line 9749 "sql_yacc.yy"
           {}
-#line 26373 "sql_yacc.cc"
+#line 27622 "sql_yacc.cc"
     break;
 
   case 1478: /* insert_lock_option: %empty  */
@@ -26386,49 +27635,49 @@ yyreduce:
             (yyval.lock_type)= TL_WRITE_CONCURRENT_INSERT;
 #endif
           }
-#line 26390 "sql_yacc.cc"
+#line 27639 "sql_yacc.cc"
     break;
 
   case 1479: /* insert_lock_option: LOW_PRIORITY  */
 #line 9766 "sql_yacc.yy"
                         { (yyval.lock_type)= TL_WRITE_LOW_PRIORITY; }
-#line 26396 "sql_yacc.cc"
+#line 27645 "sql_yacc.cc"
     break;
 
   case 1480: /* insert_lock_option: DELAYED_SYM  */
 #line 9767 "sql_yacc.yy"
                         { (yyval.lock_type)= TL_WRITE_DELAYED; }
-#line 26402 "sql_yacc.cc"
+#line 27651 "sql_yacc.cc"
     break;
 
   case 1481: /* insert_lock_option: HIGH_PRIORITY  */
 #line 9768 "sql_yacc.yy"
                         { (yyval.lock_type)= TL_WRITE; }
-#line 26408 "sql_yacc.cc"
+#line 27657 "sql_yacc.cc"
     break;
 
   case 1482: /* replace_lock_option: opt_low_priority  */
 #line 9772 "sql_yacc.yy"
                            { (yyval.lock_type)= (yyvsp[0].lock_type); }
-#line 26414 "sql_yacc.cc"
+#line 27663 "sql_yacc.cc"
     break;
 
   case 1483: /* replace_lock_option: DELAYED_SYM  */
 #line 9773 "sql_yacc.yy"
                       { (yyval.lock_type)= TL_WRITE_DELAYED; }
-#line 26420 "sql_yacc.cc"
+#line 27669 "sql_yacc.cc"
     break;
 
   case 1484: /* insert2: INTO insert_table  */
 #line 9777 "sql_yacc.yy"
                             {}
-#line 26426 "sql_yacc.cc"
+#line 27675 "sql_yacc.cc"
     break;
 
   case 1485: /* insert2: insert_table  */
 #line 9778 "sql_yacc.yy"
                        {}
-#line 26432 "sql_yacc.cc"
+#line 27681 "sql_yacc.cc"
     break;
 
   case 1486: /* insert_table: table_name  */
@@ -26439,25 +27688,25 @@ yyreduce:
             lex->many_values.empty();
             lex->insert_list=0;
           }
-#line 26443 "sql_yacc.cc"
+#line 27692 "sql_yacc.cc"
     break;
 
   case 1487: /* insert_field_spec: insert_values  */
 #line 9791 "sql_yacc.yy"
                         {}
-#line 26449 "sql_yacc.cc"
+#line 27698 "sql_yacc.cc"
     break;
 
   case 1488: /* insert_field_spec: '(' ')' insert_values  */
 #line 9792 "sql_yacc.yy"
                                 {}
-#line 26455 "sql_yacc.cc"
+#line 27704 "sql_yacc.cc"
     break;
 
   case 1489: /* insert_field_spec: '(' fields ')' insert_values  */
 #line 9793 "sql_yacc.yy"
                                        {}
-#line 26461 "sql_yacc.cc"
+#line 27710 "sql_yacc.cc"
     break;
 
   case 1490: /* $@126: %empty  */
@@ -26468,55 +27717,55 @@ yyreduce:
                 lex->many_values.push_back(lex->insert_list))
               MYSQL_YYABORT;
           }
-#line 26472 "sql_yacc.cc"
+#line 27721 "sql_yacc.cc"
     break;
 
   case 1492: /* fields: fields ',' insert_ident  */
 #line 9805 "sql_yacc.yy"
                                   { Lex->field_list.push_back((yyvsp[0].item)); }
-#line 26478 "sql_yacc.cc"
+#line 27727 "sql_yacc.cc"
     break;
 
   case 1493: /* fields: insert_ident  */
 #line 9806 "sql_yacc.yy"
                        { Lex->field_list.push_back((yyvsp[0].item)); }
-#line 26484 "sql_yacc.cc"
+#line 27733 "sql_yacc.cc"
     break;
 
   case 1494: /* insert_values: VALUES values_list  */
 #line 9810 "sql_yacc.yy"
                              {}
-#line 26490 "sql_yacc.cc"
+#line 27739 "sql_yacc.cc"
     break;
 
   case 1495: /* insert_values: VALUE_SYM values_list  */
 #line 9811 "sql_yacc.yy"
                                 {}
-#line 26496 "sql_yacc.cc"
+#line 27745 "sql_yacc.cc"
     break;
 
   case 1496: /* $@127: %empty  */
 #line 9813 "sql_yacc.yy"
           { Select->set_braces(0);}
-#line 26502 "sql_yacc.cc"
+#line 27751 "sql_yacc.cc"
     break;
 
   case 1497: /* insert_values: create_select $@127 union_clause  */
 #line 9814 "sql_yacc.yy"
                        {}
-#line 26508 "sql_yacc.cc"
+#line 27757 "sql_yacc.cc"
     break;
 
   case 1498: /* $@128: %empty  */
 #line 9816 "sql_yacc.yy"
           { Select->set_braces(1);}
-#line 26514 "sql_yacc.cc"
+#line 27763 "sql_yacc.cc"
     break;
 
   case 1499: /* insert_values: '(' create_select ')' $@128 union_opt  */
 #line 9817 "sql_yacc.yy"
                     {}
-#line 26520 "sql_yacc.cc"
+#line 27769 "sql_yacc.cc"
     break;
 
   case 1504: /* ident_eq_value: simple_ident_nospvar equal expr_or_default  */
@@ -26527,31 +27776,31 @@ yyreduce:
                 lex->insert_list->push_back((yyvsp[0].item)))
               MYSQL_YYABORT;
           }
-#line 26531 "sql_yacc.cc"
+#line 27780 "sql_yacc.cc"
     break;
 
   case 1505: /* equal: EQ  */
 #line 9841 "sql_yacc.yy"
              {}
-#line 26537 "sql_yacc.cc"
+#line 27786 "sql_yacc.cc"
     break;
 
   case 1506: /* equal: SET_VAR  */
 #line 9842 "sql_yacc.yy"
                   {}
-#line 26543 "sql_yacc.cc"
+#line 27792 "sql_yacc.cc"
     break;
 
   case 1507: /* opt_equal: %empty  */
 #line 9846 "sql_yacc.yy"
                       {}
-#line 26549 "sql_yacc.cc"
+#line 27798 "sql_yacc.cc"
     break;
 
   case 1508: /* opt_equal: equal  */
 #line 9847 "sql_yacc.yy"
                 {}
-#line 26555 "sql_yacc.cc"
+#line 27804 "sql_yacc.cc"
     break;
 
   case 1509: /* $@129: %empty  */
@@ -26560,7 +27809,7 @@ yyreduce:
               if (!(Lex->insert_list = new List_item))
                 MYSQL_YYABORT;
           }
-#line 26564 "sql_yacc.cc"
+#line 27813 "sql_yacc.cc"
     break;
 
   case 1510: /* no_braces: '(' $@129 opt_values ')'  */
@@ -26570,13 +27819,13 @@ yyreduce:
             if (lex->many_values.push_back(lex->insert_list))
               MYSQL_YYABORT;
           }
-#line 26574 "sql_yacc.cc"
+#line 27823 "sql_yacc.cc"
     break;
 
   case 1511: /* opt_values: %empty  */
 #line 9865 "sql_yacc.yy"
                       {}
-#line 26580 "sql_yacc.cc"
+#line 27829 "sql_yacc.cc"
     break;
 
   case 1513: /* values: values ',' expr_or_default  */
@@ -26585,7 +27834,7 @@ yyreduce:
             if (Lex->insert_list->push_back((yyvsp[0].item)))
               MYSQL_YYABORT;
           }
-#line 26589 "sql_yacc.cc"
+#line 27838 "sql_yacc.cc"
     break;
 
   case 1514: /* values: expr_or_default  */
@@ -26594,13 +27843,13 @@ yyreduce:
             if (Lex->insert_list->push_back((yyvsp[0].item)))
               MYSQL_YYABORT;
           }
-#line 26598 "sql_yacc.cc"
+#line 27847 "sql_yacc.cc"
     break;
 
   case 1515: /* expr_or_default: expr  */
 #line 9883 "sql_yacc.yy"
                { (yyval.item)= (yyvsp[0].item);}
-#line 26604 "sql_yacc.cc"
+#line 27853 "sql_yacc.cc"
     break;
 
   case 1516: /* expr_or_default: DEFAULT  */
@@ -26610,13 +27859,13 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 26614 "sql_yacc.cc"
+#line 27863 "sql_yacc.cc"
     break;
 
   case 1518: /* $@130: %empty  */
 #line 9894 "sql_yacc.yy"
                            { Lex->duplicates= DUP_UPDATE; }
-#line 26620 "sql_yacc.cc"
+#line 27869 "sql_yacc.cc"
     break;
 
   case 1520: /* $@131: %empty  */
@@ -26628,7 +27877,7 @@ yyreduce:
             lex->lock_option= TL_UNLOCK; /* Will be set later */
             lex->duplicates= DUP_ERROR; 
           }
-#line 26632 "sql_yacc.cc"
+#line 27881 "sql_yacc.cc"
     break;
 
   case 1521: /* $@132: %empty  */
@@ -26651,13 +27900,13 @@ yyreduce:
             */
             Select->set_lock_for_tables((yyvsp[-4].lock_type));
           }
-#line 26655 "sql_yacc.cc"
+#line 27904 "sql_yacc.cc"
     break;
 
   case 1522: /* update: UPDATE_SYM $@131 opt_low_priority opt_ignore join_table_list SET update_list $@132 where_clause opt_order_clause delete_limit_clause opt_change_options  */
 #line 9929 "sql_yacc.yy"
                                                                                {}
-#line 26661 "sql_yacc.cc"
+#line 27910 "sql_yacc.cc"
     break;
 
   case 1525: /* update_elem: simple_ident_nospvar equal expr_or_default  */
@@ -26666,7 +27915,7 @@ yyreduce:
             if (add_item_to_list(YYTHD, (yyvsp[-2].item)) || add_value_to_list(YYTHD, (yyvsp[0].item)))
               MYSQL_YYABORT;
           }
-#line 26670 "sql_yacc.cc"
+#line 27919 "sql_yacc.cc"
     break;
 
   case 1528: /* insert_update_elem: simple_ident_nospvar equal expr_or_default  */
@@ -26677,19 +27926,19 @@ yyreduce:
               lex->value_list.push_back((yyvsp[0].item)))
               MYSQL_YYABORT;
           }
-#line 26681 "sql_yacc.cc"
+#line 27930 "sql_yacc.cc"
     break;
 
   case 1529: /* opt_low_priority: %empty  */
 #line 9961 "sql_yacc.yy"
                       { (yyval.lock_type)= TL_WRITE_DEFAULT; }
-#line 26687 "sql_yacc.cc"
+#line 27936 "sql_yacc.cc"
     break;
 
   case 1530: /* opt_low_priority: LOW_PRIORITY  */
 #line 9962 "sql_yacc.yy"
                        { (yyval.lock_type)= TL_WRITE_LOW_PRIORITY; }
-#line 26693 "sql_yacc.cc"
+#line 27942 "sql_yacc.cc"
     break;
 
   case 1531: /* $@133: %empty  */
@@ -26702,13 +27951,13 @@ yyreduce:
             lex->ignore= 0;
             lex->select_lex.init_order();
           }
-#line 26706 "sql_yacc.cc"
+#line 27955 "sql_yacc.cc"
     break;
 
   case 1532: /* delete: DELETE_SYM $@133 opt_delete_options single_multi opt_change_options  */
 #line 9977 "sql_yacc.yy"
                                                              {}
-#line 26712 "sql_yacc.cc"
+#line 27961 "sql_yacc.cc"
     break;
 
   case 1533: /* $@134: %empty  */
@@ -26718,19 +27967,19 @@ yyreduce:
                                            Lex->lock_option))
               MYSQL_YYABORT;
           }
-#line 26722 "sql_yacc.cc"
+#line 27971 "sql_yacc.cc"
     break;
 
   case 1534: /* single_multi: FROM table_ident $@134 where_clause opt_order_clause delete_limit_clause  */
 #line 9988 "sql_yacc.yy"
                               {}
-#line 26728 "sql_yacc.cc"
+#line 27977 "sql_yacc.cc"
     break;
 
   case 1535: /* $@135: %empty  */
 #line 9990 "sql_yacc.yy"
           { mysql_init_multi_delete(Lex); }
-#line 26734 "sql_yacc.cc"
+#line 27983 "sql_yacc.cc"
     break;
 
   case 1536: /* single_multi: table_wild_list $@135 FROM join_table_list where_clause  */
@@ -26739,13 +27988,13 @@ yyreduce:
             if (multi_delete_set_locks_and_link_aux_tables(Lex))
               MYSQL_YYABORT;
           }
-#line 26743 "sql_yacc.cc"
+#line 27992 "sql_yacc.cc"
     break;
 
   case 1537: /* $@136: %empty  */
 #line 9997 "sql_yacc.yy"
           { mysql_init_multi_delete(Lex); }
-#line 26749 "sql_yacc.cc"
+#line 27998 "sql_yacc.cc"
     break;
 
   case 1538: /* single_multi: FROM table_alias_ref_list $@136 USING join_table_list where_clause  */
@@ -26754,19 +28003,19 @@ yyreduce:
             if (multi_delete_set_locks_and_link_aux_tables(Lex))
               MYSQL_YYABORT;
           }
-#line 26758 "sql_yacc.cc"
+#line 28007 "sql_yacc.cc"
     break;
 
   case 1539: /* table_wild_list: table_wild_one  */
 #line 10006 "sql_yacc.yy"
                          {}
-#line 26764 "sql_yacc.cc"
+#line 28013 "sql_yacc.cc"
     break;
 
   case 1540: /* table_wild_list: table_wild_list ',' table_wild_one  */
 #line 10007 "sql_yacc.yy"
                                              {}
-#line 26770 "sql_yacc.cc"
+#line 28019 "sql_yacc.cc"
     break;
 
   case 1541: /* table_wild_one: ident opt_wild opt_table_alias  */
@@ -26782,7 +28031,7 @@ yyreduce:
                                            Lex->lock_option))
               MYSQL_YYABORT;
           }
-#line 26786 "sql_yacc.cc"
+#line 28035 "sql_yacc.cc"
     break;
 
   case 1542: /* table_wild_one: ident '.' ident opt_wild opt_table_alias  */
@@ -26798,73 +28047,73 @@ yyreduce:
                                            Lex->lock_option))
               MYSQL_YYABORT;
           }
-#line 26802 "sql_yacc.cc"
+#line 28051 "sql_yacc.cc"
     break;
 
   case 1543: /* opt_wild: %empty  */
 #line 10038 "sql_yacc.yy"
                       {}
-#line 26808 "sql_yacc.cc"
+#line 28057 "sql_yacc.cc"
     break;
 
   case 1544: /* opt_wild: '.' '*'  */
 #line 10039 "sql_yacc.yy"
                   {}
-#line 26814 "sql_yacc.cc"
+#line 28063 "sql_yacc.cc"
     break;
 
   case 1545: /* opt_change_options: %empty  */
 #line 10043 "sql_yacc.yy"
                       {}
-#line 26820 "sql_yacc.cc"
+#line 28069 "sql_yacc.cc"
     break;
 
   case 1546: /* opt_change_options: opt_change_option opt_change_options  */
 #line 10044 "sql_yacc.yy"
                                                {}
-#line 26826 "sql_yacc.cc"
+#line 28075 "sql_yacc.cc"
     break;
 
   case 1547: /* opt_change_option: NO_SLAVE_EXEC_SYM  */
 #line 10048 "sql_yacc.yy"
                             { Lex->no_slave_exec= 1; }
-#line 26832 "sql_yacc.cc"
+#line 28081 "sql_yacc.cc"
     break;
 
   case 1548: /* opt_change_option: ASYNC_COMMIT_SYM  */
 #line 10049 "sql_yacc.yy"
                             { Lex->async_commit= 1; }
-#line 26838 "sql_yacc.cc"
+#line 28087 "sql_yacc.cc"
     break;
 
   case 1549: /* opt_delete_options: %empty  */
 #line 10053 "sql_yacc.yy"
                       {}
-#line 26844 "sql_yacc.cc"
+#line 28093 "sql_yacc.cc"
     break;
 
   case 1550: /* opt_delete_options: opt_delete_option opt_delete_options  */
 #line 10054 "sql_yacc.yy"
                                                {}
-#line 26850 "sql_yacc.cc"
+#line 28099 "sql_yacc.cc"
     break;
 
   case 1551: /* opt_delete_option: QUICK  */
 #line 10058 "sql_yacc.yy"
                        { Select->options|= OPTION_QUICK; }
-#line 26856 "sql_yacc.cc"
+#line 28105 "sql_yacc.cc"
     break;
 
   case 1552: /* opt_delete_option: LOW_PRIORITY  */
 #line 10059 "sql_yacc.yy"
                        { Lex->lock_option= TL_WRITE_LOW_PRIORITY; }
-#line 26862 "sql_yacc.cc"
+#line 28111 "sql_yacc.cc"
     break;
 
   case 1553: /* opt_delete_option: IGNORE_SYM  */
 #line 10060 "sql_yacc.yy"
                        { Lex->ignore= 1; }
-#line 26868 "sql_yacc.cc"
+#line 28117 "sql_yacc.cc"
     break;
 
   case 1554: /* truncate: TRUNCATE_SYM opt_table_sym table_name  */
@@ -26876,7 +28125,7 @@ yyreduce:
             lex->select_lex.sql_cache= SELECT_LEX::SQL_CACHE_UNSPECIFIED;
             lex->select_lex.init_order();
           }
-#line 26880 "sql_yacc.cc"
+#line 28129 "sql_yacc.cc"
     break;
 
   case 1561: /* profile_def: CPU_SYM  */
@@ -26884,7 +28133,7 @@ yyreduce:
     {
       Lex->profile_options|= PROFILE_CPU;
     }
-#line 26888 "sql_yacc.cc"
+#line 28137 "sql_yacc.cc"
     break;
 
   case 1562: /* profile_def: MEMORY_SYM  */
@@ -26892,7 +28141,7 @@ yyreduce:
     {
       Lex->profile_options|= PROFILE_MEMORY;
     }
-#line 26896 "sql_yacc.cc"
+#line 28145 "sql_yacc.cc"
     break;
 
   case 1563: /* profile_def: BLOCK_SYM IO_SYM  */
@@ -26900,7 +28149,7 @@ yyreduce:
     {
       Lex->profile_options|= PROFILE_BLOCK_IO;
     }
-#line 26904 "sql_yacc.cc"
+#line 28153 "sql_yacc.cc"
     break;
 
   case 1564: /* profile_def: CONTEXT_SYM SWITCHES_SYM  */
@@ -26908,7 +28157,7 @@ yyreduce:
     {
       Lex->profile_options|= PROFILE_CONTEXT;
     }
-#line 26912 "sql_yacc.cc"
+#line 28161 "sql_yacc.cc"
     break;
 
   case 1565: /* profile_def: PAGE_SYM FAULTS_SYM  */
@@ -26916,7 +28165,7 @@ yyreduce:
     {
       Lex->profile_options|= PROFILE_PAGE_FAULTS;
     }
-#line 26920 "sql_yacc.cc"
+#line 28169 "sql_yacc.cc"
     break;
 
   case 1566: /* profile_def: IPC_SYM  */
@@ -26924,7 +28173,7 @@ yyreduce:
     {
       Lex->profile_options|= PROFILE_IPC;
     }
-#line 26928 "sql_yacc.cc"
+#line 28177 "sql_yacc.cc"
     break;
 
   case 1567: /* profile_def: SWAPS_SYM  */
@@ -26932,7 +28181,7 @@ yyreduce:
     {
       Lex->profile_options|= PROFILE_SWAPS;
     }
-#line 26936 "sql_yacc.cc"
+#line 28185 "sql_yacc.cc"
     break;
 
   case 1568: /* profile_def: SOURCE_SYM  */
@@ -26940,7 +28189,7 @@ yyreduce:
     {
       Lex->profile_options|= PROFILE_SOURCE;
     }
-#line 26944 "sql_yacc.cc"
+#line 28193 "sql_yacc.cc"
     break;
 
   case 1569: /* profile_def: ALL  */
@@ -26948,7 +28197,7 @@ yyreduce:
     {
       Lex->profile_options|= PROFILE_ALL;
     }
-#line 26952 "sql_yacc.cc"
+#line 28201 "sql_yacc.cc"
     break;
 
   case 1570: /* opt_profile_args: %empty  */
@@ -26956,7 +28205,7 @@ yyreduce:
     {
       Lex->profile_query_id= 0;
     }
-#line 26960 "sql_yacc.cc"
+#line 28209 "sql_yacc.cc"
     break;
 
   case 1571: /* opt_profile_args: FOR_SYM QUERY_SYM NUM  */
@@ -26964,7 +28213,7 @@ yyreduce:
     {
       Lex->profile_query_id= atoi((yyvsp[0].lex_str).str);
     }
-#line 26968 "sql_yacc.cc"
+#line 28217 "sql_yacc.cc"
     break;
 
   case 1572: /* $@137: %empty  */
@@ -26977,13 +28226,13 @@ yyreduce:
             lex->current_select->parsing_place= SELECT_LIST;
             bzero((char*) &lex->create_info,sizeof(lex->create_info));
           }
-#line 26981 "sql_yacc.cc"
+#line 28230 "sql_yacc.cc"
     break;
 
   case 1573: /* show: SHOW $@137 show_param  */
 #line 10150 "sql_yacc.yy"
           {}
-#line 26987 "sql_yacc.cc"
+#line 28236 "sql_yacc.cc"
     break;
 
   case 1574: /* show_param: DATABASES wild_and_where  */
@@ -26994,7 +28243,7 @@ yyreduce:
              if (prepare_schema_table(YYTHD, lex, 0, SCH_SCHEMATA))
                MYSQL_YYABORT;
            }
-#line 26998 "sql_yacc.cc"
+#line 28247 "sql_yacc.cc"
     break;
 
   case 1575: /* show_param: opt_full TABLES opt_db wild_and_where  */
@@ -27006,7 +28255,7 @@ yyreduce:
              if (prepare_schema_table(YYTHD, lex, 0, SCH_TABLE_NAMES))
                MYSQL_YYABORT;
            }
-#line 27010 "sql_yacc.cc"
+#line 28259 "sql_yacc.cc"
     break;
 
   case 1576: /* show_param: opt_full TRIGGERS_SYM opt_db wild_and_where  */
@@ -27018,7 +28267,7 @@ yyreduce:
              if (prepare_schema_table(YYTHD, lex, 0, SCH_TRIGGERS))
                MYSQL_YYABORT;
            }
-#line 27022 "sql_yacc.cc"
+#line 28271 "sql_yacc.cc"
     break;
 
   case 1577: /* show_param: EVENTS_SYM opt_db wild_and_where  */
@@ -27030,7 +28279,7 @@ yyreduce:
              if (prepare_schema_table(YYTHD, lex, 0, SCH_EVENTS))
                MYSQL_YYABORT;
            }
-#line 27034 "sql_yacc.cc"
+#line 28283 "sql_yacc.cc"
     break;
 
   case 1578: /* show_param: TABLE_SYM STATUS_SYM opt_db wild_and_where  */
@@ -27042,7 +28291,7 @@ yyreduce:
              if (prepare_schema_table(YYTHD, lex, 0, SCH_TABLES))
                MYSQL_YYABORT;
            }
-#line 27046 "sql_yacc.cc"
+#line 28295 "sql_yacc.cc"
     break;
 
   case 1579: /* show_param: OPEN_SYM TABLES opt_db wild_and_where  */
@@ -27054,7 +28303,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_OPEN_TABLES))
               MYSQL_YYABORT;
           }
-#line 27058 "sql_yacc.cc"
+#line 28307 "sql_yacc.cc"
     break;
 
   case 1580: /* show_param: opt_full PLUGIN_SYM  */
@@ -27066,7 +28315,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_PLUGINS))
               MYSQL_YYABORT;
           }
-#line 27070 "sql_yacc.cc"
+#line 28319 "sql_yacc.cc"
     break;
 
   case 1581: /* show_param: PLUGINS_SYM  */
@@ -27077,25 +28326,25 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_PLUGINS))
               MYSQL_YYABORT;
           }
-#line 27081 "sql_yacc.cc"
+#line 28330 "sql_yacc.cc"
     break;
 
   case 1582: /* show_param: MEMORY_SYM STATUS_SYM  */
 #line 10216 "sql_yacc.yy"
                                 { Lex->sql_command= SQLCOM_SHOW_MEMORY_STATUS; }
-#line 27087 "sql_yacc.cc"
+#line 28336 "sql_yacc.cc"
     break;
 
   case 1583: /* show_param: ENGINE_SYM known_storage_engines show_engine_param  */
 #line 10218 "sql_yacc.yy"
           { Lex->create_info.db_type= (yyvsp[-1].db_type); }
-#line 27093 "sql_yacc.cc"
+#line 28342 "sql_yacc.cc"
     break;
 
   case 1584: /* show_param: ENGINE_SYM ALL show_engine_param  */
 #line 10220 "sql_yacc.yy"
           { Lex->create_info.db_type= NULL; }
-#line 27099 "sql_yacc.cc"
+#line 28348 "sql_yacc.cc"
     break;
 
   case 1585: /* show_param: opt_full COLUMNS from_or_in table_ident opt_db wild_and_where  */
@@ -27108,7 +28357,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, (yyvsp[-2].table), SCH_COLUMNS))
               MYSQL_YYABORT;
           }
-#line 27112 "sql_yacc.cc"
+#line 28361 "sql_yacc.cc"
     break;
 
   case 1586: /* show_param: NEW_SYM MASTER_SYM FOR_SYM SLAVE WITH MASTER_LOG_FILE_SYM EQ TEXT_STRING_sys AND_SYM MASTER_LOG_POS_SYM EQ ulonglong_num AND_SYM MASTER_SERVER_ID_SYM EQ ulong_num  */
@@ -27119,7 +28368,7 @@ yyreduce:
             Lex->mi.pos = (yyvsp[-4].ulonglong_number);
             Lex->mi.server_id = (yyvsp[0].ulong_num);
           }
-#line 27123 "sql_yacc.cc"
+#line 28372 "sql_yacc.cc"
     break;
 
   case 1587: /* show_param: master_or_binary LOGS_SYM  */
@@ -27127,7 +28376,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_SHOW_BINLOGS;
           }
-#line 27131 "sql_yacc.cc"
+#line 28380 "sql_yacc.cc"
     break;
 
   case 1588: /* show_param: SLAVE HOSTS_SYM  */
@@ -27135,7 +28384,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_SHOW_SLAVE_HOSTS;
           }
-#line 27139 "sql_yacc.cc"
+#line 28388 "sql_yacc.cc"
     break;
 
   case 1589: /* $@138: %empty  */
@@ -27144,7 +28393,7 @@ yyreduce:
             LEX *lex= Lex;
             lex->sql_command= SQLCOM_SHOW_BINLOG_EVENTS;
           }
-#line 27148 "sql_yacc.cc"
+#line 28397 "sql_yacc.cc"
     break;
 
   case 1591: /* show_param: keys_or_index from_or_in table_ident opt_db where_clause  */
@@ -27157,7 +28406,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, (yyvsp[-2].table), SCH_STATISTICS))
               MYSQL_YYABORT;
           }
-#line 27161 "sql_yacc.cc"
+#line 28410 "sql_yacc.cc"
     break;
 
   case 1592: /* show_param: COLUMN_SYM TYPES_SYM  */
@@ -27166,7 +28415,7 @@ yyreduce:
             LEX *lex=Lex;
             lex->sql_command= SQLCOM_SHOW_COLUMN_TYPES;
           }
-#line 27170 "sql_yacc.cc"
+#line 28419 "sql_yacc.cc"
     break;
 
   case 1593: /* show_param: TABLE_SYM TYPES_SYM  */
@@ -27178,7 +28427,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_ENGINES))
               MYSQL_YYABORT;
           }
-#line 27182 "sql_yacc.cc"
+#line 28431 "sql_yacc.cc"
     break;
 
   case 1594: /* show_param: opt_storage ENGINES_SYM  */
@@ -27189,7 +28438,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_ENGINES))
               MYSQL_YYABORT;
           }
-#line 27193 "sql_yacc.cc"
+#line 28442 "sql_yacc.cc"
     break;
 
   case 1595: /* show_param: AUTHORS_SYM  */
@@ -27198,7 +28447,7 @@ yyreduce:
             LEX *lex=Lex;
             lex->sql_command= SQLCOM_SHOW_AUTHORS;
           }
-#line 27202 "sql_yacc.cc"
+#line 28451 "sql_yacc.cc"
     break;
 
   case 1596: /* show_param: CONTRIBUTORS_SYM  */
@@ -27207,7 +28456,7 @@ yyreduce:
             LEX *lex=Lex;
             lex->sql_command= SQLCOM_SHOW_CONTRIBUTORS;
           }
-#line 27211 "sql_yacc.cc"
+#line 28460 "sql_yacc.cc"
     break;
 
   case 1597: /* show_param: PRIVILEGES  */
@@ -27216,37 +28465,37 @@ yyreduce:
             LEX *lex=Lex;
             lex->sql_command= SQLCOM_SHOW_PRIVILEGES;
           }
-#line 27220 "sql_yacc.cc"
+#line 28469 "sql_yacc.cc"
     break;
 
   case 1598: /* show_param: COUNT_SYM '(' '*' ')' WARNINGS  */
 #line 10301 "sql_yacc.yy"
           { (void) create_select_for_variable("warning_count"); }
-#line 27226 "sql_yacc.cc"
+#line 28475 "sql_yacc.cc"
     break;
 
   case 1599: /* show_param: COUNT_SYM '(' '*' ')' ERRORS  */
 #line 10303 "sql_yacc.yy"
           { (void) create_select_for_variable("error_count"); }
-#line 27232 "sql_yacc.cc"
+#line 28481 "sql_yacc.cc"
     break;
 
   case 1600: /* show_param: WARNINGS opt_limit_clause_init  */
 #line 10305 "sql_yacc.yy"
           { Lex->sql_command = SQLCOM_SHOW_WARNS;}
-#line 27238 "sql_yacc.cc"
+#line 28487 "sql_yacc.cc"
     break;
 
   case 1601: /* show_param: ERRORS opt_limit_clause_init  */
 #line 10307 "sql_yacc.yy"
           { Lex->sql_command = SQLCOM_SHOW_ERRORS;}
-#line 27244 "sql_yacc.cc"
+#line 28493 "sql_yacc.cc"
     break;
 
   case 1602: /* show_param: PROFILES_SYM  */
 #line 10309 "sql_yacc.yy"
           { Lex->sql_command = SQLCOM_SHOW_PROFILES; }
-#line 27250 "sql_yacc.cc"
+#line 28499 "sql_yacc.cc"
     break;
 
   case 1603: /* show_param: PROFILE_SYM opt_profile_defs opt_profile_args opt_limit_clause_init  */
@@ -27257,7 +28506,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, NULL, SCH_PROFILES) != 0)
               YYABORT;
           }
-#line 27261 "sql_yacc.cc"
+#line 28510 "sql_yacc.cc"
     break;
 
   case 1604: /* show_param: opt_var_type STATUS_SYM wild_and_where  */
@@ -27269,7 +28518,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_STATUS))
               MYSQL_YYABORT;
           }
-#line 27273 "sql_yacc.cc"
+#line 28522 "sql_yacc.cc"
     break;
 
   case 1605: /* show_param: INNOBASE_SYM STATUS_SYM  */
@@ -27285,7 +28534,7 @@ yyreduce:
             }
             WARN_DEPRECATED(yythd, "6.0", "SHOW INNODB STATUS", "'SHOW ENGINE INNODB STATUS'");
           }
-#line 27289 "sql_yacc.cc"
+#line 28538 "sql_yacc.cc"
     break;
 
   case 1606: /* show_param: INNOBASE_SYM TRANSACTION_SYM STATUS_SYM  */
@@ -27302,7 +28551,7 @@ yyreduce:
             WARN_DEPRECATED(yythd, "6.0", "SHOW INNODB TRANSACTION STATUS",
                             "'SHOW ENGINE INNODB TRANSACTION STATUS'");
           }
-#line 27306 "sql_yacc.cc"
+#line 28555 "sql_yacc.cc"
     break;
 
   case 1607: /* show_param: MUTEX_SYM STATUS_SYM  */
@@ -27318,13 +28567,13 @@ yyreduce:
             }
             WARN_DEPRECATED(yythd, "6.0", "SHOW MUTEX STATUS", "'SHOW ENGINE INNODB MUTEX'");
           }
-#line 27322 "sql_yacc.cc"
+#line 28571 "sql_yacc.cc"
     break;
 
   case 1608: /* show_param: opt_full PROCESSLIST_SYM  */
 #line 10363 "sql_yacc.yy"
           { Lex->sql_command= SQLCOM_SHOW_PROCESSLIST;}
-#line 27328 "sql_yacc.cc"
+#line 28577 "sql_yacc.cc"
     break;
 
   case 1609: /* show_param: opt_var_type VARIABLES wild_and_where  */
@@ -27336,7 +28585,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_VARIABLES))
               MYSQL_YYABORT;
           }
-#line 27340 "sql_yacc.cc"
+#line 28589 "sql_yacc.cc"
     break;
 
   case 1610: /* show_param: charset wild_and_where  */
@@ -27347,7 +28596,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_CHARSETS))
               MYSQL_YYABORT;
           }
-#line 27351 "sql_yacc.cc"
+#line 28600 "sql_yacc.cc"
     break;
 
   case 1611: /* show_param: COLLATION_SYM wild_and_where  */
@@ -27358,7 +28607,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_COLLATIONS))
               MYSQL_YYABORT;
           }
-#line 27362 "sql_yacc.cc"
+#line 28611 "sql_yacc.cc"
     break;
 
   case 1612: /* show_param: GRANTS  */
@@ -27372,7 +28621,7 @@ yyreduce:
             bzero(curr_user, sizeof(st_lex_user));
             lex->grant_user= curr_user;
           }
-#line 27376 "sql_yacc.cc"
+#line 28625 "sql_yacc.cc"
     break;
 
   case 1613: /* show_param: GRANTS FOR_SYM user  */
@@ -27383,7 +28632,7 @@ yyreduce:
             lex->grant_user=(yyvsp[0].lex_user);
             lex->grant_user->password=null_lex_str;
           }
-#line 27387 "sql_yacc.cc"
+#line 28636 "sql_yacc.cc"
     break;
 
   case 1614: /* show_param: CREATE DATABASE opt_if_not_exists ident  */
@@ -27393,7 +28642,7 @@ yyreduce:
             Lex->create_info.options=(yyvsp[-1].num);
             Lex->name= (yyvsp[0].lex_str);
           }
-#line 27397 "sql_yacc.cc"
+#line 28646 "sql_yacc.cc"
     break;
 
   case 1615: /* show_param: CREATE TABLE_SYM table_ident  */
@@ -27406,7 +28655,7 @@ yyreduce:
             lex->only_view= 0;
             lex->create_info.storage_media= HA_SM_DEFAULT;
           }
-#line 27410 "sql_yacc.cc"
+#line 28659 "sql_yacc.cc"
     break;
 
   case 1616: /* show_param: CREATE VIEW_SYM table_ident  */
@@ -27418,7 +28667,7 @@ yyreduce:
               MYSQL_YYABORT;
             lex->only_view= 1;
           }
-#line 27422 "sql_yacc.cc"
+#line 28671 "sql_yacc.cc"
     break;
 
   case 1617: /* show_param: MASTER_SYM STATUS_SYM  */
@@ -27426,7 +28675,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_SHOW_MASTER_STAT;
           }
-#line 27430 "sql_yacc.cc"
+#line 28679 "sql_yacc.cc"
     break;
 
   case 1618: /* show_param: SLAVE STATUS_SYM  */
@@ -27434,7 +28683,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_SHOW_SLAVE_STAT;
           }
-#line 27438 "sql_yacc.cc"
+#line 28687 "sql_yacc.cc"
     break;
 
   case 1619: /* show_param: CREATE PROCEDURE sp_name  */
@@ -27445,7 +28694,7 @@ yyreduce:
             lex->sql_command = SQLCOM_SHOW_CREATE_PROC;
             lex->spname= (yyvsp[0].spname);
           }
-#line 27449 "sql_yacc.cc"
+#line 28698 "sql_yacc.cc"
     break;
 
   case 1620: /* show_param: CREATE FUNCTION_SYM sp_name  */
@@ -27456,7 +28705,7 @@ yyreduce:
             lex->sql_command = SQLCOM_SHOW_CREATE_FUNC;
             lex->spname= (yyvsp[0].spname);
           }
-#line 27460 "sql_yacc.cc"
+#line 28709 "sql_yacc.cc"
     break;
 
   case 1621: /* show_param: CREATE TRIGGER_SYM sp_name  */
@@ -27466,7 +28715,7 @@ yyreduce:
             lex->sql_command= SQLCOM_SHOW_CREATE_TRIGGER;
             lex->spname= (yyvsp[0].spname);
           }
-#line 27470 "sql_yacc.cc"
+#line 28719 "sql_yacc.cc"
     break;
 
   case 1622: /* show_param: PROCEDURE STATUS_SYM wild_and_where  */
@@ -27477,7 +28726,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_PROCEDURES))
               MYSQL_YYABORT;
           }
-#line 27481 "sql_yacc.cc"
+#line 28730 "sql_yacc.cc"
     break;
 
   case 1623: /* show_param: FUNCTION_SYM STATUS_SYM wild_and_where  */
@@ -27488,7 +28737,7 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, 0, SCH_PROCEDURES))
               MYSQL_YYABORT;
           }
-#line 27492 "sql_yacc.cc"
+#line 28741 "sql_yacc.cc"
     break;
 
   case 1624: /* show_param: PROCEDURE CODE_SYM sp_name  */
@@ -27502,7 +28751,7 @@ yyreduce:
             Lex->spname= (yyvsp[0].spname);
 #endif
           }
-#line 27506 "sql_yacc.cc"
+#line 28755 "sql_yacc.cc"
     break;
 
   case 1625: /* show_param: FUNCTION_SYM CODE_SYM sp_name  */
@@ -27516,7 +28765,7 @@ yyreduce:
             Lex->spname= (yyvsp[0].spname);
 #endif
           }
-#line 27520 "sql_yacc.cc"
+#line 28769 "sql_yacc.cc"
     break;
 
   case 1626: /* show_param: CREATE EVENT_SYM sp_name  */
@@ -27525,79 +28774,79 @@ yyreduce:
             Lex->spname= (yyvsp[0].spname);
             Lex->sql_command = SQLCOM_SHOW_CREATE_EVENT;
           }
-#line 27529 "sql_yacc.cc"
+#line 28778 "sql_yacc.cc"
     break;
 
   case 1627: /* show_engine_param: STATUS_SYM  */
 #line 10497 "sql_yacc.yy"
           { Lex->sql_command= SQLCOM_SHOW_ENGINE_STATUS; }
-#line 27535 "sql_yacc.cc"
+#line 28784 "sql_yacc.cc"
     break;
 
   case 1628: /* show_engine_param: MUTEX_SYM  */
 #line 10499 "sql_yacc.yy"
           { Lex->sql_command= SQLCOM_SHOW_ENGINE_MUTEX; }
-#line 27541 "sql_yacc.cc"
+#line 28790 "sql_yacc.cc"
     break;
 
   case 1629: /* show_engine_param: LOGS_SYM  */
 #line 10501 "sql_yacc.yy"
           { Lex->sql_command= SQLCOM_SHOW_ENGINE_LOGS; }
-#line 27547 "sql_yacc.cc"
+#line 28796 "sql_yacc.cc"
     break;
 
   case 1630: /* show_engine_param: TRANSACTION_SYM STATUS_SYM  */
 #line 10503 "sql_yacc.yy"
           { Lex->sql_command= SQLCOM_SHOW_ENGINE_TRX; }
-#line 27553 "sql_yacc.cc"
+#line 28802 "sql_yacc.cc"
     break;
 
   case 1635: /* opt_db: %empty  */
 #line 10517 "sql_yacc.yy"
                        { (yyval.simple_string)= 0; }
-#line 27559 "sql_yacc.cc"
+#line 28808 "sql_yacc.cc"
     break;
 
   case 1636: /* opt_db: from_or_in ident  */
 #line 10518 "sql_yacc.yy"
                            { (yyval.simple_string)= (yyvsp[0].lex_str).str; }
-#line 27565 "sql_yacc.cc"
+#line 28814 "sql_yacc.cc"
     break;
 
   case 1637: /* opt_full: %empty  */
 #line 10522 "sql_yacc.yy"
                       { Lex->verbose=0; }
-#line 27571 "sql_yacc.cc"
+#line 28820 "sql_yacc.cc"
     break;
 
   case 1638: /* opt_full: FULL  */
 #line 10523 "sql_yacc.yy"
                       { Lex->verbose=1; }
-#line 27577 "sql_yacc.cc"
+#line 28826 "sql_yacc.cc"
     break;
 
   case 1641: /* binlog_in: %empty  */
 #line 10532 "sql_yacc.yy"
                                  { Lex->mi.log_file_name = 0; }
-#line 27583 "sql_yacc.cc"
+#line 28832 "sql_yacc.cc"
     break;
 
   case 1642: /* binlog_in: IN_SYM TEXT_STRING_sys  */
 #line 10533 "sql_yacc.yy"
                                  { Lex->mi.log_file_name = (yyvsp[0].lex_str).str; }
-#line 27589 "sql_yacc.cc"
+#line 28838 "sql_yacc.cc"
     break;
 
   case 1643: /* binlog_from: %empty  */
 #line 10537 "sql_yacc.yy"
                              { Lex->mi.pos = 4; /* skip magic number */ }
-#line 27595 "sql_yacc.cc"
+#line 28844 "sql_yacc.cc"
     break;
 
   case 1644: /* binlog_from: FROM ulonglong_num  */
 #line 10538 "sql_yacc.yy"
                              { Lex->mi.pos = (yyvsp[0].ulonglong_number); }
-#line 27601 "sql_yacc.cc"
+#line 28850 "sql_yacc.cc"
     break;
 
   case 1646: /* wild_and_where: LIKE TEXT_STRING_sys  */
@@ -27608,7 +28857,7 @@ yyreduce:
             if (Lex->wild == NULL)
               MYSQL_YYABORT;
           }
-#line 27612 "sql_yacc.cc"
+#line 28861 "sql_yacc.cc"
     break;
 
   case 1647: /* wild_and_where: WHERE expr  */
@@ -27618,7 +28867,7 @@ yyreduce:
             if ((yyvsp[0].item))
               (yyvsp[0].item)->top_level_item();
           }
-#line 27622 "sql_yacc.cc"
+#line 28871 "sql_yacc.cc"
     break;
 
   case 1648: /* $@139: %empty  */
@@ -27634,19 +28883,19 @@ yyreduce:
             if (prepare_schema_table(YYTHD, lex, (yyvsp[0].table), SCH_COLUMNS))
               MYSQL_YYABORT;
           }
-#line 27638 "sql_yacc.cc"
+#line 28887 "sql_yacc.cc"
     break;
 
   case 1649: /* describe: describe_command table_ident $@139 opt_describe_column  */
 #line 10572 "sql_yacc.yy"
                               {}
-#line 27644 "sql_yacc.cc"
+#line 28893 "sql_yacc.cc"
     break;
 
   case 1650: /* $@140: %empty  */
 #line 10574 "sql_yacc.yy"
           { Lex->describe|= DESCRIBE_NORMAL; }
-#line 27650 "sql_yacc.cc"
+#line 28899 "sql_yacc.cc"
     break;
 
   case 1651: /* describe: describe_command opt_extended_describe $@140 select  */
@@ -27655,37 +28904,37 @@ yyreduce:
             LEX *lex=Lex;
             lex->select_lex.options|= SELECT_DESCRIBE;
           }
-#line 27659 "sql_yacc.cc"
+#line 28908 "sql_yacc.cc"
     break;
 
   case 1654: /* opt_extended_describe: %empty  */
 #line 10588 "sql_yacc.yy"
                       {}
-#line 27665 "sql_yacc.cc"
+#line 28914 "sql_yacc.cc"
     break;
 
   case 1655: /* opt_extended_describe: EXTENDED_SYM  */
 #line 10589 "sql_yacc.yy"
                          { Lex->describe|= DESCRIBE_EXTENDED; }
-#line 27671 "sql_yacc.cc"
+#line 28920 "sql_yacc.cc"
     break;
 
   case 1656: /* opt_extended_describe: PARTITIONS_SYM  */
 #line 10590 "sql_yacc.yy"
                          { Lex->describe|= DESCRIBE_PARTITIONS; }
-#line 27677 "sql_yacc.cc"
+#line 28926 "sql_yacc.cc"
     break;
 
   case 1657: /* opt_describe_column: %empty  */
 #line 10594 "sql_yacc.yy"
                       {}
-#line 27683 "sql_yacc.cc"
+#line 28932 "sql_yacc.cc"
     break;
 
   case 1658: /* opt_describe_column: text_string  */
 #line 10595 "sql_yacc.yy"
                       { Lex->wild= (yyvsp[0].string); }
-#line 27689 "sql_yacc.cc"
+#line 28938 "sql_yacc.cc"
     break;
 
   case 1659: /* opt_describe_column: ident  */
@@ -27697,7 +28946,7 @@ yyreduce:
             if (Lex->wild == NULL)
               MYSQL_YYABORT;
           }
-#line 27701 "sql_yacc.cc"
+#line 28950 "sql_yacc.cc"
     break;
 
   case 1660: /* $@141: %empty  */
@@ -27708,121 +28957,121 @@ yyreduce:
             lex->type= 0;
             lex->no_write_to_binlog= (yyvsp[0].num);
           }
-#line 27712 "sql_yacc.cc"
+#line 28961 "sql_yacc.cc"
     break;
 
   case 1661: /* flush: FLUSH_SYM opt_no_write_to_binlog $@141 flush_options  */
 #line 10618 "sql_yacc.yy"
           {}
-#line 27718 "sql_yacc.cc"
+#line 28967 "sql_yacc.cc"
     break;
 
   case 1664: /* $@142: %empty  */
 #line 10628 "sql_yacc.yy"
           { Lex->type|= REFRESH_TABLES; }
-#line 27724 "sql_yacc.cc"
+#line 28973 "sql_yacc.cc"
     break;
 
   case 1665: /* flush_option: table_or_tables $@142 opt_table_list_opt_memory_cache  */
 #line 10629 "sql_yacc.yy"
                                           {}
-#line 27730 "sql_yacc.cc"
+#line 28979 "sql_yacc.cc"
     break;
 
   case 1666: /* flush_option: TABLES WITH READ_SYM LOCK_SYM  */
 #line 10631 "sql_yacc.yy"
           { Lex->type|= REFRESH_TABLES | REFRESH_READ_LOCK; }
-#line 27736 "sql_yacc.cc"
+#line 28985 "sql_yacc.cc"
     break;
 
   case 1667: /* flush_option: QUERY_SYM CACHE_SYM  */
 #line 10633 "sql_yacc.yy"
           { Lex->type|= REFRESH_QUERY_CACHE_FREE; }
-#line 27742 "sql_yacc.cc"
+#line 28991 "sql_yacc.cc"
     break;
 
   case 1668: /* flush_option: HOSTS_SYM  */
 #line 10635 "sql_yacc.yy"
           { Lex->type|= REFRESH_HOSTS; }
-#line 27748 "sql_yacc.cc"
+#line 28997 "sql_yacc.cc"
     break;
 
   case 1669: /* flush_option: PRIVILEGES  */
 #line 10637 "sql_yacc.yy"
           { Lex->type|= REFRESH_GRANT; }
-#line 27754 "sql_yacc.cc"
+#line 29003 "sql_yacc.cc"
     break;
 
   case 1670: /* flush_option: LOGS_SYM  */
 #line 10639 "sql_yacc.yy"
           { Lex->type|= REFRESH_LOG; }
-#line 27760 "sql_yacc.cc"
+#line 29009 "sql_yacc.cc"
     break;
 
   case 1671: /* flush_option: STATUS_SYM  */
 #line 10641 "sql_yacc.yy"
           { Lex->type|= REFRESH_STATUS; }
-#line 27766 "sql_yacc.cc"
+#line 29015 "sql_yacc.cc"
     break;
 
   case 1672: /* flush_option: SLAVE  */
 #line 10643 "sql_yacc.yy"
           { Lex->type|= REFRESH_SLAVE; }
-#line 27772 "sql_yacc.cc"
+#line 29021 "sql_yacc.cc"
     break;
 
   case 1673: /* flush_option: MASTER_SYM  */
 #line 10645 "sql_yacc.yy"
           { Lex->type|= REFRESH_MASTER; }
-#line 27778 "sql_yacc.cc"
+#line 29027 "sql_yacc.cc"
     break;
 
   case 1674: /* flush_option: DES_KEY_FILE  */
 #line 10647 "sql_yacc.yy"
           { Lex->type|= REFRESH_DES_KEY_FILE; }
-#line 27784 "sql_yacc.cc"
+#line 29033 "sql_yacc.cc"
     break;
 
   case 1675: /* flush_option: RESOURCES  */
 #line 10649 "sql_yacc.yy"
           { Lex->type|= REFRESH_USER_RESOURCES; }
-#line 27790 "sql_yacc.cc"
+#line 29039 "sql_yacc.cc"
     break;
 
   case 1676: /* flush_option: STATISTICS_SYM  */
 #line 10651 "sql_yacc.yy"
           { Lex->type |= REFRESH_STATISTICS; }
-#line 27796 "sql_yacc.cc"
+#line 29045 "sql_yacc.cc"
     break;
 
   case 1677: /* opt_table_list_opt_memory_cache: %empty  */
 #line 10655 "sql_yacc.yy"
                       {}
-#line 27802 "sql_yacc.cc"
+#line 29051 "sql_yacc.cc"
     break;
 
   case 1678: /* opt_table_list_opt_memory_cache: table_list  */
 #line 10656 "sql_yacc.yy"
                      {}
-#line 27808 "sql_yacc.cc"
+#line 29057 "sql_yacc.cc"
     break;
 
   case 1679: /* opt_table_list_opt_memory_cache: table_list WITH MEMORY_SYM CACHE_SYM  */
 #line 10658 "sql_yacc.yy"
           { Lex->type|=REFRESH_MEMORY_CACHE; }
-#line 27814 "sql_yacc.cc"
+#line 29063 "sql_yacc.cc"
     break;
 
   case 1680: /* opt_table_list: %empty  */
 #line 10662 "sql_yacc.yy"
                        {}
-#line 27820 "sql_yacc.cc"
+#line 29069 "sql_yacc.cc"
     break;
 
   case 1681: /* opt_table_list: table_list  */
 #line 10663 "sql_yacc.yy"
                      {}
-#line 27826 "sql_yacc.cc"
+#line 29075 "sql_yacc.cc"
     break;
 
   case 1682: /* $@143: %empty  */
@@ -27831,31 +29080,31 @@ yyreduce:
             LEX *lex=Lex;
             lex->sql_command= SQLCOM_RESET; lex->type=0;
           }
-#line 27835 "sql_yacc.cc"
+#line 29084 "sql_yacc.cc"
     break;
 
   case 1683: /* reset: RESET_SYM $@143 reset_options  */
 #line 10673 "sql_yacc.yy"
           {}
-#line 27841 "sql_yacc.cc"
+#line 29090 "sql_yacc.cc"
     break;
 
   case 1686: /* reset_option: SLAVE  */
 #line 10682 "sql_yacc.yy"
                               { Lex->type|= REFRESH_SLAVE; }
-#line 27847 "sql_yacc.cc"
+#line 29096 "sql_yacc.cc"
     break;
 
   case 1687: /* reset_option: MASTER_SYM  */
 #line 10683 "sql_yacc.yy"
                               { Lex->type|= REFRESH_MASTER; }
-#line 27853 "sql_yacc.cc"
+#line 29102 "sql_yacc.cc"
     break;
 
   case 1688: /* reset_option: QUERY_SYM CACHE_SYM  */
 #line 10684 "sql_yacc.yy"
                               { Lex->type|= REFRESH_QUERY_CACHE;}
-#line 27859 "sql_yacc.cc"
+#line 29108 "sql_yacc.cc"
     break;
 
   case 1689: /* $@144: %empty  */
@@ -27865,13 +29114,13 @@ yyreduce:
             lex->type=0;
             lex->sql_command = SQLCOM_PURGE;
           }
-#line 27869 "sql_yacc.cc"
+#line 29118 "sql_yacc.cc"
     break;
 
   case 1690: /* purge: PURGE $@144 purge_options  */
 #line 10695 "sql_yacc.yy"
           {}
-#line 27875 "sql_yacc.cc"
+#line 29124 "sql_yacc.cc"
     break;
 
   case 1692: /* purge_option: TO_SYM TEXT_STRING_sys  */
@@ -27879,7 +29128,7 @@ yyreduce:
           {
             Lex->to_log = (yyvsp[0].lex_str).str;
           }
-#line 27883 "sql_yacc.cc"
+#line 29132 "sql_yacc.cc"
     break;
 
   case 1693: /* purge_option: BEFORE_SYM expr  */
@@ -27890,7 +29139,7 @@ yyreduce:
             lex->value_list.push_front((yyvsp[0].item));
             lex->sql_command= SQLCOM_PURGE_BEFORE;
           }
-#line 27894 "sql_yacc.cc"
+#line 29143 "sql_yacc.cc"
     break;
 
   case 1694: /* kill: KILL_SYM kill_option expr  */
@@ -27901,25 +29150,25 @@ yyreduce:
             lex->value_list.push_front((yyvsp[0].item));
             lex->sql_command= SQLCOM_KILL;
           }
-#line 27905 "sql_yacc.cc"
+#line 29154 "sql_yacc.cc"
     break;
 
   case 1695: /* kill_option: %empty  */
 #line 10729 "sql_yacc.yy"
                       { Lex->type= 0; }
-#line 27911 "sql_yacc.cc"
+#line 29160 "sql_yacc.cc"
     break;
 
   case 1696: /* kill_option: CONNECTION_SYM  */
 #line 10730 "sql_yacc.yy"
                          { Lex->type= 0; }
-#line 27917 "sql_yacc.cc"
+#line 29166 "sql_yacc.cc"
     break;
 
   case 1697: /* kill_option: QUERY_SYM  */
 #line 10731 "sql_yacc.yy"
                          { Lex->type= ONLY_KILL_QUERY; }
-#line 27923 "sql_yacc.cc"
+#line 29172 "sql_yacc.cc"
     break;
 
   case 1698: /* use: USE_SYM ident  */
@@ -27929,7 +29178,7 @@ yyreduce:
             lex->sql_command=SQLCOM_CHANGE_DB;
             lex->select_lex.db= (yyvsp[0].lex_str).str;
           }
-#line 27933 "sql_yacc.cc"
+#line 29182 "sql_yacc.cc"
     break;
 
   case 1699: /* $@145: %empty  */
@@ -27944,13 +29193,13 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 27948 "sql_yacc.cc"
+#line 29197 "sql_yacc.cc"
     break;
 
   case 1700: /* load: LOAD DATA_SYM $@145 load_data  */
 #line 10760 "sql_yacc.yy"
           {}
-#line 27954 "sql_yacc.cc"
+#line 29203 "sql_yacc.cc"
     break;
 
   case 1701: /* load: LOAD TABLE_SYM table_ident FROM MASTER_SYM  */
@@ -27968,7 +29217,7 @@ yyreduce:
             if (!Select->add_table_to_list(YYTHD, (yyvsp[-2].table), NULL, TL_OPTION_UPDATING))
               MYSQL_YYABORT;
           }
-#line 27972 "sql_yacc.cc"
+#line 29221 "sql_yacc.cc"
     break;
 
   case 1702: /* $@146: %empty  */
@@ -27983,7 +29232,7 @@ yyreduce:
             if (!(lex->exchange= new sql_exchange((yyvsp[0].lex_str).str, 0)))
               MYSQL_YYABORT;
           }
-#line 27987 "sql_yacc.cc"
+#line 29236 "sql_yacc.cc"
     break;
 
   case 1703: /* $@147: %empty  */
@@ -27997,19 +29246,19 @@ yyreduce:
             lex->update_list.empty();
             lex->value_list.empty();
           }
-#line 28001 "sql_yacc.cc"
+#line 29250 "sql_yacc.cc"
     break;
 
   case 1704: /* $@148: %empty  */
 #line 10800 "sql_yacc.yy"
           { Lex->exchange->cs= (yyvsp[0].charset); }
-#line 28007 "sql_yacc.cc"
+#line 29256 "sql_yacc.cc"
     break;
 
   case 1705: /* load_data: load_data_lock opt_local INFILE TEXT_STRING_filesystem $@146 opt_duplicate INTO TABLE_SYM table_ident $@147 opt_load_data_charset $@148 opt_field_term opt_line_term opt_ignore_lines opt_field_or_var_spec opt_load_data_set_spec  */
 #line 10803 "sql_yacc.yy"
           {}
-#line 28013 "sql_yacc.cc"
+#line 29262 "sql_yacc.cc"
     break;
 
   case 1706: /* load_data: FROM MASTER_SYM  */
@@ -28020,25 +29269,25 @@ yyreduce:
                             "mysqldump or future "
                             "BACKUP/RESTORE DATABASE facility");
           }
-#line 28024 "sql_yacc.cc"
+#line 29273 "sql_yacc.cc"
     break;
 
   case 1707: /* opt_local: %empty  */
 #line 10814 "sql_yacc.yy"
                       { (yyval.num)=0;}
-#line 28030 "sql_yacc.cc"
+#line 29279 "sql_yacc.cc"
     break;
 
   case 1708: /* opt_local: LOCAL_SYM  */
 #line 10815 "sql_yacc.yy"
                     { (yyval.num)=1;}
-#line 28036 "sql_yacc.cc"
+#line 29285 "sql_yacc.cc"
     break;
 
   case 1709: /* load_data_lock: %empty  */
 #line 10819 "sql_yacc.yy"
                       { (yyval.lock_type)= TL_WRITE_DEFAULT; }
-#line 28042 "sql_yacc.cc"
+#line 29291 "sql_yacc.cc"
     break;
 
   case 1710: /* load_data_lock: CONCURRENT  */
@@ -28054,31 +29303,31 @@ yyreduce:
 #endif
               (yyval.lock_type)= TL_WRITE_CONCURRENT_INSERT;
           }
-#line 28058 "sql_yacc.cc"
+#line 29307 "sql_yacc.cc"
     break;
 
   case 1711: /* load_data_lock: LOW_PRIORITY  */
 #line 10832 "sql_yacc.yy"
                        { (yyval.lock_type)= TL_WRITE_LOW_PRIORITY; }
-#line 28064 "sql_yacc.cc"
+#line 29313 "sql_yacc.cc"
     break;
 
   case 1712: /* opt_duplicate: %empty  */
 #line 10836 "sql_yacc.yy"
                       { Lex->duplicates=DUP_ERROR; }
-#line 28070 "sql_yacc.cc"
+#line 29319 "sql_yacc.cc"
     break;
 
   case 1713: /* opt_duplicate: REPLACE  */
 #line 10837 "sql_yacc.yy"
                   { Lex->duplicates=DUP_REPLACE; }
-#line 28076 "sql_yacc.cc"
+#line 29325 "sql_yacc.cc"
     break;
 
   case 1714: /* opt_duplicate: IGNORE_SYM  */
 #line 10838 "sql_yacc.yy"
                      { Lex->ignore= 1; }
-#line 28082 "sql_yacc.cc"
+#line 29331 "sql_yacc.cc"
     break;
 
   case 1719: /* field_term: TERMINATED BY text_string  */
@@ -28087,7 +29336,7 @@ yyreduce:
             DBUG_ASSERT(Lex->exchange != 0);
             Lex->exchange->field_term= (yyvsp[0].string);
           }
-#line 28091 "sql_yacc.cc"
+#line 29340 "sql_yacc.cc"
     break;
 
   case 1720: /* field_term: OPTIONALLY ENCLOSED BY text_string  */
@@ -28098,7 +29347,7 @@ yyreduce:
             lex->exchange->enclosed= (yyvsp[0].string);
             lex->exchange->opt_enclosed= 1;
           }
-#line 28102 "sql_yacc.cc"
+#line 29351 "sql_yacc.cc"
     break;
 
   case 1721: /* field_term: ENCLOSED BY text_string  */
@@ -28107,7 +29356,7 @@ yyreduce:
             DBUG_ASSERT(Lex->exchange != 0);
             Lex->exchange->enclosed= (yyvsp[0].string);
           }
-#line 28111 "sql_yacc.cc"
+#line 29360 "sql_yacc.cc"
     break;
 
   case 1722: /* field_term: ESCAPED BY text_string  */
@@ -28116,7 +29365,7 @@ yyreduce:
             DBUG_ASSERT(Lex->exchange != 0);
             Lex->exchange->escaped= (yyvsp[0].string);
           }
-#line 28120 "sql_yacc.cc"
+#line 29369 "sql_yacc.cc"
     break;
 
   case 1727: /* line_term: TERMINATED BY text_string  */
@@ -28125,7 +29374,7 @@ yyreduce:
             DBUG_ASSERT(Lex->exchange != 0);
             Lex->exchange->line_term= (yyvsp[0].string);
           }
-#line 28129 "sql_yacc.cc"
+#line 29378 "sql_yacc.cc"
     break;
 
   case 1728: /* line_term: STARTING BY text_string  */
@@ -28134,7 +29383,7 @@ yyreduce:
             DBUG_ASSERT(Lex->exchange != 0);
             Lex->exchange->line_start= (yyvsp[0].string);
           }
-#line 28138 "sql_yacc.cc"
+#line 29387 "sql_yacc.cc"
     break;
 
   case 1730: /* opt_ignore_lines: IGNORE_SYM NUM LINES  */
@@ -28143,43 +29392,43 @@ yyreduce:
             DBUG_ASSERT(Lex->exchange != 0);
             Lex->exchange->skip_lines= atol((yyvsp[-1].lex_str).str);
           }
-#line 28147 "sql_yacc.cc"
+#line 29396 "sql_yacc.cc"
     break;
 
   case 1731: /* opt_field_or_var_spec: %empty  */
 #line 10909 "sql_yacc.yy"
                       {}
-#line 28153 "sql_yacc.cc"
+#line 29402 "sql_yacc.cc"
     break;
 
   case 1732: /* opt_field_or_var_spec: '(' fields_or_vars ')'  */
 #line 10910 "sql_yacc.yy"
                                  {}
-#line 28159 "sql_yacc.cc"
+#line 29408 "sql_yacc.cc"
     break;
 
   case 1733: /* opt_field_or_var_spec: '(' ')'  */
 #line 10911 "sql_yacc.yy"
                   {}
-#line 28165 "sql_yacc.cc"
+#line 29414 "sql_yacc.cc"
     break;
 
   case 1734: /* fields_or_vars: fields_or_vars ',' field_or_var  */
 #line 10916 "sql_yacc.yy"
           { Lex->field_list.push_back((yyvsp[0].item)); }
-#line 28171 "sql_yacc.cc"
+#line 29420 "sql_yacc.cc"
     break;
 
   case 1735: /* fields_or_vars: field_or_var  */
 #line 10918 "sql_yacc.yy"
           { Lex->field_list.push_back((yyvsp[0].item)); }
-#line 28177 "sql_yacc.cc"
+#line 29426 "sql_yacc.cc"
     break;
 
   case 1736: /* field_or_var: simple_ident_nospvar  */
 #line 10922 "sql_yacc.yy"
                                {(yyval.item)= (yyvsp[0].item);}
-#line 28183 "sql_yacc.cc"
+#line 29432 "sql_yacc.cc"
     break;
 
   case 1737: /* field_or_var: '@' ident_or_text  */
@@ -28189,19 +29438,19 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28193 "sql_yacc.cc"
+#line 29442 "sql_yacc.cc"
     break;
 
   case 1738: /* opt_load_data_set_spec: %empty  */
 #line 10932 "sql_yacc.yy"
                       {}
-#line 28199 "sql_yacc.cc"
+#line 29448 "sql_yacc.cc"
     break;
 
   case 1739: /* opt_load_data_set_spec: SET insert_update_list  */
 #line 10933 "sql_yacc.yy"
                                  {}
-#line 28205 "sql_yacc.cc"
+#line 29454 "sql_yacc.cc"
     break;
 
   case 1740: /* text_literal: TEXT_STRING  */
@@ -28229,7 +29478,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28233 "sql_yacc.cc"
+#line 29482 "sql_yacc.cc"
     break;
 
   case 1741: /* text_literal: NCHAR_STRING  */
@@ -28245,7 +29494,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28249 "sql_yacc.cc"
+#line 29498 "sql_yacc.cc"
     break;
 
   case 1742: /* text_literal: UNDERSCORE_CHARSET TEXT_STRING  */
@@ -28260,7 +29509,7 @@ yyreduce:
 
             (yyval.item)= str;
           }
-#line 28264 "sql_yacc.cc"
+#line 29513 "sql_yacc.cc"
     break;
 
   case 1743: /* text_literal: text_literal TEXT_STRING_literal  */
@@ -28280,7 +29529,7 @@ yyreduce:
                                                                 (yyvsp[0].lex_str).length);
             }
           }
-#line 28284 "sql_yacc.cc"
+#line 29533 "sql_yacc.cc"
     break;
 
   case 1744: /* text_string: TEXT_STRING_literal  */
@@ -28292,7 +29541,7 @@ yyreduce:
             if ((yyval.string) == NULL)
               MYSQL_YYABORT;
           }
-#line 28296 "sql_yacc.cc"
+#line 29545 "sql_yacc.cc"
     break;
 
   case 1745: /* text_string: HEX_NUM  */
@@ -28308,7 +29557,7 @@ yyreduce:
             tmp->quick_fix_field();
             (yyval.string)= tmp->val_str((String*) 0);
           }
-#line 28312 "sql_yacc.cc"
+#line 29561 "sql_yacc.cc"
     break;
 
   case 1746: /* text_string: BIN_NUM  */
@@ -28324,7 +29573,7 @@ yyreduce:
             tmp->quick_fix_field();
             (yyval.string)= tmp->val_str((String*) 0);
           }
-#line 28328 "sql_yacc.cc"
+#line 29577 "sql_yacc.cc"
     break;
 
   case 1747: /* param_marker: PARAM_MARKER  */
@@ -28346,19 +29595,19 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 28350 "sql_yacc.cc"
+#line 29599 "sql_yacc.cc"
     break;
 
   case 1748: /* signed_literal: literal  */
 #line 11061 "sql_yacc.yy"
                   { (yyval.item) = (yyvsp[0].item); }
-#line 28356 "sql_yacc.cc"
+#line 29605 "sql_yacc.cc"
     break;
 
   case 1749: /* signed_literal: '+' NUM_literal  */
 #line 11062 "sql_yacc.yy"
                           { (yyval.item) = (yyvsp[0].item_num); }
-#line 28362 "sql_yacc.cc"
+#line 29611 "sql_yacc.cc"
     break;
 
   case 1750: /* signed_literal: '-' NUM_literal  */
@@ -28367,19 +29616,19 @@ yyreduce:
             (yyvsp[0].item_num)->max_length++;
             (yyval.item)= (yyvsp[0].item_num)->neg();
           }
-#line 28371 "sql_yacc.cc"
+#line 29620 "sql_yacc.cc"
     break;
 
   case 1751: /* literal: text_literal  */
 #line 11071 "sql_yacc.yy"
                        { (yyval.item) = (yyvsp[0].item); }
-#line 28377 "sql_yacc.cc"
+#line 29626 "sql_yacc.cc"
     break;
 
   case 1752: /* literal: NUM_literal  */
 #line 11072 "sql_yacc.yy"
                       { (yyval.item) = (yyvsp[0].item_num); }
-#line 28383 "sql_yacc.cc"
+#line 29632 "sql_yacc.cc"
     break;
 
   case 1753: /* literal: NULL_SYM  */
@@ -28390,7 +29639,7 @@ yyreduce:
               MYSQL_YYABORT;
             YYLIP->next_state= MY_LEX_OPERATOR_OR_IDENT;
           }
-#line 28394 "sql_yacc.cc"
+#line 29643 "sql_yacc.cc"
     break;
 
   case 1754: /* literal: FALSE_SYM  */
@@ -28400,7 +29649,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28404 "sql_yacc.cc"
+#line 29653 "sql_yacc.cc"
     break;
 
   case 1755: /* literal: TRUE_SYM  */
@@ -28410,7 +29659,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28414 "sql_yacc.cc"
+#line 29663 "sql_yacc.cc"
     break;
 
   case 1756: /* literal: HEX_NUM  */
@@ -28420,7 +29669,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28424 "sql_yacc.cc"
+#line 29673 "sql_yacc.cc"
     break;
 
   case 1757: /* literal: BIN_NUM  */
@@ -28430,7 +29679,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28434 "sql_yacc.cc"
+#line 29683 "sql_yacc.cc"
     break;
 
   case 1758: /* literal: UNDERSCORE_CHARSET HEX_NUM  */
@@ -28463,7 +29712,7 @@ yyreduce:
 
             (yyval.item)= item_str;
           }
-#line 28467 "sql_yacc.cc"
+#line 29716 "sql_yacc.cc"
     break;
 
   case 1759: /* literal: UNDERSCORE_CHARSET BIN_NUM  */
@@ -28495,25 +29744,25 @@ yyreduce:
 
             (yyval.item)= item_str;
           }
-#line 28499 "sql_yacc.cc"
+#line 29748 "sql_yacc.cc"
     break;
 
   case 1760: /* literal: DATE_SYM text_literal  */
 #line 11161 "sql_yacc.yy"
                                 { (yyval.item) = (yyvsp[0].item); }
-#line 28505 "sql_yacc.cc"
+#line 29754 "sql_yacc.cc"
     break;
 
   case 1761: /* literal: TIME_SYM text_literal  */
 #line 11162 "sql_yacc.yy"
                                 { (yyval.item) = (yyvsp[0].item); }
-#line 28511 "sql_yacc.cc"
+#line 29760 "sql_yacc.cc"
     break;
 
   case 1762: /* literal: TIMESTAMP text_literal  */
 #line 11163 "sql_yacc.yy"
                                  { (yyval.item) = (yyvsp[0].item); }
-#line 28517 "sql_yacc.cc"
+#line 29766 "sql_yacc.cc"
     break;
 
   case 1763: /* NUM_literal: NUM  */
@@ -28527,7 +29776,7 @@ yyreduce:
             if ((yyval.item_num) == NULL)
               MYSQL_YYABORT;
           }
-#line 28531 "sql_yacc.cc"
+#line 29780 "sql_yacc.cc"
     break;
 
   case 1764: /* NUM_literal: LONG_NUM  */
@@ -28541,7 +29790,7 @@ yyreduce:
             if ((yyval.item_num) == NULL)
               MYSQL_YYABORT;
           }
-#line 28545 "sql_yacc.cc"
+#line 29794 "sql_yacc.cc"
     break;
 
   case 1765: /* NUM_literal: ULONGLONG_NUM  */
@@ -28551,7 +29800,7 @@ yyreduce:
             if ((yyval.item_num) == NULL)
               MYSQL_YYABORT;
           }
-#line 28555 "sql_yacc.cc"
+#line 29804 "sql_yacc.cc"
     break;
 
   case 1766: /* NUM_literal: DECIMAL_NUM  */
@@ -28564,7 +29813,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 28568 "sql_yacc.cc"
+#line 29817 "sql_yacc.cc"
     break;
 
   case 1767: /* NUM_literal: FLOAT_NUM  */
@@ -28576,19 +29825,19 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 28580 "sql_yacc.cc"
+#line 29829 "sql_yacc.cc"
     break;
 
   case 1768: /* insert_ident: simple_ident_nospvar  */
 #line 11217 "sql_yacc.yy"
                                { (yyval.item)=(yyvsp[0].item); }
-#line 28586 "sql_yacc.cc"
+#line 29835 "sql_yacc.cc"
     break;
 
   case 1769: /* insert_ident: table_wild  */
 #line 11218 "sql_yacc.yy"
                      { (yyval.item)=(yyvsp[0].item); }
-#line 28592 "sql_yacc.cc"
+#line 29841 "sql_yacc.cc"
     break;
 
   case 1770: /* table_wild: ident '.' '*'  */
@@ -28601,7 +29850,7 @@ yyreduce:
               MYSQL_YYABORT;
             sel->with_wild++;
           }
-#line 28605 "sql_yacc.cc"
+#line 29854 "sql_yacc.cc"
     break;
 
   case 1771: /* table_wild: ident '.' ident '.' '*'  */
@@ -28618,13 +29867,13 @@ yyreduce:
               MYSQL_YYABORT;
             sel->with_wild++;
           }
-#line 28622 "sql_yacc.cc"
+#line 29871 "sql_yacc.cc"
     break;
 
   case 1772: /* order_ident: expr  */
 #line 11247 "sql_yacc.yy"
                { (yyval.item)=(yyvsp[0].item); }
-#line 28628 "sql_yacc.cc"
+#line 29877 "sql_yacc.cc"
     break;
 
   case 1773: /* simple_ident: ident  */
@@ -28675,13 +29924,13 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 28679 "sql_yacc.cc"
+#line 29928 "sql_yacc.cc"
     break;
 
   case 1774: /* simple_ident: simple_ident_q  */
 #line 11298 "sql_yacc.yy"
                          { (yyval.item)= (yyvsp[0].item); }
-#line 28685 "sql_yacc.cc"
+#line 29934 "sql_yacc.cc"
     break;
 
   case 1775: /* simple_ident_nospvar: ident  */
@@ -28703,13 +29952,13 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28707 "sql_yacc.cc"
+#line 29956 "sql_yacc.cc"
     break;
 
   case 1776: /* simple_ident_nospvar: simple_ident_q  */
 #line 11320 "sql_yacc.yy"
                          { (yyval.item)= (yyvsp[0].item); }
-#line 28713 "sql_yacc.cc"
+#line 29962 "sql_yacc.cc"
     break;
 
   case 1777: /* simple_ident_q: ident '.' ident  */
@@ -28792,7 +30041,7 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 28796 "sql_yacc.cc"
+#line 30045 "sql_yacc.cc"
     break;
 
   case 1778: /* simple_ident_q: '.' ident '.' ident  */
@@ -28821,7 +30070,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28825 "sql_yacc.cc"
+#line 30074 "sql_yacc.cc"
     break;
 
   case 1779: /* simple_ident_q: ident '.' ident '.' ident  */
@@ -28853,13 +30102,13 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 28857 "sql_yacc.cc"
+#line 30106 "sql_yacc.cc"
     break;
 
   case 1780: /* field_ident: ident  */
 #line 11459 "sql_yacc.yy"
                 { (yyval.lex_str)=(yyvsp[0].lex_str);}
-#line 28863 "sql_yacc.cc"
+#line 30112 "sql_yacc.cc"
     break;
 
   case 1781: /* field_ident: ident '.' ident '.' ident  */
@@ -28879,7 +30128,7 @@ yyreduce:
             }
             (yyval.lex_str)=(yyvsp[0].lex_str);
           }
-#line 28883 "sql_yacc.cc"
+#line 30132 "sql_yacc.cc"
     break;
 
   case 1782: /* field_ident: ident '.' ident  */
@@ -28893,13 +30142,13 @@ yyreduce:
             }
             (yyval.lex_str)=(yyvsp[0].lex_str);
           }
-#line 28897 "sql_yacc.cc"
+#line 30146 "sql_yacc.cc"
     break;
 
   case 1783: /* field_ident: '.' ident  */
 #line 11486 "sql_yacc.yy"
                     { (yyval.lex_str)=(yyvsp[0].lex_str);}
-#line 28903 "sql_yacc.cc"
+#line 30152 "sql_yacc.cc"
     break;
 
   case 1784: /* table_ident: ident  */
@@ -28909,7 +30158,7 @@ yyreduce:
             if ((yyval.table) == NULL)
               MYSQL_YYABORT;
           }
-#line 28913 "sql_yacc.cc"
+#line 30162 "sql_yacc.cc"
     break;
 
   case 1785: /* table_ident: ident '.' ident  */
@@ -28919,7 +30168,7 @@ yyreduce:
             if ((yyval.table) == NULL)
               MYSQL_YYABORT;
           }
-#line 28923 "sql_yacc.cc"
+#line 30172 "sql_yacc.cc"
     break;
 
   case 1786: /* table_ident: '.' ident  */
@@ -28930,7 +30179,7 @@ yyreduce:
             if ((yyval.table) == NULL)
               MYSQL_YYABORT;
           }
-#line 28934 "sql_yacc.cc"
+#line 30183 "sql_yacc.cc"
     break;
 
   case 1787: /* table_ident_opt_wild: ident opt_wild  */
@@ -28940,7 +30189,7 @@ yyreduce:
             if ((yyval.table) == NULL)
               MYSQL_YYABORT;
           }
-#line 28944 "sql_yacc.cc"
+#line 30193 "sql_yacc.cc"
     break;
 
   case 1788: /* table_ident_opt_wild: ident '.' ident opt_wild  */
@@ -28950,7 +30199,7 @@ yyreduce:
             if ((yyval.table) == NULL)
               MYSQL_YYABORT;
           }
-#line 28954 "sql_yacc.cc"
+#line 30203 "sql_yacc.cc"
     break;
 
   case 1789: /* table_ident_nodb: ident  */
@@ -28961,13 +30210,13 @@ yyreduce:
             if ((yyval.table) == NULL)
               MYSQL_YYABORT;
           }
-#line 28965 "sql_yacc.cc"
+#line 30214 "sql_yacc.cc"
     break;
 
   case 1790: /* IDENT_sys: IDENT  */
 #line 11537 "sql_yacc.yy"
                 { (yyval.lex_str)= (yyvsp[0].lex_str); }
-#line 28971 "sql_yacc.cc"
+#line 30220 "sql_yacc.cc"
     break;
 
   case 1791: /* IDENT_sys: IDENT_QUOTED  */
@@ -28997,7 +30246,7 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 29001 "sql_yacc.cc"
+#line 30250 "sql_yacc.cc"
     break;
 
   case 1792: /* TEXT_STRING_sys: TEXT_STRING  */
@@ -29014,7 +30263,7 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 29018 "sql_yacc.cc"
+#line 30267 "sql_yacc.cc"
     break;
 
   case 1793: /* TEXT_STRING_literal: TEXT_STRING  */
@@ -29031,7 +30280,7 @@ yyreduce:
                 MYSQL_YYABORT;
             } 
           }
-#line 29035 "sql_yacc.cc"
+#line 30284 "sql_yacc.cc"
     break;
 
   case 1794: /* TEXT_STRING_filesystem: TEXT_STRING  */
@@ -29049,13 +30298,13 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 29053 "sql_yacc.cc"
+#line 30302 "sql_yacc.cc"
     break;
 
   case 1795: /* ident: IDENT_sys  */
 #line 11616 "sql_yacc.yy"
                        { (yyval.lex_str)=(yyvsp[0].lex_str); }
-#line 29059 "sql_yacc.cc"
+#line 30308 "sql_yacc.cc"
     break;
 
   case 1796: /* ident: keyword  */
@@ -29067,13 +30316,13 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.lex_str).length= (yyvsp[0].symbol).length;
           }
-#line 29071 "sql_yacc.cc"
+#line 30320 "sql_yacc.cc"
     break;
 
   case 1797: /* label_ident: IDENT_sys  */
 #line 11628 "sql_yacc.yy"
                        { (yyval.lex_str)=(yyvsp[0].lex_str); }
-#line 29077 "sql_yacc.cc"
+#line 30326 "sql_yacc.cc"
     break;
 
   case 1798: /* label_ident: keyword_sp  */
@@ -29085,25 +30334,25 @@ yyreduce:
               MYSQL_YYABORT;
             (yyval.lex_str).length= (yyvsp[0].symbol).length;
           }
-#line 29089 "sql_yacc.cc"
+#line 30338 "sql_yacc.cc"
     break;
 
   case 1799: /* ident_or_text: ident  */
 #line 11640 "sql_yacc.yy"
                           { (yyval.lex_str)=(yyvsp[0].lex_str);}
-#line 29095 "sql_yacc.cc"
+#line 30344 "sql_yacc.cc"
     break;
 
   case 1800: /* ident_or_text: TEXT_STRING_sys  */
 #line 11641 "sql_yacc.yy"
                           { (yyval.lex_str)=(yyvsp[0].lex_str);}
-#line 29101 "sql_yacc.cc"
+#line 30350 "sql_yacc.cc"
     break;
 
   case 1801: /* ident_or_text: LEX_HOSTNAME  */
 #line 11642 "sql_yacc.yy"
                        { (yyval.lex_str)=(yyvsp[0].lex_str);}
-#line 29107 "sql_yacc.cc"
+#line 30356 "sql_yacc.cc"
     break;
 
   case 1802: /* user: ident_or_text  */
@@ -29121,7 +30370,7 @@ yyreduce:
                                          system_charset_info, 0))
               MYSQL_YYABORT;
           }
-#line 29125 "sql_yacc.cc"
+#line 30374 "sql_yacc.cc"
     break;
 
   case 1803: /* user: ident_or_text '@' ident_or_text  */
@@ -29144,7 +30393,7 @@ yyreduce:
             */
             my_casedn_str(system_charset_info, (yyval.lex_user)->host.str);
           }
-#line 29148 "sql_yacc.cc"
+#line 30397 "sql_yacc.cc"
     break;
 
   case 1804: /* user: CURRENT_USER optional_braces  */
@@ -29159,1885 +30408,1885 @@ yyreduce:
             */
             bzero((yyval.lex_user), sizeof(LEX_USER));
           }
-#line 29163 "sql_yacc.cc"
+#line 30412 "sql_yacc.cc"
     break;
 
   case 1805: /* keyword: keyword_sp  */
 #line 11694 "sql_yacc.yy"
                                 {}
-#line 29169 "sql_yacc.cc"
+#line 30418 "sql_yacc.cc"
     break;
 
   case 1806: /* keyword: ASCII_SYM  */
 #line 11695 "sql_yacc.yy"
                                 {}
-#line 29175 "sql_yacc.cc"
+#line 30424 "sql_yacc.cc"
     break;
 
   case 1807: /* keyword: BACKUP_SYM  */
 #line 11696 "sql_yacc.yy"
                                 {}
-#line 29181 "sql_yacc.cc"
+#line 30430 "sql_yacc.cc"
     break;
 
   case 1808: /* keyword: BEGIN_SYM  */
 #line 11697 "sql_yacc.yy"
                                 {}
-#line 29187 "sql_yacc.cc"
+#line 30436 "sql_yacc.cc"
     break;
 
   case 1809: /* keyword: BYTE_SYM  */
 #line 11698 "sql_yacc.yy"
                                 {}
-#line 29193 "sql_yacc.cc"
+#line 30442 "sql_yacc.cc"
     break;
 
   case 1810: /* keyword: CACHE_SYM  */
 #line 11699 "sql_yacc.yy"
                                 {}
-#line 29199 "sql_yacc.cc"
+#line 30448 "sql_yacc.cc"
     break;
 
   case 1811: /* keyword: CHARSET  */
 #line 11700 "sql_yacc.yy"
                                 {}
-#line 29205 "sql_yacc.cc"
+#line 30454 "sql_yacc.cc"
     break;
 
   case 1812: /* keyword: CHECKSUM_SYM  */
 #line 11701 "sql_yacc.yy"
                                 {}
-#line 29211 "sql_yacc.cc"
+#line 30460 "sql_yacc.cc"
     break;
 
   case 1813: /* keyword: CLOSE_SYM  */
 #line 11702 "sql_yacc.yy"
                                 {}
-#line 29217 "sql_yacc.cc"
+#line 30466 "sql_yacc.cc"
     break;
 
   case 1814: /* keyword: COMMENT_SYM  */
 #line 11703 "sql_yacc.yy"
                                 {}
-#line 29223 "sql_yacc.cc"
+#line 30472 "sql_yacc.cc"
     break;
 
   case 1815: /* keyword: COMMIT_SYM  */
 #line 11704 "sql_yacc.yy"
                                 {}
-#line 29229 "sql_yacc.cc"
+#line 30478 "sql_yacc.cc"
     break;
 
   case 1816: /* keyword: CONTAINS_SYM  */
 #line 11705 "sql_yacc.yy"
                                 {}
-#line 29235 "sql_yacc.cc"
+#line 30484 "sql_yacc.cc"
     break;
 
   case 1817: /* keyword: DEALLOCATE_SYM  */
 #line 11706 "sql_yacc.yy"
                                 {}
-#line 29241 "sql_yacc.cc"
+#line 30490 "sql_yacc.cc"
     break;
 
   case 1818: /* keyword: DO_SYM  */
 #line 11707 "sql_yacc.yy"
                                 {}
-#line 29247 "sql_yacc.cc"
+#line 30496 "sql_yacc.cc"
     break;
 
   case 1819: /* keyword: END  */
 #line 11708 "sql_yacc.yy"
                                 {}
-#line 29253 "sql_yacc.cc"
+#line 30502 "sql_yacc.cc"
     break;
 
   case 1820: /* keyword: EXECUTE_SYM  */
 #line 11709 "sql_yacc.yy"
                                 {}
-#line 29259 "sql_yacc.cc"
+#line 30508 "sql_yacc.cc"
     break;
 
   case 1821: /* keyword: FLUSH_SYM  */
 #line 11710 "sql_yacc.yy"
                                 {}
-#line 29265 "sql_yacc.cc"
+#line 30514 "sql_yacc.cc"
     break;
 
   case 1822: /* keyword: HANDLER_SYM  */
 #line 11711 "sql_yacc.yy"
                                 {}
-#line 29271 "sql_yacc.cc"
+#line 30520 "sql_yacc.cc"
     break;
 
   case 1823: /* keyword: HELP_SYM  */
 #line 11712 "sql_yacc.yy"
                                 {}
-#line 29277 "sql_yacc.cc"
+#line 30526 "sql_yacc.cc"
     break;
 
   case 1824: /* keyword: HOST_SYM  */
 #line 11713 "sql_yacc.yy"
                                 {}
-#line 29283 "sql_yacc.cc"
+#line 30532 "sql_yacc.cc"
     break;
 
   case 1825: /* keyword: INSTALL_SYM  */
 #line 11714 "sql_yacc.yy"
                                 {}
-#line 29289 "sql_yacc.cc"
+#line 30538 "sql_yacc.cc"
     break;
 
   case 1826: /* keyword: LANGUAGE_SYM  */
 #line 11715 "sql_yacc.yy"
                                 {}
-#line 29295 "sql_yacc.cc"
+#line 30544 "sql_yacc.cc"
     break;
 
   case 1827: /* keyword: NO_SYM  */
 #line 11716 "sql_yacc.yy"
                                 {}
-#line 29301 "sql_yacc.cc"
+#line 30550 "sql_yacc.cc"
     break;
 
   case 1828: /* keyword: OPEN_SYM  */
 #line 11717 "sql_yacc.yy"
                                 {}
-#line 29307 "sql_yacc.cc"
+#line 30556 "sql_yacc.cc"
     break;
 
   case 1829: /* keyword: OPTIONS_SYM  */
 #line 11718 "sql_yacc.yy"
                                 {}
-#line 29313 "sql_yacc.cc"
+#line 30562 "sql_yacc.cc"
     break;
 
   case 1830: /* keyword: OWNER_SYM  */
 #line 11719 "sql_yacc.yy"
                                 {}
-#line 29319 "sql_yacc.cc"
+#line 30568 "sql_yacc.cc"
     break;
 
   case 1831: /* keyword: PARSER_SYM  */
 #line 11720 "sql_yacc.yy"
                                 {}
-#line 29325 "sql_yacc.cc"
+#line 30574 "sql_yacc.cc"
     break;
 
   case 1832: /* keyword: PARTITION_SYM  */
 #line 11721 "sql_yacc.yy"
                                 {}
-#line 29331 "sql_yacc.cc"
+#line 30580 "sql_yacc.cc"
     break;
 
   case 1833: /* keyword: PORT_SYM  */
 #line 11722 "sql_yacc.yy"
                                 {}
-#line 29337 "sql_yacc.cc"
+#line 30586 "sql_yacc.cc"
     break;
 
   case 1834: /* keyword: PREPARE_SYM  */
 #line 11723 "sql_yacc.yy"
                                 {}
-#line 29343 "sql_yacc.cc"
+#line 30592 "sql_yacc.cc"
     break;
 
   case 1835: /* keyword: REMOVE_SYM  */
 #line 11724 "sql_yacc.yy"
                                 {}
-#line 29349 "sql_yacc.cc"
+#line 30598 "sql_yacc.cc"
     break;
 
   case 1836: /* keyword: REPAIR  */
 #line 11725 "sql_yacc.yy"
                                 {}
-#line 29355 "sql_yacc.cc"
+#line 30604 "sql_yacc.cc"
     break;
 
   case 1837: /* keyword: RESET_SYM  */
 #line 11726 "sql_yacc.yy"
                                 {}
-#line 29361 "sql_yacc.cc"
+#line 30610 "sql_yacc.cc"
     break;
 
   case 1838: /* keyword: RESTORE_SYM  */
 #line 11727 "sql_yacc.yy"
                                 {}
-#line 29367 "sql_yacc.cc"
+#line 30616 "sql_yacc.cc"
     break;
 
   case 1839: /* keyword: ROLLBACK_SYM  */
 #line 11728 "sql_yacc.yy"
                                 {}
-#line 29373 "sql_yacc.cc"
+#line 30622 "sql_yacc.cc"
     break;
 
   case 1840: /* keyword: SAVEPOINT_SYM  */
 #line 11729 "sql_yacc.yy"
                                 {}
-#line 29379 "sql_yacc.cc"
+#line 30628 "sql_yacc.cc"
     break;
 
   case 1841: /* keyword: SECURITY_SYM  */
 #line 11730 "sql_yacc.yy"
                                 {}
-#line 29385 "sql_yacc.cc"
+#line 30634 "sql_yacc.cc"
     break;
 
   case 1842: /* keyword: SERVER_SYM  */
 #line 11731 "sql_yacc.yy"
                                 {}
-#line 29391 "sql_yacc.cc"
+#line 30640 "sql_yacc.cc"
     break;
 
   case 1843: /* keyword: SIGNED_SYM  */
 #line 11732 "sql_yacc.yy"
                                 {}
-#line 29397 "sql_yacc.cc"
+#line 30646 "sql_yacc.cc"
     break;
 
   case 1844: /* keyword: SOCKET_SYM  */
 #line 11733 "sql_yacc.yy"
                                 {}
-#line 29403 "sql_yacc.cc"
+#line 30652 "sql_yacc.cc"
     break;
 
   case 1845: /* keyword: SLAVE  */
 #line 11734 "sql_yacc.yy"
                                 {}
-#line 29409 "sql_yacc.cc"
+#line 30658 "sql_yacc.cc"
     break;
 
   case 1846: /* keyword: SONAME_SYM  */
 #line 11735 "sql_yacc.yy"
                                 {}
-#line 29415 "sql_yacc.cc"
+#line 30664 "sql_yacc.cc"
     break;
 
   case 1847: /* keyword: START_SYM  */
 #line 11736 "sql_yacc.yy"
                                 {}
-#line 29421 "sql_yacc.cc"
+#line 30670 "sql_yacc.cc"
     break;
 
   case 1848: /* keyword: STOP_SYM  */
 #line 11737 "sql_yacc.yy"
                                 {}
-#line 29427 "sql_yacc.cc"
+#line 30676 "sql_yacc.cc"
     break;
 
   case 1849: /* keyword: TRUNCATE_SYM  */
 #line 11738 "sql_yacc.yy"
                                 {}
-#line 29433 "sql_yacc.cc"
+#line 30682 "sql_yacc.cc"
     break;
 
   case 1850: /* keyword: UNICODE_SYM  */
 #line 11739 "sql_yacc.yy"
                                 {}
-#line 29439 "sql_yacc.cc"
+#line 30688 "sql_yacc.cc"
     break;
 
   case 1851: /* keyword: UNINSTALL_SYM  */
 #line 11740 "sql_yacc.yy"
                                 {}
-#line 29445 "sql_yacc.cc"
+#line 30694 "sql_yacc.cc"
     break;
 
   case 1852: /* keyword: WRAPPER_SYM  */
 #line 11741 "sql_yacc.yy"
                                 {}
-#line 29451 "sql_yacc.cc"
+#line 30700 "sql_yacc.cc"
     break;
 
   case 1853: /* keyword: XA_SYM  */
 #line 11742 "sql_yacc.yy"
                                 {}
-#line 29457 "sql_yacc.cc"
+#line 30706 "sql_yacc.cc"
     break;
 
   case 1854: /* keyword: UPGRADE_SYM  */
 #line 11743 "sql_yacc.yy"
                                 {}
-#line 29463 "sql_yacc.cc"
+#line 30712 "sql_yacc.cc"
     break;
 
   case 1855: /* keyword_sp: ACTION  */
 #line 11753 "sql_yacc.yy"
                                    {}
-#line 29469 "sql_yacc.cc"
+#line 30718 "sql_yacc.cc"
     break;
 
   case 1856: /* keyword_sp: ADDDATE_SYM  */
 #line 11754 "sql_yacc.yy"
                                    {}
-#line 29475 "sql_yacc.cc"
+#line 30724 "sql_yacc.cc"
     break;
 
   case 1857: /* keyword_sp: AFTER_SYM  */
 #line 11755 "sql_yacc.yy"
                                    {}
-#line 29481 "sql_yacc.cc"
+#line 30730 "sql_yacc.cc"
     break;
 
   case 1858: /* keyword_sp: AGAINST  */
 #line 11756 "sql_yacc.yy"
                                    {}
-#line 29487 "sql_yacc.cc"
+#line 30736 "sql_yacc.cc"
     break;
 
   case 1859: /* keyword_sp: AGGREGATE_SYM  */
 #line 11757 "sql_yacc.yy"
                                    {}
-#line 29493 "sql_yacc.cc"
+#line 30742 "sql_yacc.cc"
     break;
 
   case 1860: /* keyword_sp: ALGORITHM_SYM  */
 #line 11758 "sql_yacc.yy"
                                    {}
-#line 29499 "sql_yacc.cc"
+#line 30748 "sql_yacc.cc"
     break;
 
   case 1861: /* keyword_sp: ANY_SYM  */
 #line 11759 "sql_yacc.yy"
                                    {}
-#line 29505 "sql_yacc.cc"
+#line 30754 "sql_yacc.cc"
     break;
 
   case 1862: /* keyword_sp: AT_SYM  */
 #line 11760 "sql_yacc.yy"
                                    {}
-#line 29511 "sql_yacc.cc"
+#line 30760 "sql_yacc.cc"
     break;
 
   case 1863: /* keyword_sp: AUTHORS_SYM  */
 #line 11761 "sql_yacc.yy"
                                    {}
-#line 29517 "sql_yacc.cc"
+#line 30766 "sql_yacc.cc"
     break;
 
   case 1864: /* keyword_sp: AUTO_INC  */
 #line 11762 "sql_yacc.yy"
                                    {}
-#line 29523 "sql_yacc.cc"
+#line 30772 "sql_yacc.cc"
     break;
 
   case 1865: /* keyword_sp: AUTOEXTEND_SIZE_SYM  */
 #line 11763 "sql_yacc.yy"
                                    {}
-#line 29529 "sql_yacc.cc"
+#line 30778 "sql_yacc.cc"
     break;
 
   case 1866: /* keyword_sp: AVG_ROW_LENGTH  */
 #line 11764 "sql_yacc.yy"
                                    {}
-#line 29535 "sql_yacc.cc"
+#line 30784 "sql_yacc.cc"
     break;
 
   case 1867: /* keyword_sp: AVG_SYM  */
 #line 11765 "sql_yacc.yy"
                                    {}
-#line 29541 "sql_yacc.cc"
+#line 30790 "sql_yacc.cc"
     break;
 
   case 1868: /* keyword_sp: BINLOG_SYM  */
 #line 11766 "sql_yacc.yy"
                                    {}
-#line 29547 "sql_yacc.cc"
+#line 30796 "sql_yacc.cc"
     break;
 
   case 1869: /* keyword_sp: BIT_SYM  */
 #line 11767 "sql_yacc.yy"
                                    {}
-#line 29553 "sql_yacc.cc"
+#line 30802 "sql_yacc.cc"
     break;
 
   case 1870: /* keyword_sp: BLOCK_SYM  */
 #line 11768 "sql_yacc.yy"
                                    {}
-#line 29559 "sql_yacc.cc"
+#line 30808 "sql_yacc.cc"
     break;
 
   case 1871: /* keyword_sp: BOOL_SYM  */
 #line 11769 "sql_yacc.yy"
                                    {}
-#line 29565 "sql_yacc.cc"
+#line 30814 "sql_yacc.cc"
     break;
 
   case 1872: /* keyword_sp: BOOLEAN_SYM  */
 #line 11770 "sql_yacc.yy"
                                    {}
-#line 29571 "sql_yacc.cc"
+#line 30820 "sql_yacc.cc"
     break;
 
   case 1873: /* keyword_sp: BTREE_SYM  */
 #line 11771 "sql_yacc.yy"
                                    {}
-#line 29577 "sql_yacc.cc"
+#line 30826 "sql_yacc.cc"
     break;
 
   case 1874: /* keyword_sp: CASCADED  */
 #line 11772 "sql_yacc.yy"
                                    {}
-#line 29583 "sql_yacc.cc"
+#line 30832 "sql_yacc.cc"
     break;
 
   case 1875: /* keyword_sp: CHAIN_SYM  */
 #line 11773 "sql_yacc.yy"
                                    {}
-#line 29589 "sql_yacc.cc"
+#line 30838 "sql_yacc.cc"
     break;
 
   case 1876: /* keyword_sp: CHANGED  */
 #line 11774 "sql_yacc.yy"
                                    {}
-#line 29595 "sql_yacc.cc"
+#line 30844 "sql_yacc.cc"
     break;
 
   case 1877: /* keyword_sp: CIPHER_SYM  */
 #line 11775 "sql_yacc.yy"
                                    {}
-#line 29601 "sql_yacc.cc"
+#line 30850 "sql_yacc.cc"
     break;
 
   case 1878: /* keyword_sp: CLIENT_SYM  */
 #line 11776 "sql_yacc.yy"
                                    {}
-#line 29607 "sql_yacc.cc"
+#line 30856 "sql_yacc.cc"
     break;
 
   case 1879: /* keyword_sp: COALESCE  */
 #line 11777 "sql_yacc.yy"
                                    {}
-#line 29613 "sql_yacc.cc"
+#line 30862 "sql_yacc.cc"
     break;
 
   case 1880: /* keyword_sp: CODE_SYM  */
 #line 11778 "sql_yacc.yy"
                                    {}
-#line 29619 "sql_yacc.cc"
+#line 30868 "sql_yacc.cc"
     break;
 
   case 1881: /* keyword_sp: COLLATION_SYM  */
 #line 11779 "sql_yacc.yy"
                                    {}
-#line 29625 "sql_yacc.cc"
+#line 30874 "sql_yacc.cc"
     break;
 
   case 1882: /* keyword_sp: COLUMNS  */
 #line 11780 "sql_yacc.yy"
                                    {}
-#line 29631 "sql_yacc.cc"
+#line 30880 "sql_yacc.cc"
     break;
 
   case 1883: /* keyword_sp: COMMITTED_SYM  */
 #line 11781 "sql_yacc.yy"
                                    {}
-#line 29637 "sql_yacc.cc"
+#line 30886 "sql_yacc.cc"
     break;
 
   case 1884: /* keyword_sp: COMPACT_SYM  */
 #line 11782 "sql_yacc.yy"
                                    {}
-#line 29643 "sql_yacc.cc"
+#line 30892 "sql_yacc.cc"
     break;
 
   case 1885: /* keyword_sp: COMPLETION_SYM  */
 #line 11783 "sql_yacc.yy"
                                    {}
-#line 29649 "sql_yacc.cc"
+#line 30898 "sql_yacc.cc"
     break;
 
   case 1886: /* keyword_sp: COMPRESSED_SYM  */
 #line 11784 "sql_yacc.yy"
                                    {}
-#line 29655 "sql_yacc.cc"
+#line 30904 "sql_yacc.cc"
     break;
 
   case 1887: /* keyword_sp: CONCURRENT  */
 #line 11785 "sql_yacc.yy"
                                    {}
-#line 29661 "sql_yacc.cc"
+#line 30910 "sql_yacc.cc"
     break;
 
   case 1888: /* keyword_sp: CONNECTION_SYM  */
 #line 11786 "sql_yacc.yy"
                                    {}
-#line 29667 "sql_yacc.cc"
+#line 30916 "sql_yacc.cc"
     break;
 
   case 1889: /* keyword_sp: CONSISTENT_SYM  */
 #line 11787 "sql_yacc.yy"
                                    {}
-#line 29673 "sql_yacc.cc"
+#line 30922 "sql_yacc.cc"
     break;
 
   case 1890: /* keyword_sp: CONTEXT_SYM  */
 #line 11788 "sql_yacc.yy"
                                    {}
-#line 29679 "sql_yacc.cc"
+#line 30928 "sql_yacc.cc"
     break;
 
   case 1891: /* keyword_sp: CONTRIBUTORS_SYM  */
 #line 11789 "sql_yacc.yy"
                                    {}
-#line 29685 "sql_yacc.cc"
+#line 30934 "sql_yacc.cc"
     break;
 
   case 1892: /* keyword_sp: CPU_SYM  */
 #line 11790 "sql_yacc.yy"
                                    {}
-#line 29691 "sql_yacc.cc"
+#line 30940 "sql_yacc.cc"
     break;
 
   case 1893: /* keyword_sp: CUBE_SYM  */
 #line 11791 "sql_yacc.yy"
                                    {}
-#line 29697 "sql_yacc.cc"
+#line 30946 "sql_yacc.cc"
     break;
 
   case 1894: /* keyword_sp: DATA_SYM  */
 #line 11792 "sql_yacc.yy"
                                    {}
-#line 29703 "sql_yacc.cc"
+#line 30952 "sql_yacc.cc"
     break;
 
   case 1895: /* keyword_sp: DATAFILE_SYM  */
 #line 11793 "sql_yacc.yy"
                                    {}
-#line 29709 "sql_yacc.cc"
+#line 30958 "sql_yacc.cc"
     break;
 
   case 1896: /* keyword_sp: DATETIME  */
 #line 11794 "sql_yacc.yy"
                                    {}
-#line 29715 "sql_yacc.cc"
+#line 30964 "sql_yacc.cc"
     break;
 
   case 1897: /* keyword_sp: DATE_SYM  */
 #line 11795 "sql_yacc.yy"
                                    {}
-#line 29721 "sql_yacc.cc"
+#line 30970 "sql_yacc.cc"
     break;
 
   case 1898: /* keyword_sp: DAY_SYM  */
 #line 11796 "sql_yacc.yy"
                                    {}
-#line 29727 "sql_yacc.cc"
+#line 30976 "sql_yacc.cc"
     break;
 
   case 1899: /* keyword_sp: DEFINER_SYM  */
 #line 11797 "sql_yacc.yy"
                                    {}
-#line 29733 "sql_yacc.cc"
+#line 30982 "sql_yacc.cc"
     break;
 
   case 1900: /* keyword_sp: DELAY_KEY_WRITE_SYM  */
 #line 11798 "sql_yacc.yy"
                                    {}
-#line 29739 "sql_yacc.cc"
+#line 30988 "sql_yacc.cc"
     break;
 
   case 1901: /* keyword_sp: DES_KEY_FILE  */
 #line 11799 "sql_yacc.yy"
                                    {}
-#line 29745 "sql_yacc.cc"
+#line 30994 "sql_yacc.cc"
     break;
 
   case 1902: /* keyword_sp: DIRECTORY_SYM  */
 #line 11800 "sql_yacc.yy"
                                    {}
-#line 29751 "sql_yacc.cc"
+#line 31000 "sql_yacc.cc"
     break;
 
   case 1903: /* keyword_sp: DISABLE_SYM  */
 #line 11801 "sql_yacc.yy"
                                    {}
-#line 29757 "sql_yacc.cc"
+#line 31006 "sql_yacc.cc"
     break;
 
   case 1904: /* keyword_sp: DISCARD  */
 #line 11802 "sql_yacc.yy"
                                    {}
-#line 29763 "sql_yacc.cc"
+#line 31012 "sql_yacc.cc"
     break;
 
   case 1905: /* keyword_sp: DISK_SYM  */
 #line 11803 "sql_yacc.yy"
                                    {}
-#line 29769 "sql_yacc.cc"
+#line 31018 "sql_yacc.cc"
     break;
 
   case 1906: /* keyword_sp: DUMPFILE  */
 #line 11804 "sql_yacc.yy"
                                    {}
-#line 29775 "sql_yacc.cc"
+#line 31024 "sql_yacc.cc"
     break;
 
   case 1907: /* keyword_sp: DUPLICATE_SYM  */
 #line 11805 "sql_yacc.yy"
                                    {}
-#line 29781 "sql_yacc.cc"
+#line 31030 "sql_yacc.cc"
     break;
 
   case 1908: /* keyword_sp: DYNAMIC_SYM  */
 #line 11806 "sql_yacc.yy"
                                    {}
-#line 29787 "sql_yacc.cc"
+#line 31036 "sql_yacc.cc"
     break;
 
   case 1909: /* keyword_sp: ENDS_SYM  */
 #line 11807 "sql_yacc.yy"
                                    {}
-#line 29793 "sql_yacc.cc"
+#line 31042 "sql_yacc.cc"
     break;
 
   case 1910: /* keyword_sp: ENUM  */
 #line 11808 "sql_yacc.yy"
                                    {}
-#line 29799 "sql_yacc.cc"
+#line 31048 "sql_yacc.cc"
     break;
 
   case 1911: /* keyword_sp: ENGINE_SYM  */
 #line 11809 "sql_yacc.yy"
                                    {}
-#line 29805 "sql_yacc.cc"
+#line 31054 "sql_yacc.cc"
     break;
 
   case 1912: /* keyword_sp: ENGINES_SYM  */
 #line 11810 "sql_yacc.yy"
                                    {}
-#line 29811 "sql_yacc.cc"
+#line 31060 "sql_yacc.cc"
     break;
 
   case 1913: /* keyword_sp: ERRORS  */
 #line 11811 "sql_yacc.yy"
                                    {}
-#line 29817 "sql_yacc.cc"
+#line 31066 "sql_yacc.cc"
     break;
 
   case 1914: /* keyword_sp: ESCAPE_SYM  */
 #line 11812 "sql_yacc.yy"
                                    {}
-#line 29823 "sql_yacc.cc"
+#line 31072 "sql_yacc.cc"
     break;
 
   case 1915: /* keyword_sp: EVENT_SYM  */
 #line 11813 "sql_yacc.yy"
                                    {}
-#line 29829 "sql_yacc.cc"
+#line 31078 "sql_yacc.cc"
     break;
 
   case 1916: /* keyword_sp: EVENTS_SYM  */
 #line 11814 "sql_yacc.yy"
                                    {}
-#line 29835 "sql_yacc.cc"
+#line 31084 "sql_yacc.cc"
     break;
 
   case 1917: /* keyword_sp: EVERY_SYM  */
 #line 11815 "sql_yacc.yy"
                                    {}
-#line 29841 "sql_yacc.cc"
+#line 31090 "sql_yacc.cc"
     break;
 
   case 1918: /* keyword_sp: EXPANSION_SYM  */
 #line 11816 "sql_yacc.yy"
                                    {}
-#line 29847 "sql_yacc.cc"
+#line 31096 "sql_yacc.cc"
     break;
 
   case 1919: /* keyword_sp: EXTENDED_SYM  */
 #line 11817 "sql_yacc.yy"
                                    {}
-#line 29853 "sql_yacc.cc"
+#line 31102 "sql_yacc.cc"
     break;
 
   case 1920: /* keyword_sp: EXTENT_SIZE_SYM  */
 #line 11818 "sql_yacc.yy"
                                    {}
-#line 29859 "sql_yacc.cc"
+#line 31108 "sql_yacc.cc"
     break;
 
   case 1921: /* keyword_sp: FAULTS_SYM  */
 #line 11819 "sql_yacc.yy"
                                    {}
-#line 29865 "sql_yacc.cc"
+#line 31114 "sql_yacc.cc"
     break;
 
   case 1922: /* keyword_sp: FAST_SYM  */
 #line 11820 "sql_yacc.yy"
                                    {}
-#line 29871 "sql_yacc.cc"
+#line 31120 "sql_yacc.cc"
     break;
 
   case 1923: /* keyword_sp: FOUND_SYM  */
 #line 11821 "sql_yacc.yy"
                                    {}
-#line 29877 "sql_yacc.cc"
+#line 31126 "sql_yacc.cc"
     break;
 
   case 1924: /* keyword_sp: ENABLE_SYM  */
 #line 11822 "sql_yacc.yy"
                                    {}
-#line 29883 "sql_yacc.cc"
+#line 31132 "sql_yacc.cc"
     break;
 
   case 1925: /* keyword_sp: FULL  */
 #line 11823 "sql_yacc.yy"
                                    {}
-#line 29889 "sql_yacc.cc"
+#line 31138 "sql_yacc.cc"
     break;
 
   case 1926: /* keyword_sp: FILE_SYM  */
 #line 11824 "sql_yacc.yy"
                                    {}
-#line 29895 "sql_yacc.cc"
+#line 31144 "sql_yacc.cc"
     break;
 
   case 1927: /* keyword_sp: FIRST_SYM  */
 #line 11825 "sql_yacc.yy"
                                    {}
-#line 29901 "sql_yacc.cc"
+#line 31150 "sql_yacc.cc"
     break;
 
   case 1928: /* keyword_sp: FIXED_SYM  */
 #line 11826 "sql_yacc.yy"
                                    {}
-#line 29907 "sql_yacc.cc"
+#line 31156 "sql_yacc.cc"
     break;
 
   case 1929: /* keyword_sp: FRAC_SECOND_SYM  */
 #line 11827 "sql_yacc.yy"
                                    {}
-#line 29913 "sql_yacc.cc"
+#line 31162 "sql_yacc.cc"
     break;
 
   case 1930: /* keyword_sp: GEOMETRY_SYM  */
 #line 11828 "sql_yacc.yy"
                                    {}
-#line 29919 "sql_yacc.cc"
+#line 31168 "sql_yacc.cc"
     break;
 
   case 1931: /* keyword_sp: GEOMETRYCOLLECTION  */
 #line 11829 "sql_yacc.yy"
                                    {}
-#line 29925 "sql_yacc.cc"
+#line 31174 "sql_yacc.cc"
     break;
 
   case 1932: /* keyword_sp: GET_FORMAT  */
 #line 11830 "sql_yacc.yy"
                                    {}
-#line 29931 "sql_yacc.cc"
+#line 31180 "sql_yacc.cc"
     break;
 
   case 1933: /* keyword_sp: GRANTS  */
 #line 11831 "sql_yacc.yy"
                                    {}
-#line 29937 "sql_yacc.cc"
+#line 31186 "sql_yacc.cc"
     break;
 
   case 1934: /* keyword_sp: GLOBAL_SYM  */
 #line 11832 "sql_yacc.yy"
                                    {}
-#line 29943 "sql_yacc.cc"
+#line 31192 "sql_yacc.cc"
     break;
 
   case 1935: /* keyword_sp: HASH_SYM  */
 #line 11833 "sql_yacc.yy"
                                    {}
-#line 29949 "sql_yacc.cc"
+#line 31198 "sql_yacc.cc"
     break;
 
   case 1936: /* keyword_sp: HOSTS_SYM  */
 #line 11834 "sql_yacc.yy"
                                    {}
-#line 29955 "sql_yacc.cc"
+#line 31204 "sql_yacc.cc"
     break;
 
   case 1937: /* keyword_sp: HOUR_SYM  */
 #line 11835 "sql_yacc.yy"
                                    {}
-#line 29961 "sql_yacc.cc"
+#line 31210 "sql_yacc.cc"
     break;
 
   case 1938: /* keyword_sp: IDENTIFIED_SYM  */
 #line 11836 "sql_yacc.yy"
                                    {}
-#line 29967 "sql_yacc.cc"
+#line 31216 "sql_yacc.cc"
     break;
 
   case 1939: /* keyword_sp: INVOKER_SYM  */
 #line 11837 "sql_yacc.yy"
                                    {}
-#line 29973 "sql_yacc.cc"
+#line 31222 "sql_yacc.cc"
     break;
 
   case 1940: /* keyword_sp: IMPORT  */
 #line 11838 "sql_yacc.yy"
                                    {}
-#line 29979 "sql_yacc.cc"
+#line 31228 "sql_yacc.cc"
     break;
 
   case 1941: /* keyword_sp: INDEXES  */
 #line 11839 "sql_yacc.yy"
                                    {}
-#line 29985 "sql_yacc.cc"
+#line 31234 "sql_yacc.cc"
     break;
 
   case 1942: /* keyword_sp: INITIAL_SIZE_SYM  */
 #line 11840 "sql_yacc.yy"
                                    {}
-#line 29991 "sql_yacc.cc"
+#line 31240 "sql_yacc.cc"
     break;
 
   case 1943: /* keyword_sp: IO_SYM  */
 #line 11841 "sql_yacc.yy"
                                    {}
-#line 29997 "sql_yacc.cc"
+#line 31246 "sql_yacc.cc"
     break;
 
   case 1944: /* keyword_sp: IPC_SYM  */
 #line 11842 "sql_yacc.yy"
                                    {}
-#line 30003 "sql_yacc.cc"
+#line 31252 "sql_yacc.cc"
     break;
 
   case 1945: /* keyword_sp: ISOLATION  */
 #line 11843 "sql_yacc.yy"
                                    {}
-#line 30009 "sql_yacc.cc"
+#line 31258 "sql_yacc.cc"
     break;
 
   case 1946: /* keyword_sp: ISSUER_SYM  */
 #line 11844 "sql_yacc.yy"
                                    {}
-#line 30015 "sql_yacc.cc"
+#line 31264 "sql_yacc.cc"
     break;
 
   case 1947: /* keyword_sp: INNOBASE_SYM  */
 #line 11845 "sql_yacc.yy"
                                    {}
-#line 30021 "sql_yacc.cc"
+#line 31270 "sql_yacc.cc"
     break;
 
   case 1948: /* keyword_sp: INSERT_METHOD  */
 #line 11846 "sql_yacc.yy"
                                    {}
-#line 30027 "sql_yacc.cc"
+#line 31276 "sql_yacc.cc"
     break;
 
   case 1949: /* keyword_sp: KEY_BLOCK_SIZE  */
 #line 11847 "sql_yacc.yy"
                                    {}
-#line 30033 "sql_yacc.cc"
+#line 31282 "sql_yacc.cc"
     break;
 
   case 1950: /* keyword_sp: LAST_SYM  */
 #line 11848 "sql_yacc.yy"
                                    {}
-#line 30039 "sql_yacc.cc"
+#line 31288 "sql_yacc.cc"
     break;
 
   case 1951: /* keyword_sp: LEAVES  */
 #line 11849 "sql_yacc.yy"
                                    {}
-#line 30045 "sql_yacc.cc"
+#line 31294 "sql_yacc.cc"
     break;
 
   case 1952: /* keyword_sp: LESS_SYM  */
 #line 11850 "sql_yacc.yy"
                                    {}
-#line 30051 "sql_yacc.cc"
+#line 31300 "sql_yacc.cc"
     break;
 
   case 1953: /* keyword_sp: LEVEL_SYM  */
 #line 11851 "sql_yacc.yy"
                                    {}
-#line 30057 "sql_yacc.cc"
+#line 31306 "sql_yacc.cc"
     break;
 
   case 1954: /* keyword_sp: LINESTRING  */
 #line 11852 "sql_yacc.yy"
                                    {}
-#line 30063 "sql_yacc.cc"
+#line 31312 "sql_yacc.cc"
     break;
 
   case 1955: /* keyword_sp: LIST_SYM  */
 #line 11853 "sql_yacc.yy"
                                    {}
-#line 30069 "sql_yacc.cc"
+#line 31318 "sql_yacc.cc"
     break;
 
   case 1956: /* keyword_sp: LOCAL_SYM  */
 #line 11854 "sql_yacc.yy"
                                    {}
-#line 30075 "sql_yacc.cc"
+#line 31324 "sql_yacc.cc"
     break;
 
   case 1957: /* keyword_sp: LOCKS_SYM  */
 #line 11855 "sql_yacc.yy"
                                    {}
-#line 30081 "sql_yacc.cc"
+#line 31330 "sql_yacc.cc"
     break;
 
   case 1958: /* keyword_sp: LOGFILE_SYM  */
 #line 11856 "sql_yacc.yy"
                                    {}
-#line 30087 "sql_yacc.cc"
+#line 31336 "sql_yacc.cc"
     break;
 
   case 1959: /* keyword_sp: LOGS_SYM  */
 #line 11857 "sql_yacc.yy"
                                    {}
-#line 30093 "sql_yacc.cc"
+#line 31342 "sql_yacc.cc"
     break;
 
   case 1960: /* keyword_sp: MAX_ROWS  */
 #line 11858 "sql_yacc.yy"
                                    {}
-#line 30099 "sql_yacc.cc"
+#line 31348 "sql_yacc.cc"
     break;
 
   case 1961: /* keyword_sp: MASTER_SYM  */
 #line 11859 "sql_yacc.yy"
                                    {}
-#line 30105 "sql_yacc.cc"
+#line 31354 "sql_yacc.cc"
     break;
 
   case 1962: /* keyword_sp: MASTER_HOST_SYM  */
 #line 11860 "sql_yacc.yy"
                                    {}
-#line 30111 "sql_yacc.cc"
+#line 31360 "sql_yacc.cc"
     break;
 
   case 1963: /* keyword_sp: MASTER_PORT_SYM  */
 #line 11861 "sql_yacc.yy"
                                    {}
-#line 30117 "sql_yacc.cc"
+#line 31366 "sql_yacc.cc"
     break;
 
   case 1964: /* keyword_sp: MASTER_LOG_FILE_SYM  */
 #line 11862 "sql_yacc.yy"
                                    {}
-#line 30123 "sql_yacc.cc"
+#line 31372 "sql_yacc.cc"
     break;
 
   case 1965: /* keyword_sp: MASTER_LOG_POS_SYM  */
 #line 11863 "sql_yacc.yy"
                                    {}
-#line 30129 "sql_yacc.cc"
+#line 31378 "sql_yacc.cc"
     break;
 
   case 1966: /* keyword_sp: MASTER_USER_SYM  */
 #line 11864 "sql_yacc.yy"
                                    {}
-#line 30135 "sql_yacc.cc"
+#line 31384 "sql_yacc.cc"
     break;
 
   case 1967: /* keyword_sp: MASTER_PASSWORD_SYM  */
 #line 11865 "sql_yacc.yy"
                                    {}
-#line 30141 "sql_yacc.cc"
+#line 31390 "sql_yacc.cc"
     break;
 
   case 1968: /* keyword_sp: MASTER_SERVER_ID_SYM  */
 #line 11866 "sql_yacc.yy"
                                    {}
-#line 30147 "sql_yacc.cc"
+#line 31396 "sql_yacc.cc"
     break;
 
   case 1969: /* keyword_sp: MASTER_CONNECT_RETRY_SYM  */
 #line 11867 "sql_yacc.yy"
                                    {}
-#line 30153 "sql_yacc.cc"
+#line 31402 "sql_yacc.cc"
     break;
 
   case 1970: /* keyword_sp: MASTER_SSL_SYM  */
 #line 11868 "sql_yacc.yy"
                                    {}
-#line 30159 "sql_yacc.cc"
+#line 31408 "sql_yacc.cc"
     break;
 
   case 1971: /* keyword_sp: MASTER_SSL_CA_SYM  */
 #line 11869 "sql_yacc.yy"
                                    {}
-#line 30165 "sql_yacc.cc"
+#line 31414 "sql_yacc.cc"
     break;
 
   case 1972: /* keyword_sp: MASTER_SSL_CAPATH_SYM  */
 #line 11870 "sql_yacc.yy"
                                    {}
-#line 30171 "sql_yacc.cc"
+#line 31420 "sql_yacc.cc"
     break;
 
   case 1973: /* keyword_sp: MASTER_SSL_CERT_SYM  */
 #line 11871 "sql_yacc.yy"
                                    {}
-#line 30177 "sql_yacc.cc"
+#line 31426 "sql_yacc.cc"
     break;
 
   case 1974: /* keyword_sp: MASTER_SSL_CIPHER_SYM  */
 #line 11872 "sql_yacc.yy"
                                    {}
-#line 30183 "sql_yacc.cc"
+#line 31432 "sql_yacc.cc"
     break;
 
   case 1975: /* keyword_sp: MASTER_SSL_KEY_SYM  */
 #line 11873 "sql_yacc.yy"
                                    {}
-#line 30189 "sql_yacc.cc"
+#line 31438 "sql_yacc.cc"
     break;
 
   case 1976: /* keyword_sp: MAX_CONCURRENT_QUERIES  */
 #line 11874 "sql_yacc.yy"
                                    {}
-#line 30195 "sql_yacc.cc"
+#line 31444 "sql_yacc.cc"
     break;
 
   case 1977: /* keyword_sp: MAX_CONCURRENT_TRANSACTIONS  */
 #line 11875 "sql_yacc.yy"
                                       {}
-#line 30201 "sql_yacc.cc"
+#line 31450 "sql_yacc.cc"
     break;
 
   case 1978: /* keyword_sp: MAX_CONNECTIONS_PER_HOUR  */
 #line 11876 "sql_yacc.yy"
                                    {}
-#line 30207 "sql_yacc.cc"
+#line 31456 "sql_yacc.cc"
     break;
 
   case 1979: /* keyword_sp: MAX_QUERIES_PER_HOUR  */
 #line 11877 "sql_yacc.yy"
                                    {}
-#line 30213 "sql_yacc.cc"
+#line 31462 "sql_yacc.cc"
     break;
 
   case 1980: /* keyword_sp: MAX_SIZE_SYM  */
 #line 11878 "sql_yacc.yy"
                                    {}
-#line 30219 "sql_yacc.cc"
+#line 31468 "sql_yacc.cc"
     break;
 
   case 1981: /* keyword_sp: MAX_UPDATES_PER_HOUR  */
 #line 11879 "sql_yacc.yy"
                                    {}
-#line 30225 "sql_yacc.cc"
+#line 31474 "sql_yacc.cc"
     break;
 
   case 1982: /* keyword_sp: MAX_USER_CONNECTIONS_SYM  */
 #line 11880 "sql_yacc.yy"
                                    {}
-#line 30231 "sql_yacc.cc"
+#line 31480 "sql_yacc.cc"
     break;
 
   case 1983: /* keyword_sp: MAX_VALUE_SYM  */
 #line 11881 "sql_yacc.yy"
                                    {}
-#line 30237 "sql_yacc.cc"
+#line 31486 "sql_yacc.cc"
     break;
 
   case 1984: /* keyword_sp: MEDIUM_SYM  */
 #line 11882 "sql_yacc.yy"
                                    {}
-#line 30243 "sql_yacc.cc"
+#line 31492 "sql_yacc.cc"
     break;
 
   case 1985: /* keyword_sp: MEMORY_SYM  */
 #line 11883 "sql_yacc.yy"
                                    {}
-#line 30249 "sql_yacc.cc"
+#line 31498 "sql_yacc.cc"
     break;
 
   case 1986: /* keyword_sp: MERGE_SYM  */
 #line 11884 "sql_yacc.yy"
                                    {}
-#line 30255 "sql_yacc.cc"
+#line 31504 "sql_yacc.cc"
     break;
 
   case 1987: /* keyword_sp: MICROSECOND_SYM  */
 #line 11885 "sql_yacc.yy"
                                    {}
-#line 30261 "sql_yacc.cc"
+#line 31510 "sql_yacc.cc"
     break;
 
   case 1988: /* keyword_sp: MIGRATE_SYM  */
 #line 11886 "sql_yacc.yy"
                                    {}
-#line 30267 "sql_yacc.cc"
+#line 31516 "sql_yacc.cc"
     break;
 
   case 1989: /* keyword_sp: MINUTE_SYM  */
 #line 11887 "sql_yacc.yy"
                                    {}
-#line 30273 "sql_yacc.cc"
+#line 31522 "sql_yacc.cc"
     break;
 
   case 1990: /* keyword_sp: MIN_ROWS  */
 #line 11888 "sql_yacc.yy"
                                    {}
-#line 30279 "sql_yacc.cc"
+#line 31528 "sql_yacc.cc"
     break;
 
   case 1991: /* keyword_sp: MODIFY_SYM  */
 #line 11889 "sql_yacc.yy"
                                    {}
-#line 30285 "sql_yacc.cc"
+#line 31534 "sql_yacc.cc"
     break;
 
   case 1992: /* keyword_sp: MODE_SYM  */
 #line 11890 "sql_yacc.yy"
                                    {}
-#line 30291 "sql_yacc.cc"
+#line 31540 "sql_yacc.cc"
     break;
 
   case 1993: /* keyword_sp: MONTH_SYM  */
 #line 11891 "sql_yacc.yy"
                                    {}
-#line 30297 "sql_yacc.cc"
+#line 31546 "sql_yacc.cc"
     break;
 
   case 1994: /* keyword_sp: MULTILINESTRING  */
 #line 11892 "sql_yacc.yy"
                                    {}
-#line 30303 "sql_yacc.cc"
+#line 31552 "sql_yacc.cc"
     break;
 
   case 1995: /* keyword_sp: MULTIPOINT  */
 #line 11893 "sql_yacc.yy"
                                    {}
-#line 30309 "sql_yacc.cc"
+#line 31558 "sql_yacc.cc"
     break;
 
   case 1996: /* keyword_sp: MULTIPOLYGON  */
 #line 11894 "sql_yacc.yy"
                                    {}
-#line 30315 "sql_yacc.cc"
+#line 31564 "sql_yacc.cc"
     break;
 
   case 1997: /* keyword_sp: MUTEX_SYM  */
 #line 11895 "sql_yacc.yy"
                                    {}
-#line 30321 "sql_yacc.cc"
+#line 31570 "sql_yacc.cc"
     break;
 
   case 1998: /* keyword_sp: NAME_SYM  */
 #line 11896 "sql_yacc.yy"
                                    {}
-#line 30327 "sql_yacc.cc"
+#line 31576 "sql_yacc.cc"
     break;
 
   case 1999: /* keyword_sp: NAMES_SYM  */
 #line 11897 "sql_yacc.yy"
                                    {}
-#line 30333 "sql_yacc.cc"
+#line 31582 "sql_yacc.cc"
     break;
 
   case 2000: /* keyword_sp: NATIONAL_SYM  */
 #line 11898 "sql_yacc.yy"
                                    {}
-#line 30339 "sql_yacc.cc"
+#line 31588 "sql_yacc.cc"
     break;
 
   case 2001: /* keyword_sp: NCHAR_SYM  */
 #line 11899 "sql_yacc.yy"
                                    {}
-#line 30345 "sql_yacc.cc"
+#line 31594 "sql_yacc.cc"
     break;
 
   case 2002: /* keyword_sp: NDBCLUSTER_SYM  */
 #line 11900 "sql_yacc.yy"
                                    {}
-#line 30351 "sql_yacc.cc"
+#line 31600 "sql_yacc.cc"
     break;
 
   case 2003: /* keyword_sp: NEXT_SYM  */
 #line 11901 "sql_yacc.yy"
                                    {}
-#line 30357 "sql_yacc.cc"
+#line 31606 "sql_yacc.cc"
     break;
 
   case 2004: /* keyword_sp: NEW_SYM  */
 #line 11902 "sql_yacc.yy"
                                    {}
-#line 30363 "sql_yacc.cc"
+#line 31612 "sql_yacc.cc"
     break;
 
   case 2005: /* keyword_sp: NO_WAIT_SYM  */
 #line 11903 "sql_yacc.yy"
                                    {}
-#line 30369 "sql_yacc.cc"
+#line 31618 "sql_yacc.cc"
     break;
 
   case 2006: /* keyword_sp: NODEGROUP_SYM  */
 #line 11904 "sql_yacc.yy"
                                    {}
-#line 30375 "sql_yacc.cc"
+#line 31624 "sql_yacc.cc"
     break;
 
   case 2007: /* keyword_sp: NONE_SYM  */
 #line 11905 "sql_yacc.yy"
                                    {}
-#line 30381 "sql_yacc.cc"
+#line 31630 "sql_yacc.cc"
     break;
 
   case 2008: /* keyword_sp: NVARCHAR_SYM  */
 #line 11906 "sql_yacc.yy"
                                    {}
-#line 30387 "sql_yacc.cc"
+#line 31636 "sql_yacc.cc"
     break;
 
   case 2009: /* keyword_sp: OFFSET_SYM  */
 #line 11907 "sql_yacc.yy"
                                    {}
-#line 30393 "sql_yacc.cc"
+#line 31642 "sql_yacc.cc"
     break;
 
   case 2010: /* keyword_sp: OLD_PASSWORD  */
 #line 11908 "sql_yacc.yy"
                                    {}
-#line 30399 "sql_yacc.cc"
+#line 31648 "sql_yacc.cc"
     break;
 
   case 2011: /* keyword_sp: ONE_SHOT_SYM  */
 #line 11909 "sql_yacc.yy"
                                    {}
-#line 30405 "sql_yacc.cc"
+#line 31654 "sql_yacc.cc"
     break;
 
   case 2012: /* keyword_sp: ONE_SYM  */
 #line 11910 "sql_yacc.yy"
                                    {}
-#line 30411 "sql_yacc.cc"
+#line 31660 "sql_yacc.cc"
     break;
 
   case 2013: /* keyword_sp: PACK_KEYS_SYM  */
 #line 11911 "sql_yacc.yy"
                                    {}
-#line 30417 "sql_yacc.cc"
+#line 31666 "sql_yacc.cc"
     break;
 
   case 2014: /* keyword_sp: PAGE_SYM  */
 #line 11912 "sql_yacc.yy"
                                    {}
-#line 30423 "sql_yacc.cc"
+#line 31672 "sql_yacc.cc"
     break;
 
   case 2015: /* keyword_sp: PARTIAL  */
 #line 11913 "sql_yacc.yy"
                                    {}
-#line 30429 "sql_yacc.cc"
+#line 31678 "sql_yacc.cc"
     break;
 
   case 2016: /* keyword_sp: PARTITIONING_SYM  */
 #line 11914 "sql_yacc.yy"
                                    {}
-#line 30435 "sql_yacc.cc"
+#line 31684 "sql_yacc.cc"
     break;
 
   case 2017: /* keyword_sp: PARTITIONS_SYM  */
 #line 11915 "sql_yacc.yy"
                                    {}
-#line 30441 "sql_yacc.cc"
+#line 31690 "sql_yacc.cc"
     break;
 
   case 2018: /* keyword_sp: PASSWORD  */
 #line 11916 "sql_yacc.yy"
                                    {}
-#line 30447 "sql_yacc.cc"
+#line 31696 "sql_yacc.cc"
     break;
 
   case 2019: /* keyword_sp: PHASE_SYM  */
 #line 11917 "sql_yacc.yy"
                                    {}
-#line 30453 "sql_yacc.cc"
+#line 31702 "sql_yacc.cc"
     break;
 
   case 2020: /* keyword_sp: PLUGIN_SYM  */
 #line 11918 "sql_yacc.yy"
                                    {}
-#line 30459 "sql_yacc.cc"
+#line 31708 "sql_yacc.cc"
     break;
 
   case 2021: /* keyword_sp: PLUGINS_SYM  */
 #line 11919 "sql_yacc.yy"
                                    {}
-#line 30465 "sql_yacc.cc"
+#line 31714 "sql_yacc.cc"
     break;
 
   case 2022: /* keyword_sp: POINT_SYM  */
 #line 11920 "sql_yacc.yy"
                                    {}
-#line 30471 "sql_yacc.cc"
+#line 31720 "sql_yacc.cc"
     break;
 
   case 2023: /* keyword_sp: POLYGON  */
 #line 11921 "sql_yacc.yy"
                                    {}
-#line 30477 "sql_yacc.cc"
+#line 31726 "sql_yacc.cc"
     break;
 
   case 2024: /* keyword_sp: PRESERVE_SYM  */
 #line 11922 "sql_yacc.yy"
                                    {}
-#line 30483 "sql_yacc.cc"
+#line 31732 "sql_yacc.cc"
     break;
 
   case 2025: /* keyword_sp: PREV_SYM  */
 #line 11923 "sql_yacc.yy"
                                    {}
-#line 30489 "sql_yacc.cc"
+#line 31738 "sql_yacc.cc"
     break;
 
   case 2026: /* keyword_sp: PRIVILEGES  */
 #line 11924 "sql_yacc.yy"
                                    {}
-#line 30495 "sql_yacc.cc"
+#line 31744 "sql_yacc.cc"
     break;
 
   case 2027: /* keyword_sp: PROCESS  */
 #line 11925 "sql_yacc.yy"
                                    {}
-#line 30501 "sql_yacc.cc"
+#line 31750 "sql_yacc.cc"
     break;
 
   case 2028: /* keyword_sp: PROCESSLIST_SYM  */
 #line 11926 "sql_yacc.yy"
                                    {}
-#line 30507 "sql_yacc.cc"
+#line 31756 "sql_yacc.cc"
     break;
 
   case 2029: /* keyword_sp: PROFILE_SYM  */
 #line 11927 "sql_yacc.yy"
                                    {}
-#line 30513 "sql_yacc.cc"
+#line 31762 "sql_yacc.cc"
     break;
 
   case 2030: /* keyword_sp: PROFILES_SYM  */
 #line 11928 "sql_yacc.yy"
                                    {}
-#line 30519 "sql_yacc.cc"
+#line 31768 "sql_yacc.cc"
     break;
 
   case 2031: /* keyword_sp: QUARTER_SYM  */
 #line 11929 "sql_yacc.yy"
                                    {}
-#line 30525 "sql_yacc.cc"
+#line 31774 "sql_yacc.cc"
     break;
 
   case 2032: /* keyword_sp: QUERY_SYM  */
 #line 11930 "sql_yacc.yy"
                                    {}
-#line 30531 "sql_yacc.cc"
+#line 31780 "sql_yacc.cc"
     break;
 
   case 2033: /* keyword_sp: QUICK  */
 #line 11931 "sql_yacc.yy"
                                    {}
-#line 30537 "sql_yacc.cc"
+#line 31786 "sql_yacc.cc"
     break;
 
   case 2034: /* keyword_sp: READ_ONLY_SYM  */
 #line 11932 "sql_yacc.yy"
                                    {}
-#line 30543 "sql_yacc.cc"
+#line 31792 "sql_yacc.cc"
     break;
 
   case 2035: /* keyword_sp: REBUILD_SYM  */
 #line 11933 "sql_yacc.yy"
                                    {}
-#line 30549 "sql_yacc.cc"
+#line 31798 "sql_yacc.cc"
     break;
 
   case 2036: /* keyword_sp: RECOVER_SYM  */
 #line 11934 "sql_yacc.yy"
                                    {}
-#line 30555 "sql_yacc.cc"
+#line 31804 "sql_yacc.cc"
     break;
 
   case 2037: /* keyword_sp: REDO_BUFFER_SIZE_SYM  */
 #line 11935 "sql_yacc.yy"
                                    {}
-#line 30561 "sql_yacc.cc"
+#line 31810 "sql_yacc.cc"
     break;
 
   case 2038: /* keyword_sp: REDOFILE_SYM  */
 #line 11936 "sql_yacc.yy"
                                    {}
-#line 30567 "sql_yacc.cc"
+#line 31816 "sql_yacc.cc"
     break;
 
   case 2039: /* keyword_sp: REDUNDANT_SYM  */
 #line 11937 "sql_yacc.yy"
                                    {}
-#line 30573 "sql_yacc.cc"
+#line 31822 "sql_yacc.cc"
     break;
 
   case 2040: /* keyword_sp: RELAY_LOG_FILE_SYM  */
 #line 11938 "sql_yacc.yy"
                                    {}
-#line 30579 "sql_yacc.cc"
+#line 31828 "sql_yacc.cc"
     break;
 
   case 2041: /* keyword_sp: RELAY_LOG_POS_SYM  */
 #line 11939 "sql_yacc.yy"
                                    {}
-#line 30585 "sql_yacc.cc"
+#line 31834 "sql_yacc.cc"
     break;
 
   case 2042: /* keyword_sp: RELAY_THREAD  */
 #line 11940 "sql_yacc.yy"
                                    {}
-#line 30591 "sql_yacc.cc"
+#line 31840 "sql_yacc.cc"
     break;
 
   case 2043: /* keyword_sp: RELOAD  */
 #line 11941 "sql_yacc.yy"
                                    {}
-#line 30597 "sql_yacc.cc"
+#line 31846 "sql_yacc.cc"
     break;
 
   case 2044: /* keyword_sp: REORGANIZE_SYM  */
 #line 11942 "sql_yacc.yy"
                                    {}
-#line 30603 "sql_yacc.cc"
+#line 31852 "sql_yacc.cc"
     break;
 
   case 2045: /* keyword_sp: REPEATABLE_SYM  */
 #line 11943 "sql_yacc.yy"
                                    {}
-#line 30609 "sql_yacc.cc"
+#line 31858 "sql_yacc.cc"
     break;
 
   case 2046: /* keyword_sp: REPLICATION  */
 #line 11944 "sql_yacc.yy"
                                    {}
-#line 30615 "sql_yacc.cc"
+#line 31864 "sql_yacc.cc"
     break;
 
   case 2047: /* keyword_sp: RESOURCES  */
 #line 11945 "sql_yacc.yy"
                                    {}
-#line 30621 "sql_yacc.cc"
+#line 31870 "sql_yacc.cc"
     break;
 
   case 2048: /* keyword_sp: RESUME_SYM  */
 #line 11946 "sql_yacc.yy"
                                    {}
-#line 30627 "sql_yacc.cc"
+#line 31876 "sql_yacc.cc"
     break;
 
   case 2049: /* keyword_sp: RETURNS_SYM  */
 #line 11947 "sql_yacc.yy"
                                    {}
-#line 30633 "sql_yacc.cc"
+#line 31882 "sql_yacc.cc"
     break;
 
   case 2050: /* keyword_sp: ROLLUP_SYM  */
 #line 11948 "sql_yacc.yy"
                                    {}
-#line 30639 "sql_yacc.cc"
+#line 31888 "sql_yacc.cc"
     break;
 
   case 2051: /* keyword_sp: ROUTINE_SYM  */
 #line 11949 "sql_yacc.yy"
                                    {}
-#line 30645 "sql_yacc.cc"
+#line 31894 "sql_yacc.cc"
     break;
 
   case 2052: /* keyword_sp: ROWS_SYM  */
 #line 11950 "sql_yacc.yy"
                                    {}
-#line 30651 "sql_yacc.cc"
+#line 31900 "sql_yacc.cc"
     break;
 
   case 2053: /* keyword_sp: ROW_FORMAT_SYM  */
 #line 11951 "sql_yacc.yy"
                                    {}
-#line 30657 "sql_yacc.cc"
+#line 31906 "sql_yacc.cc"
     break;
 
   case 2054: /* keyword_sp: ROW_SYM  */
 #line 11952 "sql_yacc.yy"
                                    {}
-#line 30663 "sql_yacc.cc"
+#line 31912 "sql_yacc.cc"
     break;
 
   case 2055: /* keyword_sp: RTREE_SYM  */
 #line 11953 "sql_yacc.yy"
                                    {}
-#line 30669 "sql_yacc.cc"
+#line 31918 "sql_yacc.cc"
     break;
 
   case 2056: /* keyword_sp: SCHEDULE_SYM  */
 #line 11954 "sql_yacc.yy"
                                    {}
-#line 30675 "sql_yacc.cc"
+#line 31924 "sql_yacc.cc"
     break;
 
   case 2057: /* keyword_sp: SECOND_SYM  */
 #line 11955 "sql_yacc.yy"
                                    {}
-#line 30681 "sql_yacc.cc"
+#line 31930 "sql_yacc.cc"
     break;
 
   case 2058: /* keyword_sp: SERIAL_SYM  */
 #line 11956 "sql_yacc.yy"
                                    {}
-#line 30687 "sql_yacc.cc"
+#line 31936 "sql_yacc.cc"
     break;
 
   case 2059: /* keyword_sp: SERIALIZABLE_SYM  */
 #line 11957 "sql_yacc.yy"
                                    {}
-#line 30693 "sql_yacc.cc"
+#line 31942 "sql_yacc.cc"
     break;
 
   case 2060: /* keyword_sp: SESSION_SYM  */
 #line 11958 "sql_yacc.yy"
                                    {}
-#line 30699 "sql_yacc.cc"
+#line 31948 "sql_yacc.cc"
     break;
 
   case 2061: /* keyword_sp: SIMPLE_SYM  */
 #line 11959 "sql_yacc.yy"
                                    {}
-#line 30705 "sql_yacc.cc"
+#line 31954 "sql_yacc.cc"
     break;
 
   case 2062: /* keyword_sp: SHARE_SYM  */
 #line 11960 "sql_yacc.yy"
                                    {}
-#line 30711 "sql_yacc.cc"
+#line 31960 "sql_yacc.cc"
     break;
 
   case 2063: /* keyword_sp: SHUTDOWN  */
 #line 11961 "sql_yacc.yy"
                                    {}
-#line 30717 "sql_yacc.cc"
+#line 31966 "sql_yacc.cc"
     break;
 
   case 2064: /* keyword_sp: SNAPSHOT_SYM  */
 #line 11962 "sql_yacc.yy"
                                    {}
-#line 30723 "sql_yacc.cc"
+#line 31972 "sql_yacc.cc"
     break;
 
   case 2065: /* keyword_sp: SOUNDS_SYM  */
 #line 11963 "sql_yacc.yy"
                                    {}
-#line 30729 "sql_yacc.cc"
+#line 31978 "sql_yacc.cc"
     break;
 
   case 2066: /* keyword_sp: SOURCE_SYM  */
 #line 11964 "sql_yacc.yy"
                                    {}
-#line 30735 "sql_yacc.cc"
+#line 31984 "sql_yacc.cc"
     break;
 
   case 2067: /* keyword_sp: SQL_CACHE_SYM  */
 #line 11965 "sql_yacc.yy"
                                    {}
-#line 30741 "sql_yacc.cc"
+#line 31990 "sql_yacc.cc"
     break;
 
   case 2068: /* keyword_sp: SQL_BUFFER_RESULT  */
 #line 11966 "sql_yacc.yy"
                                    {}
-#line 30747 "sql_yacc.cc"
+#line 31996 "sql_yacc.cc"
     break;
 
   case 2069: /* keyword_sp: SQL_NO_CACHE_SYM  */
 #line 11967 "sql_yacc.yy"
                                    {}
-#line 30753 "sql_yacc.cc"
+#line 32002 "sql_yacc.cc"
     break;
 
   case 2070: /* keyword_sp: SQL_THREAD  */
 #line 11968 "sql_yacc.yy"
                                    {}
-#line 30759 "sql_yacc.cc"
+#line 32008 "sql_yacc.cc"
     break;
 
   case 2071: /* keyword_sp: STATISTICS_SYM  */
 #line 11969 "sql_yacc.yy"
                                    {}
-#line 30765 "sql_yacc.cc"
+#line 32014 "sql_yacc.cc"
     break;
 
   case 2072: /* keyword_sp: STARTS_SYM  */
 #line 11970 "sql_yacc.yy"
                                    {}
-#line 30771 "sql_yacc.cc"
+#line 32020 "sql_yacc.cc"
     break;
 
   case 2073: /* keyword_sp: STATUS_SYM  */
 #line 11971 "sql_yacc.yy"
                                    {}
-#line 30777 "sql_yacc.cc"
+#line 32026 "sql_yacc.cc"
     break;
 
   case 2074: /* keyword_sp: STORAGE_SYM  */
 #line 11972 "sql_yacc.yy"
                                    {}
-#line 30783 "sql_yacc.cc"
+#line 32032 "sql_yacc.cc"
     break;
 
   case 2075: /* keyword_sp: STRING_SYM  */
 #line 11973 "sql_yacc.yy"
                                    {}
-#line 30789 "sql_yacc.cc"
+#line 32038 "sql_yacc.cc"
     break;
 
   case 2076: /* keyword_sp: SUBDATE_SYM  */
 #line 11974 "sql_yacc.yy"
                                    {}
-#line 30795 "sql_yacc.cc"
+#line 32044 "sql_yacc.cc"
     break;
 
   case 2077: /* keyword_sp: SUBJECT_SYM  */
 #line 11975 "sql_yacc.yy"
                                    {}
-#line 30801 "sql_yacc.cc"
+#line 32050 "sql_yacc.cc"
     break;
 
   case 2078: /* keyword_sp: SUBPARTITION_SYM  */
 #line 11976 "sql_yacc.yy"
                                    {}
-#line 30807 "sql_yacc.cc"
+#line 32056 "sql_yacc.cc"
     break;
 
   case 2079: /* keyword_sp: SUBPARTITIONS_SYM  */
 #line 11977 "sql_yacc.yy"
                                    {}
-#line 30813 "sql_yacc.cc"
+#line 32062 "sql_yacc.cc"
     break;
 
   case 2080: /* keyword_sp: SUPER_SYM  */
 #line 11978 "sql_yacc.yy"
                                    {}
-#line 30819 "sql_yacc.cc"
+#line 32068 "sql_yacc.cc"
     break;
 
   case 2081: /* keyword_sp: SUSPEND_SYM  */
 #line 11979 "sql_yacc.yy"
                                    {}
-#line 30825 "sql_yacc.cc"
+#line 32074 "sql_yacc.cc"
     break;
 
   case 2082: /* keyword_sp: SWAPS_SYM  */
 #line 11980 "sql_yacc.yy"
                                    {}
-#line 30831 "sql_yacc.cc"
+#line 32080 "sql_yacc.cc"
     break;
 
   case 2083: /* keyword_sp: SWITCHES_SYM  */
 #line 11981 "sql_yacc.yy"
                                    {}
-#line 30837 "sql_yacc.cc"
+#line 32086 "sql_yacc.cc"
     break;
 
   case 2084: /* keyword_sp: TABLES  */
 #line 11982 "sql_yacc.yy"
                                    {}
-#line 30843 "sql_yacc.cc"
+#line 32092 "sql_yacc.cc"
     break;
 
   case 2085: /* keyword_sp: TABLE_CHECKSUM_SYM  */
 #line 11983 "sql_yacc.yy"
                                    {}
-#line 30849 "sql_yacc.cc"
+#line 32098 "sql_yacc.cc"
     break;
 
   case 2086: /* keyword_sp: TABLESPACE  */
 #line 11984 "sql_yacc.yy"
                                    {}
-#line 30855 "sql_yacc.cc"
+#line 32104 "sql_yacc.cc"
     break;
 
   case 2087: /* keyword_sp: TEMPORARY  */
 #line 11985 "sql_yacc.yy"
                                    {}
-#line 30861 "sql_yacc.cc"
+#line 32110 "sql_yacc.cc"
     break;
 
   case 2088: /* keyword_sp: TEMPTABLE_SYM  */
 #line 11986 "sql_yacc.yy"
                                    {}
-#line 30867 "sql_yacc.cc"
+#line 32116 "sql_yacc.cc"
     break;
 
   case 2089: /* keyword_sp: TEXT_SYM  */
 #line 11987 "sql_yacc.yy"
                                    {}
-#line 30873 "sql_yacc.cc"
+#line 32122 "sql_yacc.cc"
     break;
 
   case 2090: /* keyword_sp: THAN_SYM  */
 #line 11988 "sql_yacc.yy"
                                    {}
-#line 30879 "sql_yacc.cc"
+#line 32128 "sql_yacc.cc"
     break;
 
   case 2091: /* keyword_sp: TRANSACTION_SYM  */
 #line 11989 "sql_yacc.yy"
                                    {}
-#line 30885 "sql_yacc.cc"
+#line 32134 "sql_yacc.cc"
     break;
 
   case 2092: /* keyword_sp: TRIGGERS_SYM  */
 #line 11990 "sql_yacc.yy"
                                    {}
-#line 30891 "sql_yacc.cc"
+#line 32140 "sql_yacc.cc"
     break;
 
   case 2093: /* keyword_sp: TIMESTAMP  */
 #line 11991 "sql_yacc.yy"
                                    {}
-#line 30897 "sql_yacc.cc"
+#line 32146 "sql_yacc.cc"
     break;
 
   case 2094: /* keyword_sp: TIMESTAMP_ADD  */
 #line 11992 "sql_yacc.yy"
                                    {}
-#line 30903 "sql_yacc.cc"
+#line 32152 "sql_yacc.cc"
     break;
 
   case 2095: /* keyword_sp: TIMESTAMP_DIFF  */
 #line 11993 "sql_yacc.yy"
                                    {}
-#line 30909 "sql_yacc.cc"
+#line 32158 "sql_yacc.cc"
     break;
 
   case 2096: /* keyword_sp: TIME_SYM  */
 #line 11994 "sql_yacc.yy"
                                    {}
-#line 30915 "sql_yacc.cc"
+#line 32164 "sql_yacc.cc"
     break;
 
   case 2097: /* keyword_sp: TYPES_SYM  */
 #line 11995 "sql_yacc.yy"
                                    {}
-#line 30921 "sql_yacc.cc"
+#line 32170 "sql_yacc.cc"
     break;
 
   case 2098: /* keyword_sp: TYPE_SYM  */
 #line 11996 "sql_yacc.yy"
                                    {}
-#line 30927 "sql_yacc.cc"
+#line 32176 "sql_yacc.cc"
     break;
 
   case 2099: /* keyword_sp: UDF_RETURNS_SYM  */
 #line 11997 "sql_yacc.yy"
                                    {}
-#line 30933 "sql_yacc.cc"
+#line 32182 "sql_yacc.cc"
     break;
 
   case 2100: /* keyword_sp: FUNCTION_SYM  */
 #line 11998 "sql_yacc.yy"
                                    {}
-#line 30939 "sql_yacc.cc"
+#line 32188 "sql_yacc.cc"
     break;
 
   case 2101: /* keyword_sp: UNCOMMITTED_SYM  */
 #line 11999 "sql_yacc.yy"
                                    {}
-#line 30945 "sql_yacc.cc"
+#line 32194 "sql_yacc.cc"
     break;
 
   case 2102: /* keyword_sp: UNDEFINED_SYM  */
 #line 12000 "sql_yacc.yy"
                                    {}
-#line 30951 "sql_yacc.cc"
+#line 32200 "sql_yacc.cc"
     break;
 
   case 2103: /* keyword_sp: UNDO_BUFFER_SIZE_SYM  */
 #line 12001 "sql_yacc.yy"
                                    {}
-#line 30957 "sql_yacc.cc"
+#line 32206 "sql_yacc.cc"
     break;
 
   case 2104: /* keyword_sp: UNDOFILE_SYM  */
 #line 12002 "sql_yacc.yy"
                                    {}
-#line 30963 "sql_yacc.cc"
+#line 32212 "sql_yacc.cc"
     break;
 
   case 2105: /* keyword_sp: UNKNOWN_SYM  */
 #line 12003 "sql_yacc.yy"
                                    {}
-#line 30969 "sql_yacc.cc"
+#line 32218 "sql_yacc.cc"
     break;
 
   case 2106: /* keyword_sp: UNTIL_SYM  */
 #line 12004 "sql_yacc.yy"
                                    {}
-#line 30975 "sql_yacc.cc"
+#line 32224 "sql_yacc.cc"
     break;
 
   case 2107: /* keyword_sp: USER  */
 #line 12005 "sql_yacc.yy"
                                    {}
-#line 30981 "sql_yacc.cc"
+#line 32230 "sql_yacc.cc"
     break;
 
   case 2108: /* keyword_sp: USE_FRM  */
 #line 12006 "sql_yacc.yy"
                                    {}
-#line 30987 "sql_yacc.cc"
+#line 32236 "sql_yacc.cc"
     break;
 
   case 2109: /* keyword_sp: VARIABLES  */
 #line 12007 "sql_yacc.yy"
                                    {}
-#line 30993 "sql_yacc.cc"
+#line 32242 "sql_yacc.cc"
     break;
 
   case 2110: /* keyword_sp: VIEW_SYM  */
 #line 12008 "sql_yacc.yy"
                                    {}
-#line 30999 "sql_yacc.cc"
+#line 32248 "sql_yacc.cc"
     break;
 
   case 2111: /* keyword_sp: VALUE_SYM  */
 #line 12009 "sql_yacc.yy"
                                    {}
-#line 31005 "sql_yacc.cc"
+#line 32254 "sql_yacc.cc"
     break;
 
   case 2112: /* keyword_sp: WARNINGS  */
 #line 12010 "sql_yacc.yy"
                                    {}
-#line 31011 "sql_yacc.cc"
+#line 32260 "sql_yacc.cc"
     break;
 
   case 2113: /* keyword_sp: WAIT_SYM  */
 #line 12011 "sql_yacc.yy"
                                    {}
-#line 31017 "sql_yacc.cc"
+#line 32266 "sql_yacc.cc"
     break;
 
   case 2114: /* keyword_sp: WEEK_SYM  */
 #line 12012 "sql_yacc.yy"
                                    {}
-#line 31023 "sql_yacc.cc"
+#line 32272 "sql_yacc.cc"
     break;
 
   case 2115: /* keyword_sp: WORK_SYM  */
 #line 12013 "sql_yacc.yy"
                                    {}
-#line 31029 "sql_yacc.cc"
+#line 32278 "sql_yacc.cc"
     break;
 
   case 2116: /* keyword_sp: X509_SYM  */
 #line 12014 "sql_yacc.yy"
                                    {}
-#line 31035 "sql_yacc.cc"
+#line 32284 "sql_yacc.cc"
     break;
 
   case 2117: /* keyword_sp: YEAR_SYM  */
 #line 12015 "sql_yacc.yy"
                                    {}
-#line 31041 "sql_yacc.cc"
+#line 32290 "sql_yacc.cc"
     break;
 
   case 2118: /* $@149: %empty  */
@@ -31051,25 +32300,25 @@ yyreduce:
             lex->one_shot_set= 0;
             lex->autocommit= 0;
           }
-#line 31055 "sql_yacc.cc"
+#line 32304 "sql_yacc.cc"
     break;
 
   case 2119: /* set: SET opt_option $@149 option_value_list  */
 #line 12032 "sql_yacc.yy"
           {}
-#line 31061 "sql_yacc.cc"
+#line 32310 "sql_yacc.cc"
     break;
 
   case 2120: /* opt_option: %empty  */
 #line 12036 "sql_yacc.yy"
                       {}
-#line 31067 "sql_yacc.cc"
+#line 32316 "sql_yacc.cc"
     break;
 
   case 2121: /* opt_option: OPTION  */
 #line 12037 "sql_yacc.yy"
                  {}
-#line 31073 "sql_yacc.cc"
+#line 32322 "sql_yacc.cc"
     break;
 
   case 2124: /* $@150: %empty  */
@@ -31104,7 +32353,7 @@ yyreduce:
               lex->sphead->m_tmp_query= lip->get_tok_start();
             }
           }
-#line 31108 "sql_yacc.cc"
+#line 32357 "sql_yacc.cc"
     break;
 
   case 2125: /* option_type_value: $@150 ext_option_value  */
@@ -31157,91 +32406,91 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 31161 "sql_yacc.cc"
+#line 32410 "sql_yacc.cc"
     break;
 
   case 2126: /* option_type: option_type2  */
 #line 12128 "sql_yacc.yy"
                           {}
-#line 31167 "sql_yacc.cc"
+#line 32416 "sql_yacc.cc"
     break;
 
   case 2127: /* option_type: GLOBAL_SYM  */
 #line 12129 "sql_yacc.yy"
                       { (yyval.var_type)=OPT_GLOBAL; }
-#line 31173 "sql_yacc.cc"
+#line 32422 "sql_yacc.cc"
     break;
 
   case 2128: /* option_type: LOCAL_SYM  */
 #line 12130 "sql_yacc.yy"
                       { (yyval.var_type)=OPT_SESSION; }
-#line 31179 "sql_yacc.cc"
+#line 32428 "sql_yacc.cc"
     break;
 
   case 2129: /* option_type: SESSION_SYM  */
 #line 12131 "sql_yacc.yy"
                       { (yyval.var_type)=OPT_SESSION; }
-#line 31185 "sql_yacc.cc"
+#line 32434 "sql_yacc.cc"
     break;
 
   case 2130: /* option_type2: %empty  */
 #line 12135 "sql_yacc.yy"
                       { (yyval.num)= OPT_DEFAULT; }
-#line 31191 "sql_yacc.cc"
+#line 32440 "sql_yacc.cc"
     break;
 
   case 2131: /* option_type2: ONE_SHOT_SYM  */
 #line 12136 "sql_yacc.yy"
                        { Lex->one_shot_set= 1; (yyval.num)= OPT_SESSION; }
-#line 31197 "sql_yacc.cc"
+#line 32446 "sql_yacc.cc"
     break;
 
   case 2132: /* opt_var_type: %empty  */
 #line 12140 "sql_yacc.yy"
                       { (yyval.var_type)=OPT_SESSION; }
-#line 31203 "sql_yacc.cc"
+#line 32452 "sql_yacc.cc"
     break;
 
   case 2133: /* opt_var_type: GLOBAL_SYM  */
 #line 12141 "sql_yacc.yy"
                       { (yyval.var_type)=OPT_GLOBAL; }
-#line 31209 "sql_yacc.cc"
+#line 32458 "sql_yacc.cc"
     break;
 
   case 2134: /* opt_var_type: LOCAL_SYM  */
 #line 12142 "sql_yacc.yy"
                       { (yyval.var_type)=OPT_SESSION; }
-#line 31215 "sql_yacc.cc"
+#line 32464 "sql_yacc.cc"
     break;
 
   case 2135: /* opt_var_type: SESSION_SYM  */
 #line 12143 "sql_yacc.yy"
                       { (yyval.var_type)=OPT_SESSION; }
-#line 31221 "sql_yacc.cc"
+#line 32470 "sql_yacc.cc"
     break;
 
   case 2136: /* opt_var_ident_type: %empty  */
 #line 12147 "sql_yacc.yy"
                           { (yyval.var_type)=OPT_DEFAULT; }
-#line 31227 "sql_yacc.cc"
+#line 32476 "sql_yacc.cc"
     break;
 
   case 2137: /* opt_var_ident_type: GLOBAL_SYM '.'  */
 #line 12148 "sql_yacc.yy"
                           { (yyval.var_type)=OPT_GLOBAL; }
-#line 31233 "sql_yacc.cc"
+#line 32482 "sql_yacc.cc"
     break;
 
   case 2138: /* opt_var_ident_type: LOCAL_SYM '.'  */
 #line 12149 "sql_yacc.yy"
                           { (yyval.var_type)=OPT_SESSION; }
-#line 31239 "sql_yacc.cc"
+#line 32488 "sql_yacc.cc"
     break;
 
   case 2139: /* opt_var_ident_type: SESSION_SYM '.'  */
 #line 12150 "sql_yacc.yy"
                           { (yyval.var_type)=OPT_SESSION; }
-#line 31245 "sql_yacc.cc"
+#line 32494 "sql_yacc.cc"
     break;
 
   case 2142: /* sys_option_value: option_type internal_variable_name equal set_expr_or_default  */
@@ -31287,7 +32536,7 @@ yyreduce:
                 MYSQL_YYABORT;
             }
           }
-#line 31291 "sql_yacc.cc"
+#line 32540 "sql_yacc.cc"
     break;
 
   case 2143: /* sys_option_value: option_type TRANSACTION_SYM ISOLATION LEVEL_SYM isolation_types  */
@@ -31307,7 +32556,7 @@ yyreduce:
               MYSQL_YYABORT;
             lex->var_list.push_back(var);
           }
-#line 31311 "sql_yacc.cc"
+#line 32560 "sql_yacc.cc"
     break;
 
   case 2144: /* option_value: '@' ident_or_text equal expr  */
@@ -31322,7 +32571,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->var_list.push_back(var);
           }
-#line 31326 "sql_yacc.cc"
+#line 32575 "sql_yacc.cc"
     break;
 
   case 2145: /* option_value: '@' '@' opt_var_ident_type internal_variable_name equal set_expr_or_default  */
@@ -31339,7 +32588,7 @@ yyreduce:
             if (set_system_variable(thd, &tmp, (yyvsp[-3].var_type), (yyvsp[0].item)))
               MYSQL_YYABORT;
           }
-#line 31343 "sql_yacc.cc"
+#line 32592 "sql_yacc.cc"
     break;
 
   case 2146: /* option_value: charset old_or_new_charset_name_or_default  */
@@ -31357,7 +32606,7 @@ yyreduce:
               MYSQL_YYABORT;
             lex->var_list.push_back(var);
           }
-#line 31361 "sql_yacc.cc"
+#line 32610 "sql_yacc.cc"
     break;
 
   case 2147: /* option_value: NAMES_SYM equal expr  */
@@ -31376,7 +32625,7 @@ yyreduce:
 
             MYSQL_YYABORT;
           }
-#line 31380 "sql_yacc.cc"
+#line 32629 "sql_yacc.cc"
     break;
 
   case 2148: /* option_value: NAMES_SYM charset_name_or_default opt_collate  */
@@ -31399,7 +32648,7 @@ yyreduce:
               MYSQL_YYABORT;
             lex->var_list.push_back(var);
           }
-#line 31403 "sql_yacc.cc"
+#line 32652 "sql_yacc.cc"
     break;
 
   case 2149: /* option_value: PASSWORD equal text_or_password  */
@@ -31430,7 +32679,7 @@ yyreduce:
             if (lex->sphead)
               lex->sphead->m_flags|= sp_head::HAS_SET_AUTOCOMMIT_STMT;
           }
-#line 31434 "sql_yacc.cc"
+#line 32683 "sql_yacc.cc"
     break;
 
   case 2150: /* option_value: PASSWORD FOR_SYM user equal text_or_password  */
@@ -31444,7 +32693,7 @@ yyreduce:
             if (Lex->sphead)
               Lex->sphead->m_flags|= sp_head::HAS_SET_AUTOCOMMIT_STMT;
           }
-#line 31448 "sql_yacc.cc"
+#line 32697 "sql_yacc.cc"
     break;
 
   case 2151: /* internal_variable_name: ident  */
@@ -31475,7 +32724,7 @@ yyreduce:
               (yyval.variable).base_name= (yyvsp[0].lex_str);
             }
           }
-#line 31479 "sql_yacc.cc"
+#line 32728 "sql_yacc.cc"
     break;
 
   case 2152: /* internal_variable_name: ident '.' ident  */
@@ -31522,7 +32771,7 @@ yyreduce:
               (yyval.variable).base_name= (yyvsp[-2].lex_str);
             }
           }
-#line 31526 "sql_yacc.cc"
+#line 32775 "sql_yacc.cc"
     break;
 
   case 2153: /* internal_variable_name: DEFAULT '.' ident  */
@@ -31537,37 +32786,37 @@ yyreduce:
             (yyval.variable).base_name.str=    (char*) "default";
             (yyval.variable).base_name.length= 7;
           }
-#line 31541 "sql_yacc.cc"
+#line 32790 "sql_yacc.cc"
     break;
 
   case 2154: /* isolation_types: READ_SYM UNCOMMITTED_SYM  */
 #line 12416 "sql_yacc.yy"
                                    { (yyval.tx_isolation)= ISO_READ_UNCOMMITTED; }
-#line 31547 "sql_yacc.cc"
+#line 32796 "sql_yacc.cc"
     break;
 
   case 2155: /* isolation_types: READ_SYM COMMITTED_SYM  */
 #line 12417 "sql_yacc.yy"
                                    { (yyval.tx_isolation)= ISO_READ_COMMITTED; }
-#line 31553 "sql_yacc.cc"
+#line 32802 "sql_yacc.cc"
     break;
 
   case 2156: /* isolation_types: REPEATABLE_SYM READ_SYM  */
 #line 12418 "sql_yacc.yy"
                                    { (yyval.tx_isolation)= ISO_REPEATABLE_READ; }
-#line 31559 "sql_yacc.cc"
+#line 32808 "sql_yacc.cc"
     break;
 
   case 2157: /* isolation_types: SERIALIZABLE_SYM  */
 #line 12419 "sql_yacc.yy"
                                    { (yyval.tx_isolation)= ISO_SERIALIZABLE; }
-#line 31565 "sql_yacc.cc"
+#line 32814 "sql_yacc.cc"
     break;
 
   case 2158: /* text_or_password: TEXT_STRING  */
 #line 12423 "sql_yacc.yy"
                       { (yyval.simple_string)=(yyvsp[0].lex_str).str;}
-#line 31571 "sql_yacc.cc"
+#line 32820 "sql_yacc.cc"
     break;
 
   case 2159: /* text_or_password: PASSWORD '(' TEXT_STRING ')'  */
@@ -31580,7 +32829,7 @@ yyreduce:
             if ((yyval.simple_string) == NULL)
               MYSQL_YYABORT;
           }
-#line 31584 "sql_yacc.cc"
+#line 32833 "sql_yacc.cc"
     break;
 
   case 2160: /* text_or_password: OLD_PASSWORD '(' TEXT_STRING ')'  */
@@ -31592,19 +32841,19 @@ yyreduce:
             if ((yyval.simple_string) == NULL)
               MYSQL_YYABORT;
           }
-#line 31596 "sql_yacc.cc"
+#line 32845 "sql_yacc.cc"
     break;
 
   case 2161: /* set_expr_or_default: expr  */
 #line 12445 "sql_yacc.yy"
                { (yyval.item)=(yyvsp[0].item); }
-#line 31602 "sql_yacc.cc"
+#line 32851 "sql_yacc.cc"
     break;
 
   case 2162: /* set_expr_or_default: DEFAULT  */
 #line 12446 "sql_yacc.yy"
                   { (yyval.item)=0; }
-#line 31608 "sql_yacc.cc"
+#line 32857 "sql_yacc.cc"
     break;
 
   case 2163: /* set_expr_or_default: ON  */
@@ -31614,7 +32863,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 31618 "sql_yacc.cc"
+#line 32867 "sql_yacc.cc"
     break;
 
   case 2164: /* set_expr_or_default: ALL  */
@@ -31624,7 +32873,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 31628 "sql_yacc.cc"
+#line 32877 "sql_yacc.cc"
     break;
 
   case 2165: /* set_expr_or_default: BINARY  */
@@ -31634,7 +32883,7 @@ yyreduce:
             if ((yyval.item) == NULL)
               MYSQL_YYABORT;
           }
-#line 31638 "sql_yacc.cc"
+#line 32887 "sql_yacc.cc"
     break;
 
   case 2166: /* $@151: %empty  */
@@ -31649,13 +32898,13 @@ yyreduce:
             }
             lex->sql_command= SQLCOM_LOCK_TABLES;
           }
-#line 31653 "sql_yacc.cc"
+#line 32902 "sql_yacc.cc"
     break;
 
   case 2167: /* lock: LOCK_SYM table_or_tables $@151 table_lock_list  */
 #line 12482 "sql_yacc.yy"
           {}
-#line 31659 "sql_yacc.cc"
+#line 32908 "sql_yacc.cc"
     break;
 
   case 2172: /* table_lock: table_ident opt_table_alias lock_option  */
@@ -31668,31 +32917,31 @@ yyreduce:
             if (lock_type >= TL_WRITE_ALLOW_WRITE)
               Lex->protect_against_global_read_lock= TRUE;
           }
-#line 31672 "sql_yacc.cc"
+#line 32921 "sql_yacc.cc"
     break;
 
   case 2173: /* lock_option: READ_SYM  */
 #line 12508 "sql_yacc.yy"
                                  { (yyval.num)= TL_READ_NO_INSERT; }
-#line 31678 "sql_yacc.cc"
+#line 32927 "sql_yacc.cc"
     break;
 
   case 2174: /* lock_option: WRITE_SYM  */
 #line 12509 "sql_yacc.yy"
                                  { (yyval.num)= TL_WRITE_DEFAULT; }
-#line 31684 "sql_yacc.cc"
+#line 32933 "sql_yacc.cc"
     break;
 
   case 2175: /* lock_option: LOW_PRIORITY WRITE_SYM  */
 #line 12510 "sql_yacc.yy"
                                  { (yyval.num)= TL_WRITE_LOW_PRIORITY; }
-#line 31690 "sql_yacc.cc"
+#line 32939 "sql_yacc.cc"
     break;
 
   case 2176: /* lock_option: READ_SYM LOCAL_SYM  */
 #line 12511 "sql_yacc.yy"
                                  { (yyval.num)= TL_READ; }
-#line 31696 "sql_yacc.cc"
+#line 32945 "sql_yacc.cc"
     break;
 
   case 2177: /* $@152: %empty  */
@@ -31707,13 +32956,13 @@ yyreduce:
             }
             lex->sql_command= SQLCOM_UNLOCK_TABLES;
           }
-#line 31711 "sql_yacc.cc"
+#line 32960 "sql_yacc.cc"
     break;
 
   case 2178: /* unlock: UNLOCK_SYM $@152 table_or_tables  */
 #line 12527 "sql_yacc.yy"
           {}
-#line 31717 "sql_yacc.cc"
+#line 32966 "sql_yacc.cc"
     break;
 
   case 2179: /* handler: HANDLER_SYM table_ident OPEN_SYM opt_table_alias  */
@@ -31729,7 +32978,7 @@ yyreduce:
             if (!lex->current_select->add_table_to_list(lex->thd, (yyvsp[-2].table), (yyvsp[0].lex_str_ptr), 0))
               MYSQL_YYABORT;
           }
-#line 31733 "sql_yacc.cc"
+#line 32982 "sql_yacc.cc"
     break;
 
   case 2180: /* handler: HANDLER_SYM table_ident_nodb CLOSE_SYM  */
@@ -31745,7 +32994,7 @@ yyreduce:
             if (!lex->current_select->add_table_to_list(lex->thd, (yyvsp[-1].table), 0, 0))
               MYSQL_YYABORT;
           }
-#line 31749 "sql_yacc.cc"
+#line 32998 "sql_yacc.cc"
     break;
 
   case 2181: /* $@153: %empty  */
@@ -31767,7 +33016,7 @@ yyreduce:
             if (!lex->current_select->add_table_to_list(lex->thd, (yyvsp[0].table), 0, 0))
               MYSQL_YYABORT;
           }
-#line 31771 "sql_yacc.cc"
+#line 33020 "sql_yacc.cc"
     break;
 
   case 2182: /* handler: HANDLER_SYM handler_table_and_read_or_open_read_close $@153 handler_read_or_scan where_clause opt_limit_clause  */
@@ -31775,67 +33024,67 @@ yyreduce:
           {
             Lex->expr_allows_subselect= TRUE;
           }
-#line 31779 "sql_yacc.cc"
+#line 33028 "sql_yacc.cc"
     break;
 
   case 2183: /* handler_table_and_read_or_open_read_close: table_ident_nodb READ_SYM  */
 #line 12584 "sql_yacc.yy"
                                     { Lex->sql_command = SQLCOM_HA_READ; (yyval.table) = (yyvsp[-1].table); }
-#line 31785 "sql_yacc.cc"
+#line 33034 "sql_yacc.cc"
     break;
 
   case 2184: /* handler_table_and_read_or_open_read_close: table_ident OPEN_READ_CLOSE_SYM  */
 #line 12585 "sql_yacc.yy"
                                           { Lex->sql_command = SQLCOM_HA_OPEN_READ_CLOSE; (yyval.table) = (yyvsp[-1].table); }
-#line 31791 "sql_yacc.cc"
+#line 33040 "sql_yacc.cc"
     break;
 
   case 2185: /* handler_read_or_scan: handler_scan_function  */
 #line 12589 "sql_yacc.yy"
                                       { Lex->ident= null_lex_str; }
-#line 31797 "sql_yacc.cc"
+#line 33046 "sql_yacc.cc"
     break;
 
   case 2186: /* handler_read_or_scan: ident handler_rkey_function  */
 #line 12590 "sql_yacc.yy"
                                       { Lex->ident= (yyvsp[-1].lex_str); }
-#line 31803 "sql_yacc.cc"
+#line 33052 "sql_yacc.cc"
     break;
 
   case 2187: /* handler_scan_function: FIRST_SYM  */
 #line 12594 "sql_yacc.yy"
                     { Lex->ha_read_mode = RFIRST; }
-#line 31809 "sql_yacc.cc"
+#line 33058 "sql_yacc.cc"
     break;
 
   case 2188: /* handler_scan_function: NEXT_SYM  */
 #line 12595 "sql_yacc.yy"
                     { Lex->ha_read_mode = RNEXT;  }
-#line 31815 "sql_yacc.cc"
+#line 33064 "sql_yacc.cc"
     break;
 
   case 2189: /* handler_rkey_function: FIRST_SYM  */
 #line 12599 "sql_yacc.yy"
                     { Lex->ha_read_mode = RFIRST; }
-#line 31821 "sql_yacc.cc"
+#line 33070 "sql_yacc.cc"
     break;
 
   case 2190: /* handler_rkey_function: NEXT_SYM  */
 #line 12600 "sql_yacc.yy"
                     { Lex->ha_read_mode = RNEXT;  }
-#line 31827 "sql_yacc.cc"
+#line 33076 "sql_yacc.cc"
     break;
 
   case 2191: /* handler_rkey_function: PREV_SYM  */
 #line 12601 "sql_yacc.yy"
                     { Lex->ha_read_mode = RPREV;  }
-#line 31833 "sql_yacc.cc"
+#line 33082 "sql_yacc.cc"
     break;
 
   case 2192: /* handler_rkey_function: LAST_SYM  */
 #line 12602 "sql_yacc.yy"
                     { Lex->ha_read_mode = RLAST;  }
-#line 31839 "sql_yacc.cc"
+#line 33088 "sql_yacc.cc"
     break;
 
   case 2193: /* $@154: %empty  */
@@ -31847,49 +33096,49 @@ yyreduce:
             if (!(lex->insert_list = new List_item))
               MYSQL_YYABORT;
           }
-#line 31851 "sql_yacc.cc"
+#line 33100 "sql_yacc.cc"
     break;
 
   case 2194: /* handler_rkey_function: handler_rkey_mode $@154 '(' values ')'  */
 #line 12612 "sql_yacc.yy"
           {}
-#line 31857 "sql_yacc.cc"
+#line 33106 "sql_yacc.cc"
     break;
 
   case 2195: /* handler_rkey_mode: EQ  */
 #line 12616 "sql_yacc.yy"
                  { (yyval.ha_rkey_mode)=HA_READ_KEY_EXACT;   }
-#line 31863 "sql_yacc.cc"
+#line 33112 "sql_yacc.cc"
     break;
 
   case 2196: /* handler_rkey_mode: GE  */
 #line 12617 "sql_yacc.yy"
                  { (yyval.ha_rkey_mode)=HA_READ_KEY_OR_NEXT; }
-#line 31869 "sql_yacc.cc"
+#line 33118 "sql_yacc.cc"
     break;
 
   case 2197: /* handler_rkey_mode: LE  */
 #line 12618 "sql_yacc.yy"
                  { (yyval.ha_rkey_mode)=HA_READ_KEY_OR_PREV; }
-#line 31875 "sql_yacc.cc"
+#line 33124 "sql_yacc.cc"
     break;
 
   case 2198: /* handler_rkey_mode: GT_SYM  */
 #line 12619 "sql_yacc.yy"
                  { (yyval.ha_rkey_mode)=HA_READ_AFTER_KEY;   }
-#line 31881 "sql_yacc.cc"
+#line 33130 "sql_yacc.cc"
     break;
 
   case 2199: /* handler_rkey_mode: LT  */
 #line 12620 "sql_yacc.yy"
                  { (yyval.ha_rkey_mode)=HA_READ_BEFORE_KEY;  }
-#line 31887 "sql_yacc.cc"
+#line 33136 "sql_yacc.cc"
     break;
 
   case 2200: /* revoke: REVOKE clear_privileges revoke_command  */
 #line 12627 "sql_yacc.yy"
           {}
-#line 31893 "sql_yacc.cc"
+#line 33142 "sql_yacc.cc"
     break;
 
   case 2201: /* revoke_command: grant_privileges ON opt_table grant_ident FROM grant_list  */
@@ -31899,7 +33148,7 @@ yyreduce:
             lex->sql_command= SQLCOM_REVOKE;
             lex->type= 0;
           }
-#line 31903 "sql_yacc.cc"
+#line 33152 "sql_yacc.cc"
     break;
 
   case 2202: /* revoke_command: grant_privileges ON FUNCTION_SYM grant_ident FROM grant_list  */
@@ -31914,7 +33163,7 @@ yyreduce:
             lex->sql_command= SQLCOM_REVOKE;
             lex->type= TYPE_ENUM_FUNCTION;
           }
-#line 31918 "sql_yacc.cc"
+#line 33167 "sql_yacc.cc"
     break;
 
   case 2203: /* revoke_command: grant_privileges ON PROCEDURE grant_ident FROM grant_list  */
@@ -31929,7 +33178,7 @@ yyreduce:
             lex->sql_command= SQLCOM_REVOKE;
             lex->type= TYPE_ENUM_PROCEDURE;
           }
-#line 31933 "sql_yacc.cc"
+#line 33182 "sql_yacc.cc"
     break;
 
   case 2204: /* revoke_command: ALL opt_privileges ',' GRANT OPTION FROM grant_list  */
@@ -31937,13 +33186,13 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_REVOKE_ALL;
           }
-#line 31941 "sql_yacc.cc"
+#line 33190 "sql_yacc.cc"
     break;
 
   case 2205: /* grant: GRANT clear_privileges grant_command  */
 #line 12667 "sql_yacc.yy"
           {}
-#line 31947 "sql_yacc.cc"
+#line 33196 "sql_yacc.cc"
     break;
 
   case 2206: /* grant_command: grant_privileges ON opt_table grant_ident TO_SYM grant_list require_clause grant_options  */
@@ -31953,7 +33202,7 @@ yyreduce:
             lex->sql_command= SQLCOM_GRANT;
             lex->type= 0;
           }
-#line 31957 "sql_yacc.cc"
+#line 33206 "sql_yacc.cc"
     break;
 
   case 2207: /* grant_command: grant_privileges ON FUNCTION_SYM grant_ident TO_SYM grant_list require_clause grant_options  */
@@ -31968,7 +33217,7 @@ yyreduce:
             lex->sql_command= SQLCOM_GRANT;
             lex->type= TYPE_ENUM_FUNCTION;
           }
-#line 31972 "sql_yacc.cc"
+#line 33221 "sql_yacc.cc"
     break;
 
   case 2208: /* grant_command: grant_privileges ON PROCEDURE grant_ident TO_SYM grant_list require_clause grant_options  */
@@ -31983,13 +33232,13 @@ yyreduce:
             lex->sql_command= SQLCOM_GRANT;
             lex->type= TYPE_ENUM_PROCEDURE;
           }
-#line 31987 "sql_yacc.cc"
+#line 33236 "sql_yacc.cc"
     break;
 
   case 2211: /* grant_privileges: object_privilege_list  */
 #line 12710 "sql_yacc.yy"
                                 {}
-#line 31993 "sql_yacc.cc"
+#line 33242 "sql_yacc.cc"
     break;
 
   case 2212: /* grant_privileges: ALL opt_privileges  */
@@ -31998,217 +33247,217 @@ yyreduce:
             Lex->all_privileges= 1; 
             Lex->grant= GLOBAL_ACLS;
           }
-#line 32002 "sql_yacc.cc"
+#line 33251 "sql_yacc.cc"
     break;
 
   case 2217: /* $@155: %empty  */
 #line 12730 "sql_yacc.yy"
           { Lex->which_columns = SELECT_ACL;}
-#line 32008 "sql_yacc.cc"
+#line 33257 "sql_yacc.cc"
     break;
 
   case 2218: /* object_privilege: SELECT_SYM $@155 opt_column_list  */
 #line 12731 "sql_yacc.yy"
                           {}
-#line 32014 "sql_yacc.cc"
+#line 33263 "sql_yacc.cc"
     break;
 
   case 2219: /* $@156: %empty  */
 #line 12733 "sql_yacc.yy"
           { Lex->which_columns = INSERT_ACL;}
-#line 32020 "sql_yacc.cc"
+#line 33269 "sql_yacc.cc"
     break;
 
   case 2220: /* object_privilege: INSERT $@156 opt_column_list  */
 #line 12734 "sql_yacc.yy"
                           {}
-#line 32026 "sql_yacc.cc"
+#line 33275 "sql_yacc.cc"
     break;
 
   case 2221: /* $@157: %empty  */
 #line 12736 "sql_yacc.yy"
           { Lex->which_columns = UPDATE_ACL; }
-#line 32032 "sql_yacc.cc"
+#line 33281 "sql_yacc.cc"
     break;
 
   case 2222: /* object_privilege: UPDATE_SYM $@157 opt_column_list  */
 #line 12737 "sql_yacc.yy"
                           {}
-#line 32038 "sql_yacc.cc"
+#line 33287 "sql_yacc.cc"
     break;
 
   case 2223: /* $@158: %empty  */
 #line 12739 "sql_yacc.yy"
           { Lex->which_columns = REFERENCES_ACL;}
-#line 32044 "sql_yacc.cc"
+#line 33293 "sql_yacc.cc"
     break;
 
   case 2224: /* object_privilege: REFERENCES $@158 opt_column_list  */
 #line 12740 "sql_yacc.yy"
                           {}
-#line 32050 "sql_yacc.cc"
+#line 33299 "sql_yacc.cc"
     break;
 
   case 2225: /* object_privilege: DELETE_SYM  */
 #line 12741 "sql_yacc.yy"
                                   { Lex->grant |= DELETE_ACL;}
-#line 32056 "sql_yacc.cc"
+#line 33305 "sql_yacc.cc"
     break;
 
   case 2226: /* object_privilege: USAGE  */
 #line 12742 "sql_yacc.yy"
                                   {}
-#line 32062 "sql_yacc.cc"
+#line 33311 "sql_yacc.cc"
     break;
 
   case 2227: /* object_privilege: INDEX_SYM  */
 #line 12743 "sql_yacc.yy"
                                   { Lex->grant |= INDEX_ACL;}
-#line 32068 "sql_yacc.cc"
+#line 33317 "sql_yacc.cc"
     break;
 
   case 2228: /* object_privilege: ALTER  */
 #line 12744 "sql_yacc.yy"
                                   { Lex->grant |= ALTER_ACL;}
-#line 32074 "sql_yacc.cc"
+#line 33323 "sql_yacc.cc"
     break;
 
   case 2229: /* object_privilege: CREATE  */
 #line 12745 "sql_yacc.yy"
                                   { Lex->grant |= CREATE_ACL;}
-#line 32080 "sql_yacc.cc"
+#line 33329 "sql_yacc.cc"
     break;
 
   case 2230: /* object_privilege: DROP  */
 #line 12746 "sql_yacc.yy"
                                   { Lex->grant |= DROP_ACL;}
-#line 32086 "sql_yacc.cc"
+#line 33335 "sql_yacc.cc"
     break;
 
   case 2231: /* object_privilege: EXECUTE_SYM  */
 #line 12747 "sql_yacc.yy"
                                   { Lex->grant |= EXECUTE_ACL;}
-#line 32092 "sql_yacc.cc"
+#line 33341 "sql_yacc.cc"
     break;
 
   case 2232: /* object_privilege: RELOAD  */
 #line 12748 "sql_yacc.yy"
                                   { Lex->grant |= RELOAD_ACL;}
-#line 32098 "sql_yacc.cc"
+#line 33347 "sql_yacc.cc"
     break;
 
   case 2233: /* object_privilege: SHUTDOWN  */
 #line 12749 "sql_yacc.yy"
                                   { Lex->grant |= SHUTDOWN_ACL;}
-#line 32104 "sql_yacc.cc"
+#line 33353 "sql_yacc.cc"
     break;
 
   case 2234: /* object_privilege: PROCESS  */
 #line 12750 "sql_yacc.yy"
                                   { Lex->grant |= PROCESS_ACL;}
-#line 32110 "sql_yacc.cc"
+#line 33359 "sql_yacc.cc"
     break;
 
   case 2235: /* object_privilege: FILE_SYM  */
 #line 12751 "sql_yacc.yy"
                                   { Lex->grant |= FILE_ACL;}
-#line 32116 "sql_yacc.cc"
+#line 33365 "sql_yacc.cc"
     break;
 
   case 2236: /* object_privilege: GRANT OPTION  */
 #line 12752 "sql_yacc.yy"
                                   { Lex->grant |= GRANT_ACL;}
-#line 32122 "sql_yacc.cc"
+#line 33371 "sql_yacc.cc"
     break;
 
   case 2237: /* object_privilege: SHOW DATABASES  */
 #line 12753 "sql_yacc.yy"
                                   { Lex->grant |= SHOW_DB_ACL;}
-#line 32128 "sql_yacc.cc"
+#line 33377 "sql_yacc.cc"
     break;
 
   case 2238: /* object_privilege: SUPER_SYM  */
 #line 12754 "sql_yacc.yy"
                                   { Lex->grant |= SUPER_ACL;}
-#line 32134 "sql_yacc.cc"
+#line 33383 "sql_yacc.cc"
     break;
 
   case 2239: /* object_privilege: CREATE TEMPORARY TABLES  */
 #line 12755 "sql_yacc.yy"
                                   { Lex->grant |= CREATE_TMP_ACL;}
-#line 32140 "sql_yacc.cc"
+#line 33389 "sql_yacc.cc"
     break;
 
   case 2240: /* object_privilege: LOCK_SYM TABLES  */
 #line 12756 "sql_yacc.yy"
                                   { Lex->grant |= LOCK_TABLES_ACL; }
-#line 32146 "sql_yacc.cc"
+#line 33395 "sql_yacc.cc"
     break;
 
   case 2241: /* object_privilege: REPLICATION SLAVE  */
 #line 12757 "sql_yacc.yy"
                                   { Lex->grant |= REPL_SLAVE_ACL; }
-#line 32152 "sql_yacc.cc"
+#line 33401 "sql_yacc.cc"
     break;
 
   case 2242: /* object_privilege: REPLICATION CLIENT_SYM  */
 #line 12758 "sql_yacc.yy"
                                   { Lex->grant |= REPL_CLIENT_ACL; }
-#line 32158 "sql_yacc.cc"
+#line 33407 "sql_yacc.cc"
     break;
 
   case 2243: /* object_privilege: CREATE VIEW_SYM  */
 #line 12759 "sql_yacc.yy"
                                   { Lex->grant |= CREATE_VIEW_ACL; }
-#line 32164 "sql_yacc.cc"
+#line 33413 "sql_yacc.cc"
     break;
 
   case 2244: /* object_privilege: SHOW VIEW_SYM  */
 #line 12760 "sql_yacc.yy"
                                   { Lex->grant |= SHOW_VIEW_ACL; }
-#line 32170 "sql_yacc.cc"
+#line 33419 "sql_yacc.cc"
     break;
 
   case 2245: /* object_privilege: CREATE ROUTINE_SYM  */
 #line 12761 "sql_yacc.yy"
                                   { Lex->grant |= CREATE_PROC_ACL; }
-#line 32176 "sql_yacc.cc"
+#line 33425 "sql_yacc.cc"
     break;
 
   case 2246: /* object_privilege: ALTER ROUTINE_SYM  */
 #line 12762 "sql_yacc.yy"
                                   { Lex->grant |= ALTER_PROC_ACL; }
-#line 32182 "sql_yacc.cc"
+#line 33431 "sql_yacc.cc"
     break;
 
   case 2247: /* object_privilege: CREATE USER  */
 #line 12763 "sql_yacc.yy"
                                   { Lex->grant |= CREATE_USER_ACL; }
-#line 32188 "sql_yacc.cc"
+#line 33437 "sql_yacc.cc"
     break;
 
   case 2248: /* object_privilege: EVENT_SYM  */
 #line 12764 "sql_yacc.yy"
                                   { Lex->grant |= EVENT_ACL;}
-#line 32194 "sql_yacc.cc"
+#line 33443 "sql_yacc.cc"
     break;
 
   case 2249: /* object_privilege: TRIGGER_SYM  */
 #line 12765 "sql_yacc.yy"
                                   { Lex->grant |= TRIGGER_ACL; }
-#line 32200 "sql_yacc.cc"
+#line 33449 "sql_yacc.cc"
     break;
 
   case 2250: /* opt_and: %empty  */
 #line 12769 "sql_yacc.yy"
                       {}
-#line 32206 "sql_yacc.cc"
+#line 33455 "sql_yacc.cc"
     break;
 
   case 2251: /* opt_and: AND_SYM  */
 #line 12770 "sql_yacc.yy"
                   {}
-#line 32212 "sql_yacc.cc"
+#line 33461 "sql_yacc.cc"
     break;
 
   case 2254: /* require_list_element: SUBJECT_SYM TEXT_STRING  */
@@ -32222,7 +33471,7 @@ yyreduce:
             }
             lex->x509_subject=(yyvsp[0].lex_str).str;
           }
-#line 32226 "sql_yacc.cc"
+#line 33475 "sql_yacc.cc"
     break;
 
   case 2255: /* require_list_element: ISSUER_SYM TEXT_STRING  */
@@ -32236,7 +33485,7 @@ yyreduce:
             }
             lex->x509_issuer=(yyvsp[0].lex_str).str;
           }
-#line 32240 "sql_yacc.cc"
+#line 33489 "sql_yacc.cc"
     break;
 
   case 2256: /* require_list_element: CIPHER_SYM TEXT_STRING  */
@@ -32250,7 +33499,7 @@ yyreduce:
             }
             lex->ssl_cipher=(yyvsp[0].lex_str).str;
           }
-#line 32254 "sql_yacc.cc"
+#line 33503 "sql_yacc.cc"
     break;
 
   case 2257: /* grant_ident: '*'  */
@@ -32269,7 +33518,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 32273 "sql_yacc.cc"
+#line 33522 "sql_yacc.cc"
     break;
 
   case 2258: /* grant_ident: ident '.' '*'  */
@@ -32286,7 +33535,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 32290 "sql_yacc.cc"
+#line 33539 "sql_yacc.cc"
     break;
 
   case 2259: /* grant_ident: '*' '.' '*'  */
@@ -32303,7 +33552,7 @@ yyreduce:
               MYSQL_YYABORT;
             }
           }
-#line 32307 "sql_yacc.cc"
+#line 33556 "sql_yacc.cc"
     break;
 
   case 2260: /* grant_ident: table_ident  */
@@ -32316,7 +33565,7 @@ yyreduce:
             if (lex->grant == GLOBAL_ACLS)
               lex->grant =  TABLE_ACLS & ~GRANT_ACL;
           }
-#line 32320 "sql_yacc.cc"
+#line 33569 "sql_yacc.cc"
     break;
 
   case 2261: /* user_list: user  */
@@ -32325,7 +33574,7 @@ yyreduce:
             if (Lex->users_list.push_back((yyvsp[0].lex_user)))
               MYSQL_YYABORT;
           }
-#line 32329 "sql_yacc.cc"
+#line 33578 "sql_yacc.cc"
     break;
 
   case 2262: /* user_list: user_list ',' user  */
@@ -32334,7 +33583,7 @@ yyreduce:
             if (Lex->users_list.push_back((yyvsp[0].lex_user)))
               MYSQL_YYABORT;
           }
-#line 32338 "sql_yacc.cc"
+#line 33587 "sql_yacc.cc"
     break;
 
   case 2263: /* grant_list: grant_user  */
@@ -32343,7 +33592,7 @@ yyreduce:
             if (Lex->users_list.push_back((yyvsp[0].lex_user)))
               MYSQL_YYABORT;
           }
-#line 32347 "sql_yacc.cc"
+#line 33596 "sql_yacc.cc"
     break;
 
   case 2264: /* grant_list: grant_list ',' grant_user  */
@@ -32352,7 +33601,7 @@ yyreduce:
             if (Lex->users_list.push_back((yyvsp[0].lex_user)))
               MYSQL_YYABORT;
           }
-#line 32356 "sql_yacc.cc"
+#line 33605 "sql_yacc.cc"
     break;
 
   case 2265: /* grant_user: user IDENTIFIED_SYM BY TEXT_STRING  */
@@ -32383,19 +33632,19 @@ yyreduce:
               }
             }
           }
-#line 32387 "sql_yacc.cc"
+#line 33636 "sql_yacc.cc"
     break;
 
   case 2266: /* grant_user: user IDENTIFIED_SYM BY PASSWORD TEXT_STRING  */
 #line 12919 "sql_yacc.yy"
           { (yyval.lex_user)= (yyvsp[-4].lex_user); (yyvsp[-4].lex_user)->password= (yyvsp[0].lex_str); }
-#line 32393 "sql_yacc.cc"
+#line 33642 "sql_yacc.cc"
     break;
 
   case 2267: /* grant_user: user  */
 #line 12921 "sql_yacc.yy"
           { (yyval.lex_user)= (yyvsp[0].lex_user); (yyvsp[0].lex_user)->password= null_lex_str; }
-#line 32399 "sql_yacc.cc"
+#line 33648 "sql_yacc.cc"
     break;
 
   case 2268: /* opt_column_list: %empty  */
@@ -32404,7 +33653,7 @@ yyreduce:
             LEX *lex=Lex;
             lex->grant |= lex->which_columns;
           }
-#line 32408 "sql_yacc.cc"
+#line 33657 "sql_yacc.cc"
     break;
 
   case 2272: /* column_list_id: ident  */
@@ -32433,7 +33682,7 @@ yyreduce:
               lex->columns.push_back(col);
             }
           }
-#line 32437 "sql_yacc.cc"
+#line 33686 "sql_yacc.cc"
     break;
 
   case 2274: /* require_clause: REQUIRE_SYM require_list  */
@@ -32441,7 +33690,7 @@ yyreduce:
           {
             Lex->ssl_type=SSL_TYPE_SPECIFIED;
           }
-#line 32445 "sql_yacc.cc"
+#line 33694 "sql_yacc.cc"
     break;
 
   case 2275: /* require_clause: REQUIRE_SYM SSL_SYM  */
@@ -32449,7 +33698,7 @@ yyreduce:
           {
             Lex->ssl_type=SSL_TYPE_ANY;
           }
-#line 32453 "sql_yacc.cc"
+#line 33702 "sql_yacc.cc"
     break;
 
   case 2276: /* require_clause: REQUIRE_SYM X509_SYM  */
@@ -32457,7 +33706,7 @@ yyreduce:
           {
             Lex->ssl_type=SSL_TYPE_X509;
           }
-#line 32461 "sql_yacc.cc"
+#line 33710 "sql_yacc.cc"
     break;
 
   case 2277: /* require_clause: REQUIRE_SYM NONE_SYM  */
@@ -32465,31 +33714,31 @@ yyreduce:
           {
             Lex->ssl_type=SSL_TYPE_NONE;
           }
-#line 32469 "sql_yacc.cc"
+#line 33718 "sql_yacc.cc"
     break;
 
   case 2278: /* grant_options: %empty  */
 #line 12987 "sql_yacc.yy"
                       {}
-#line 32475 "sql_yacc.cc"
+#line 33724 "sql_yacc.cc"
     break;
 
   case 2280: /* grant_option_list: grant_option_list grant_option  */
 #line 12992 "sql_yacc.yy"
                                          {}
-#line 32481 "sql_yacc.cc"
+#line 33730 "sql_yacc.cc"
     break;
 
   case 2281: /* grant_option_list: grant_option  */
 #line 12993 "sql_yacc.yy"
                        {}
-#line 32487 "sql_yacc.cc"
+#line 33736 "sql_yacc.cc"
     break;
 
   case 2282: /* grant_option: GRANT OPTION  */
 #line 12997 "sql_yacc.yy"
                        { Lex->grant |= GRANT_ACL;}
-#line 32493 "sql_yacc.cc"
+#line 33742 "sql_yacc.cc"
     break;
 
   case 2283: /* grant_option: MAX_QUERIES_PER_HOUR ulong_num  */
@@ -32499,7 +33748,7 @@ yyreduce:
             lex->mqh.questions=(yyvsp[0].ulong_num);
             lex->mqh.specified_limits|= USER_RESOURCES::QUERIES_PER_HOUR;
           }
-#line 32503 "sql_yacc.cc"
+#line 33752 "sql_yacc.cc"
     break;
 
   case 2284: /* grant_option: MAX_UPDATES_PER_HOUR ulong_num  */
@@ -32509,7 +33758,7 @@ yyreduce:
             lex->mqh.updates=(yyvsp[0].ulong_num);
             lex->mqh.specified_limits|= USER_RESOURCES::UPDATES_PER_HOUR;
           }
-#line 32513 "sql_yacc.cc"
+#line 33762 "sql_yacc.cc"
     break;
 
   case 2285: /* grant_option: MAX_CONNECTIONS_PER_HOUR ulong_num  */
@@ -32519,7 +33768,7 @@ yyreduce:
             lex->mqh.conn_per_hour= (yyvsp[0].ulong_num);
             lex->mqh.specified_limits|= USER_RESOURCES::CONNECTIONS_PER_HOUR;
           }
-#line 32523 "sql_yacc.cc"
+#line 33772 "sql_yacc.cc"
     break;
 
   case 2286: /* grant_option: MAX_USER_CONNECTIONS_SYM ulong_num  */
@@ -32529,7 +33778,7 @@ yyreduce:
             lex->mqh.user_conn= (yyvsp[0].ulong_num);
             lex->mqh.specified_limits|= USER_RESOURCES::USER_CONNECTIONS;
           }
-#line 32533 "sql_yacc.cc"
+#line 33782 "sql_yacc.cc"
     break;
 
   case 2287: /* grant_option: MAX_CONCURRENT_QUERIES ulong_num  */
@@ -32539,7 +33788,7 @@ yyreduce:
             lex->mqh.max_concurrent_queries= (yyvsp[0].ulong_num);
             lex->mqh.specified_limits|= USER_RESOURCES::USER_CONCURRENT_QUERIES;
           }
-#line 32543 "sql_yacc.cc"
+#line 33792 "sql_yacc.cc"
     break;
 
   case 2288: /* grant_option: MAX_CONCURRENT_TRANSACTIONS ulong_num  */
@@ -32549,7 +33798,7 @@ yyreduce:
             lex->mqh.max_concurrent_transactions= (yyvsp[0].ulong_num);
             lex->mqh.specified_limits|= USER_RESOURCES::USER_CONCURRENT_TRANSACTIONS;
           }
-#line 32553 "sql_yacc.cc"
+#line 33802 "sql_yacc.cc"
     break;
 
   case 2289: /* $@159: %empty  */
@@ -32559,73 +33808,73 @@ yyreduce:
             lex->sql_command = SQLCOM_BEGIN;
             lex->start_transaction_opt= 0;
           }
-#line 32563 "sql_yacc.cc"
+#line 33812 "sql_yacc.cc"
     break;
 
   case 2290: /* begin: BEGIN_SYM $@159 opt_work  */
 #line 13043 "sql_yacc.yy"
                    {}
-#line 32569 "sql_yacc.cc"
+#line 33818 "sql_yacc.cc"
     break;
 
   case 2291: /* opt_work: %empty  */
 #line 13047 "sql_yacc.yy"
                       {}
-#line 32575 "sql_yacc.cc"
+#line 33824 "sql_yacc.cc"
     break;
 
   case 2292: /* opt_work: WORK_SYM  */
 #line 13048 "sql_yacc.yy"
                     {}
-#line 32581 "sql_yacc.cc"
+#line 33830 "sql_yacc.cc"
     break;
 
   case 2293: /* opt_chain: %empty  */
 #line 13053 "sql_yacc.yy"
           { (yyval.num)= (YYTHD->variables.completion_type == 1); }
-#line 32587 "sql_yacc.cc"
+#line 33836 "sql_yacc.cc"
     break;
 
   case 2294: /* opt_chain: AND_SYM NO_SYM CHAIN_SYM  */
 #line 13054 "sql_yacc.yy"
                                    { (yyval.num)=0; }
-#line 32593 "sql_yacc.cc"
+#line 33842 "sql_yacc.cc"
     break;
 
   case 2295: /* opt_chain: AND_SYM CHAIN_SYM  */
 #line 13055 "sql_yacc.yy"
                                    { (yyval.num)=1; }
-#line 32599 "sql_yacc.cc"
+#line 33848 "sql_yacc.cc"
     break;
 
   case 2296: /* opt_release: %empty  */
 #line 13060 "sql_yacc.yy"
           { (yyval.num)= (YYTHD->variables.completion_type == 2); }
-#line 32605 "sql_yacc.cc"
+#line 33854 "sql_yacc.cc"
     break;
 
   case 2297: /* opt_release: RELEASE_SYM  */
 #line 13061 "sql_yacc.yy"
                              { (yyval.num)=1; }
-#line 32611 "sql_yacc.cc"
+#line 33860 "sql_yacc.cc"
     break;
 
   case 2298: /* opt_release: NO_SYM RELEASE_SYM  */
 #line 13062 "sql_yacc.yy"
                              { (yyval.num)=0; }
-#line 32617 "sql_yacc.cc"
+#line 33866 "sql_yacc.cc"
     break;
 
   case 2299: /* opt_savepoint: %empty  */
 #line 13066 "sql_yacc.yy"
                       {}
-#line 32623 "sql_yacc.cc"
+#line 33872 "sql_yacc.cc"
     break;
 
   case 2300: /* opt_savepoint: SAVEPOINT_SYM  */
 #line 13067 "sql_yacc.yy"
                         {}
-#line 32629 "sql_yacc.cc"
+#line 33878 "sql_yacc.cc"
     break;
 
   case 2301: /* commit: COMMIT_SYM opt_work opt_chain opt_release opt_async_commit  */
@@ -32636,7 +33885,7 @@ yyreduce:
             lex->tx_chain= (yyvsp[-2].num); 
             lex->tx_release= (yyvsp[-1].num);
           }
-#line 32640 "sql_yacc.cc"
+#line 33889 "sql_yacc.cc"
     break;
 
   case 2302: /* rollback: ROLLBACK_SYM opt_work opt_chain opt_release  */
@@ -32647,7 +33896,7 @@ yyreduce:
             lex->tx_chain= (yyvsp[-1].num); 
             lex->tx_release= (yyvsp[0].num);
           }
-#line 32651 "sql_yacc.cc"
+#line 33900 "sql_yacc.cc"
     break;
 
   case 2303: /* rollback: ROLLBACK_SYM opt_work TO_SYM opt_savepoint ident  */
@@ -32657,7 +33906,7 @@ yyreduce:
             lex->sql_command= SQLCOM_ROLLBACK_TO_SAVEPOINT;
             lex->ident= (yyvsp[0].lex_str);
           }
-#line 32661 "sql_yacc.cc"
+#line 33910 "sql_yacc.cc"
     break;
 
   case 2304: /* savepoint: SAVEPOINT_SYM ident  */
@@ -32667,7 +33916,7 @@ yyreduce:
             lex->sql_command= SQLCOM_SAVEPOINT;
             lex->ident= (yyvsp[0].lex_str);
           }
-#line 32671 "sql_yacc.cc"
+#line 33920 "sql_yacc.cc"
     break;
 
   case 2305: /* release: RELEASE_SYM SAVEPOINT_SYM ident  */
@@ -32677,13 +33926,13 @@ yyreduce:
             lex->sql_command= SQLCOM_RELEASE_SAVEPOINT;
             lex->ident= (yyvsp[0].lex_str);
           }
-#line 32681 "sql_yacc.cc"
+#line 33930 "sql_yacc.cc"
     break;
 
   case 2306: /* union_clause: %empty  */
 #line 13121 "sql_yacc.yy"
                       {}
-#line 32687 "sql_yacc.cc"
+#line 33936 "sql_yacc.cc"
     break;
 
   case 2308: /* $@160: %empty  */
@@ -32717,7 +33966,7 @@ yyreduce:
               lex->current_select->master_unit()->union_distinct=
                 lex->current_select;
           }
-#line 32721 "sql_yacc.cc"
+#line 33970 "sql_yacc.cc"
     break;
 
   case 2309: /* union_list: UNION_SYM union_option $@160 select_init  */
@@ -32729,25 +33978,25 @@ yyreduce:
             */
             Lex->pop_context();
           }
-#line 32733 "sql_yacc.cc"
+#line 33982 "sql_yacc.cc"
     break;
 
   case 2310: /* union_opt: %empty  */
 #line 13167 "sql_yacc.yy"
                       { (yyval.num)= 0; }
-#line 32739 "sql_yacc.cc"
+#line 33988 "sql_yacc.cc"
     break;
 
   case 2311: /* union_opt: union_list  */
 #line 13168 "sql_yacc.yy"
                      { (yyval.num)= 1; }
-#line 32745 "sql_yacc.cc"
+#line 33994 "sql_yacc.cc"
     break;
 
   case 2312: /* union_opt: union_order_or_limit  */
 #line 13169 "sql_yacc.yy"
                                { (yyval.num)= 1; }
-#line 32751 "sql_yacc.cc"
+#line 34000 "sql_yacc.cc"
     break;
 
   case 2313: /* $@161: %empty  */
@@ -32767,7 +34016,7 @@ yyreduce:
             }
             thd->where= "global ORDER clause";
           }
-#line 32771 "sql_yacc.cc"
+#line 34020 "sql_yacc.cc"
     break;
 
   case 2314: /* union_order_or_limit: $@161 order_or_limit  */
@@ -32777,25 +34026,25 @@ yyreduce:
             thd->lex->current_select->no_table_names_allowed= 0;
             thd->where= "";
           }
-#line 32781 "sql_yacc.cc"
+#line 34030 "sql_yacc.cc"
     break;
 
   case 2317: /* union_option: %empty  */
 #line 13202 "sql_yacc.yy"
                       { (yyval.num)=1; }
-#line 32787 "sql_yacc.cc"
+#line 34036 "sql_yacc.cc"
     break;
 
   case 2318: /* union_option: DISTINCT  */
 #line 13203 "sql_yacc.yy"
                     { (yyval.num)=1; }
-#line 32793 "sql_yacc.cc"
+#line 34042 "sql_yacc.cc"
     break;
 
   case 2319: /* union_option: ALL  */
 #line 13204 "sql_yacc.yy"
                     { (yyval.num)=0; }
-#line 32799 "sql_yacc.cc"
+#line 34048 "sql_yacc.cc"
     break;
 
   case 2320: /* take_first_select: %empty  */
@@ -32803,7 +34052,7 @@ yyreduce:
         {
           (yyval.select_lex)= Lex->current_select->master_unit()->first_select();
         }
-#line 32807 "sql_yacc.cc"
+#line 34056 "sql_yacc.cc"
     break;
 
   case 2321: /* subselect: SELECT_SYM subselect_start select_init2 take_first_select subselect_end  */
@@ -32811,7 +34060,7 @@ yyreduce:
         {
           (yyval.select_lex)= (yyvsp[-1].select_lex);
         }
-#line 32815 "sql_yacc.cc"
+#line 34064 "sql_yacc.cc"
     break;
 
   case 2322: /* subselect: '(' subselect_start select_paren take_first_select subselect_end ')'  */
@@ -32819,7 +34068,7 @@ yyreduce:
         {
           (yyval.select_lex)= (yyvsp[-2].select_lex);
         }
-#line 32823 "sql_yacc.cc"
+#line 34072 "sql_yacc.cc"
     break;
 
   case 2323: /* subselect_start: %empty  */
@@ -32842,7 +34091,7 @@ yyreduce:
             if (mysql_new_select(Lex, 1))
               MYSQL_YYABORT;
           }
-#line 32846 "sql_yacc.cc"
+#line 34095 "sql_yacc.cc"
     break;
 
   case 2324: /* subselect_end: %empty  */
@@ -32873,25 +34122,25 @@ yyreduce:
             lex->current_select->select_n_where_fields+=
             child->select_n_where_fields;
           }
-#line 32877 "sql_yacc.cc"
+#line 34126 "sql_yacc.cc"
     break;
 
   case 2325: /* view_or_trigger_or_sp_or_event: definer definer_tail  */
 #line 13282 "sql_yacc.yy"
           {}
-#line 32883 "sql_yacc.cc"
+#line 34132 "sql_yacc.cc"
     break;
 
   case 2326: /* view_or_trigger_or_sp_or_event: no_definer no_definer_tail  */
 #line 13284 "sql_yacc.yy"
           {}
-#line 32889 "sql_yacc.cc"
+#line 34138 "sql_yacc.cc"
     break;
 
   case 2327: /* view_or_trigger_or_sp_or_event: view_replace_or_algorithm definer_opt view_tail  */
 #line 13286 "sql_yacc.yy"
           {}
-#line 32895 "sql_yacc.cc"
+#line 34144 "sql_yacc.cc"
     break;
 
   case 2341: /* no_definer: %empty  */
@@ -32906,7 +34155,7 @@ yyreduce:
             */
             YYTHD->lex->definer= 0;
           }
-#line 32910 "sql_yacc.cc"
+#line 34159 "sql_yacc.cc"
     break;
 
   case 2342: /* definer: DEFINER_SYM EQ user  */
@@ -32914,67 +34163,67 @@ yyreduce:
           {
             YYTHD->lex->definer= get_current_user(YYTHD, (yyvsp[0].lex_user));
           }
-#line 32918 "sql_yacc.cc"
+#line 34167 "sql_yacc.cc"
     break;
 
   case 2343: /* view_replace_or_algorithm: view_replace  */
 #line 13346 "sql_yacc.yy"
           {}
-#line 32924 "sql_yacc.cc"
+#line 34173 "sql_yacc.cc"
     break;
 
   case 2344: /* view_replace_or_algorithm: view_replace view_algorithm  */
 #line 13348 "sql_yacc.yy"
           {}
-#line 32930 "sql_yacc.cc"
+#line 34179 "sql_yacc.cc"
     break;
 
   case 2345: /* view_replace_or_algorithm: view_algorithm  */
 #line 13350 "sql_yacc.yy"
           {}
-#line 32936 "sql_yacc.cc"
+#line 34185 "sql_yacc.cc"
     break;
 
   case 2346: /* view_replace: OR_SYM REPLACE  */
 #line 13355 "sql_yacc.yy"
           { Lex->create_view_mode= VIEW_CREATE_OR_REPLACE; }
-#line 32942 "sql_yacc.cc"
+#line 34191 "sql_yacc.cc"
     break;
 
   case 2347: /* view_algorithm: ALGORITHM_SYM EQ UNDEFINED_SYM  */
 #line 13360 "sql_yacc.yy"
           { Lex->create_view_algorithm= VIEW_ALGORITHM_UNDEFINED; }
-#line 32948 "sql_yacc.cc"
+#line 34197 "sql_yacc.cc"
     break;
 
   case 2348: /* view_algorithm: ALGORITHM_SYM EQ MERGE_SYM  */
 #line 13362 "sql_yacc.yy"
           { Lex->create_view_algorithm= VIEW_ALGORITHM_MERGE; }
-#line 32954 "sql_yacc.cc"
+#line 34203 "sql_yacc.cc"
     break;
 
   case 2349: /* view_algorithm: ALGORITHM_SYM EQ TEMPTABLE_SYM  */
 #line 13364 "sql_yacc.yy"
           { Lex->create_view_algorithm= VIEW_ALGORITHM_TMPTABLE; }
-#line 32960 "sql_yacc.cc"
+#line 34209 "sql_yacc.cc"
     break;
 
   case 2350: /* view_suid: %empty  */
 #line 13369 "sql_yacc.yy"
           { Lex->create_view_suid= VIEW_SUID_DEFAULT; }
-#line 32966 "sql_yacc.cc"
+#line 34215 "sql_yacc.cc"
     break;
 
   case 2351: /* view_suid: SQL_SYM SECURITY_SYM DEFINER_SYM  */
 #line 13371 "sql_yacc.yy"
           { Lex->create_view_suid= VIEW_SUID_DEFINER; }
-#line 32972 "sql_yacc.cc"
+#line 34221 "sql_yacc.cc"
     break;
 
   case 2352: /* view_suid: SQL_SYM SECURITY_SYM INVOKER_SYM  */
 #line 13373 "sql_yacc.yy"
           { Lex->create_view_suid= VIEW_SUID_INVOKER; }
-#line 32978 "sql_yacc.cc"
+#line 34227 "sql_yacc.cc"
     break;
 
   case 2353: /* $@162: %empty  */
@@ -32987,13 +34236,13 @@ yyreduce:
             if (!lex->select_lex.add_table_to_list(thd, (yyvsp[0].table), NULL, TL_OPTION_UPDATING))
               MYSQL_YYABORT;
           }
-#line 32991 "sql_yacc.cc"
+#line 34240 "sql_yacc.cc"
     break;
 
   case 2355: /* view_list_opt: %empty  */
 #line 13391 "sql_yacc.yy"
           {}
-#line 32997 "sql_yacc.cc"
+#line 34246 "sql_yacc.cc"
     break;
 
   case 2357: /* view_list: ident  */
@@ -33002,7 +34251,7 @@ yyreduce:
               Lex->view_list.push_back((LEX_STRING*)
               sql_memdup(&(yyvsp[0].lex_str), sizeof(LEX_STRING)));
             }
-#line 33006 "sql_yacc.cc"
+#line 34255 "sql_yacc.cc"
     break;
 
   case 2358: /* view_list: view_list ',' ident  */
@@ -33011,7 +34260,7 @@ yyreduce:
               Lex->view_list.push_back((LEX_STRING*)
               sql_memdup(&(yyvsp[0].lex_str), sizeof(LEX_STRING)));
             }
-#line 33015 "sql_yacc.cc"
+#line 34264 "sql_yacc.cc"
     break;
 
   case 2359: /* $@163: %empty  */
@@ -33024,7 +34273,7 @@ yyreduce:
             lex->parsing_options.allows_derived= FALSE;
             lex->create_view_select.str= (char *) YYLIP->get_cpp_ptr();
           }
-#line 33028 "sql_yacc.cc"
+#line 34277 "sql_yacc.cc"
     break;
 
   case 2360: /* view_select: $@163 view_select_aux view_check_option  */
@@ -33042,31 +34291,31 @@ yyreduce:
             lex->parsing_options.allows_select_procedure= TRUE;
             lex->parsing_options.allows_derived= TRUE;
           }
-#line 33046 "sql_yacc.cc"
+#line 34295 "sql_yacc.cc"
     break;
 
   case 2363: /* view_check_option: %empty  */
 #line 13440 "sql_yacc.yy"
           { Lex->create_view_check= VIEW_CHECK_NONE; }
-#line 33052 "sql_yacc.cc"
+#line 34301 "sql_yacc.cc"
     break;
 
   case 2364: /* view_check_option: WITH CHECK_SYM OPTION  */
 #line 13442 "sql_yacc.yy"
           { Lex->create_view_check= VIEW_CHECK_CASCADED; }
-#line 33058 "sql_yacc.cc"
+#line 34307 "sql_yacc.cc"
     break;
 
   case 2365: /* view_check_option: WITH CASCADED CHECK_SYM OPTION  */
 #line 13444 "sql_yacc.yy"
           { Lex->create_view_check= VIEW_CHECK_CASCADED; }
-#line 33064 "sql_yacc.cc"
+#line 34313 "sql_yacc.cc"
     break;
 
   case 2366: /* view_check_option: WITH LOCAL_SYM CHECK_SYM OPTION  */
 #line 13446 "sql_yacc.yy"
           { Lex->create_view_check= VIEW_CHECK_LOCAL; }
-#line 33070 "sql_yacc.cc"
+#line 34319 "sql_yacc.cc"
     break;
 
   case 2367: /* $@164: %empty  */
@@ -33074,7 +34323,7 @@ yyreduce:
           { /* $8 */
             Lex->raw_trg_on_table_name_begin= YYLIP->get_tok_start();
           }
-#line 33078 "sql_yacc.cc"
+#line 34327 "sql_yacc.cc"
     break;
 
   case 2368: /* $@165: %empty  */
@@ -33082,7 +34331,7 @@ yyreduce:
           { /* $12 */
             Lex->raw_trg_on_table_name_end= YYLIP->get_tok_start();
           }
-#line 33086 "sql_yacc.cc"
+#line 34335 "sql_yacc.cc"
     break;
 
   case 2369: /* $@166: %empty  */
@@ -33116,7 +34365,7 @@ yyreduce:
             lex->sphead->m_chistics= &lex->sp_chistics;
             lex->sphead->set_body_start(thd, lip->get_cpp_ptr());
           }
-#line 33120 "sql_yacc.cc"
+#line 34369 "sql_yacc.cc"
     break;
 
   case 2370: /* trigger_tail: TRIGGER_SYM remember_name sp_name trg_action_time trg_event ON remember_name $@164 table_ident FOR_SYM remember_name $@165 EACH_SYM ROW_SYM $@166 sp_proc_stmt  */
@@ -33143,7 +34392,7 @@ yyreduce:
                                                    TL_IGNORE))
               MYSQL_YYABORT;
           }
-#line 33147 "sql_yacc.cc"
+#line 34396 "sql_yacc.cc"
     break;
 
   case 2371: /* udf_tail: AGGREGATE_SYM remember_name FUNCTION_SYM ident RETURNS_SYM udf_type SONAME_SYM TEXT_STRING_sys  */
@@ -33164,7 +34413,7 @@ yyreduce:
             lex->udf.returns=(Item_result) (yyvsp[-2].num);
             lex->udf.dl=(yyvsp[0].lex_str).str;
           }
-#line 33168 "sql_yacc.cc"
+#line 34417 "sql_yacc.cc"
     break;
 
   case 2372: /* udf_tail: remember_name FUNCTION_SYM ident RETURNS_SYM udf_type SONAME_SYM TEXT_STRING_sys  */
@@ -33185,7 +34434,7 @@ yyreduce:
             lex->udf.returns=(Item_result) (yyvsp[-2].num);
             lex->udf.dl=(yyvsp[0].lex_str).str;
           }
-#line 33189 "sql_yacc.cc"
+#line 34438 "sql_yacc.cc"
     break;
 
   case 2373: /* $@167: %empty  */
@@ -33220,7 +34469,7 @@ yyreduce:
             tmp_param_begin++;
             lex->sphead->m_param_begin= tmp_param_begin;
           }
-#line 33224 "sql_yacc.cc"
+#line 34473 "sql_yacc.cc"
     break;
 
   case 2374: /* $@168: %empty  */
@@ -33228,7 +34477,7 @@ yyreduce:
           { /* $8 */
             Lex->sphead->m_param_end= YYLIP->get_cpp_tok_start();
           }
-#line 33232 "sql_yacc.cc"
+#line 34481 "sql_yacc.cc"
     break;
 
   case 2375: /* $@169: %empty  */
@@ -33240,7 +34489,7 @@ yyreduce:
             lex->interval_list.empty();
             lex->type= 0;
           }
-#line 33244 "sql_yacc.cc"
+#line 34493 "sql_yacc.cc"
     break;
 
   case 2376: /* $@170: %empty  */
@@ -33267,7 +34516,7 @@ yyreduce:
 
             bzero((char *)&lex->sp_chistics, sizeof(st_sp_chistics));
           }
-#line 33271 "sql_yacc.cc"
+#line 34520 "sql_yacc.cc"
     break;
 
   case 2377: /* $@171: %empty  */
@@ -33280,7 +34529,7 @@ yyreduce:
             lex->sphead->m_chistics= &lex->sp_chistics;
             lex->sphead->set_body_start(thd, lip->get_cpp_tok_start());
           }
-#line 33284 "sql_yacc.cc"
+#line 34533 "sql_yacc.cc"
     break;
 
   case 2378: /* sf_tail: remember_name FUNCTION_SYM sp_name '(' $@167 sp_fdparam_list ')' $@168 RETURNS_SYM $@169 type $@170 sp_c_chistics $@171 sp_proc_stmt  */
@@ -33337,7 +34586,7 @@ yyreduce:
             }
             sp->restore_thd_mem_root(thd);
           }
-#line 33341 "sql_yacc.cc"
+#line 34590 "sql_yacc.cc"
     break;
 
   case 2379: /* $@172: %empty  */
@@ -33365,7 +34614,7 @@ yyreduce:
 
             lex->sphead= sp;
           }
-#line 33369 "sql_yacc.cc"
+#line 34618 "sql_yacc.cc"
     break;
 
   case 2380: /* $@173: %empty  */
@@ -33377,7 +34626,7 @@ yyreduce:
             tmp_param_begin++;
             Lex->sphead->m_param_begin= tmp_param_begin;
           }
-#line 33381 "sql_yacc.cc"
+#line 34630 "sql_yacc.cc"
     break;
 
   case 2381: /* $@174: %empty  */
@@ -33389,7 +34638,7 @@ yyreduce:
             lex->sphead->m_param_end= YYLIP->get_cpp_tok_start();
             bzero((char *)&lex->sp_chistics, sizeof(st_sp_chistics));
           }
-#line 33393 "sql_yacc.cc"
+#line 34642 "sql_yacc.cc"
     break;
 
   case 2382: /* $@175: %empty  */
@@ -33401,7 +34650,7 @@ yyreduce:
             lex->sphead->m_chistics= &lex->sp_chistics;
             lex->sphead->set_body_start(thd, YYLIP->get_cpp_tok_start());
           }
-#line 33405 "sql_yacc.cc"
+#line 34654 "sql_yacc.cc"
     break;
 
   case 2383: /* sp_tail: PROCEDURE remember_name sp_name $@172 '(' $@173 sp_pdparam_list ')' $@174 sp_c_chistics $@175 sp_proc_stmt  */
@@ -33414,7 +34663,7 @@ yyreduce:
             lex->sql_command= SQLCOM_CREATE_PROCEDURE;
             sp->restore_thd_mem_root(YYTHD);
           }
-#line 33418 "sql_yacc.cc"
+#line 34667 "sql_yacc.cc"
     break;
 
   case 2384: /* xa: XA_SYM begin_or_start xid opt_join_or_resume  */
@@ -33422,7 +34671,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_XA_START;
           }
-#line 33426 "sql_yacc.cc"
+#line 34675 "sql_yacc.cc"
     break;
 
   case 2385: /* xa: XA_SYM END xid opt_suspend  */
@@ -33430,7 +34679,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_XA_END;
           }
-#line 33434 "sql_yacc.cc"
+#line 34683 "sql_yacc.cc"
     break;
 
   case 2386: /* xa: XA_SYM PREPARE_SYM xid  */
@@ -33438,7 +34687,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_XA_PREPARE;
           }
-#line 33442 "sql_yacc.cc"
+#line 34691 "sql_yacc.cc"
     break;
 
   case 2387: /* xa: XA_SYM COMMIT_SYM xid opt_one_phase  */
@@ -33446,7 +34695,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_XA_COMMIT;
           }
-#line 33450 "sql_yacc.cc"
+#line 34699 "sql_yacc.cc"
     break;
 
   case 2388: /* xa: XA_SYM ROLLBACK_SYM xid  */
@@ -33454,7 +34703,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_XA_ROLLBACK;
           }
-#line 33458 "sql_yacc.cc"
+#line 34707 "sql_yacc.cc"
     break;
 
   case 2389: /* xa: XA_SYM RECOVER_SYM  */
@@ -33462,7 +34711,7 @@ yyreduce:
           {
             Lex->sql_command = SQLCOM_XA_RECOVER;
           }
-#line 33466 "sql_yacc.cc"
+#line 34715 "sql_yacc.cc"
     break;
 
   case 2390: /* xid: text_string  */
@@ -33473,7 +34722,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->xid->set(1L, (yyvsp[0].string)->ptr(), (yyvsp[0].string)->length(), 0, 0);
           }
-#line 33477 "sql_yacc.cc"
+#line 34726 "sql_yacc.cc"
     break;
 
   case 2391: /* xid: text_string ',' text_string  */
@@ -33484,7 +34733,7 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->xid->set(1L, (yyvsp[-2].string)->ptr(), (yyvsp[-2].string)->length(), (yyvsp[0].string)->ptr(), (yyvsp[0].string)->length());
           }
-#line 33488 "sql_yacc.cc"
+#line 34737 "sql_yacc.cc"
     break;
 
   case 2392: /* xid: text_string ',' text_string ',' ulong_num  */
@@ -33495,73 +34744,73 @@ yyreduce:
               MYSQL_YYABORT;
             Lex->xid->set((yyvsp[0].ulong_num), (yyvsp[-4].string)->ptr(), (yyvsp[-4].string)->length(), (yyvsp[-2].string)->ptr(), (yyvsp[-2].string)->length());
           }
-#line 33499 "sql_yacc.cc"
+#line 34748 "sql_yacc.cc"
     break;
 
   case 2393: /* begin_or_start: BEGIN_SYM  */
 #line 13823 "sql_yacc.yy"
                     {}
-#line 33505 "sql_yacc.cc"
+#line 34754 "sql_yacc.cc"
     break;
 
   case 2394: /* begin_or_start: START_SYM  */
 #line 13824 "sql_yacc.yy"
                     {}
-#line 33511 "sql_yacc.cc"
+#line 34760 "sql_yacc.cc"
     break;
 
   case 2395: /* opt_join_or_resume: %empty  */
 #line 13828 "sql_yacc.yy"
                         { Lex->xa_opt=XA_NONE;        }
-#line 33517 "sql_yacc.cc"
+#line 34766 "sql_yacc.cc"
     break;
 
   case 2396: /* opt_join_or_resume: JOIN_SYM  */
 #line 13829 "sql_yacc.yy"
                         { Lex->xa_opt=XA_JOIN;        }
-#line 33523 "sql_yacc.cc"
+#line 34772 "sql_yacc.cc"
     break;
 
   case 2397: /* opt_join_or_resume: RESUME_SYM  */
 #line 13830 "sql_yacc.yy"
                         { Lex->xa_opt=XA_RESUME;      }
-#line 33529 "sql_yacc.cc"
+#line 34778 "sql_yacc.cc"
     break;
 
   case 2398: /* opt_one_phase: %empty  */
 #line 13834 "sql_yacc.yy"
                             { Lex->xa_opt=XA_NONE;        }
-#line 33535 "sql_yacc.cc"
+#line 34784 "sql_yacc.cc"
     break;
 
   case 2399: /* opt_one_phase: ONE_SYM PHASE_SYM  */
 #line 13835 "sql_yacc.yy"
                             { Lex->xa_opt=XA_ONE_PHASE;   }
-#line 33541 "sql_yacc.cc"
+#line 34790 "sql_yacc.cc"
     break;
 
   case 2400: /* opt_suspend: %empty  */
 #line 13840 "sql_yacc.yy"
           { Lex->xa_opt=XA_NONE;        }
-#line 33547 "sql_yacc.cc"
+#line 34796 "sql_yacc.cc"
     break;
 
   case 2401: /* $@176: %empty  */
 #line 13842 "sql_yacc.yy"
           { Lex->xa_opt=XA_SUSPEND;     }
-#line 33553 "sql_yacc.cc"
+#line 34802 "sql_yacc.cc"
     break;
 
   case 2403: /* opt_migrate: %empty  */
 #line 13847 "sql_yacc.yy"
                               {}
-#line 33559 "sql_yacc.cc"
+#line 34808 "sql_yacc.cc"
     break;
 
   case 2404: /* opt_migrate: FOR_SYM MIGRATE_SYM  */
 #line 13848 "sql_yacc.yy"
                               { Lex->xa_opt=XA_FOR_MIGRATE; }
-#line 33565 "sql_yacc.cc"
+#line 34814 "sql_yacc.cc"
     break;
 
   case 2405: /* install: INSTALL_SYM PLUGIN_SYM ident SONAME_SYM TEXT_STRING_sys  */
@@ -33572,7 +34821,7 @@ yyreduce:
             lex->comment= (yyvsp[-2].lex_str);
             lex->ident= (yyvsp[0].lex_str);
           }
-#line 33576 "sql_yacc.cc"
+#line 34825 "sql_yacc.cc"
     break;
 
   case 2406: /* uninstall: UNINSTALL_SYM PLUGIN_SYM ident  */
@@ -33582,11 +34831,11 @@ yyreduce:
             lex->sql_command= SQLCOM_UNINSTALL_PLUGIN;
             lex->comment= (yyvsp[0].lex_str);
           }
-#line 33586 "sql_yacc.cc"
+#line 34835 "sql_yacc.cc"
     break;
 
 
-#line 33590 "sql_yacc.cc"
+#line 34839 "sql_yacc.cc"
 
       default: break;
     }

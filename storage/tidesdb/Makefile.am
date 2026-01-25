@@ -40,11 +40,11 @@ ha_tidesdb_la_CFLAGS =	$(AM_CFLAGS) -DMYSQL_DYNAMIC_PLUGIN
 ha_tidesdb_la_SOURCES =	ha_tidesdb.cc
 
 
-EXTRA_LIBRARIES =	libtidesdb_engine.a
+EXTRA_LIBRARIES =	libtidesdb.a
 noinst_LIBRARIES =	@plugin_tidesdb_static_target@
-libtidesdb_engine_a_CXXFLAGS =	$(AM_CXXFLAGS)
-libtidesdb_engine_a_CFLAGS =	$(AM_CFLAGS)
-libtidesdb_engine_a_SOURCES=	ha_tidesdb.cc
+libtidesdb_a_CXXFLAGS =	$(AM_CXXFLAGS)
+libtidesdb_a_CFLAGS =	$(AM_CFLAGS)
+libtidesdb_a_SOURCES=	ha_tidesdb.cc
 
 EXTRA_DIST =		CMakeLists.txt plug.in building.md c.md
 # Don't update the files from bitkeeper

@@ -20,7 +20,7 @@
 
 basedir=""
 builddir=""
-ldata="/usr/local/tidesql/var"
+ldata="/tmp/mysql-test/var"
 langdir=""
 srcdir=""
 
@@ -235,7 +235,7 @@ then
     exit 1
   fi
 else
-  print_defaults="/usr/local/tidesql/bin/my_print_defaults"
+  print_defaults="/tmp/mysql-test/bin/my_print_defaults"
 fi
 
 if test ! -x "$print_defaults"
@@ -283,12 +283,12 @@ then
   fi
   scriptdir="$basedir/scripts"
 else
-  basedir="/usr/local/tidesql"
-  bindir="/usr/local/tidesql/bin"
+  basedir="/tmp/mysql-test"
+  bindir="/tmp/mysql-test/bin"
   extra_bindir="$bindir"
-  mysqld="/usr/local/tidesql/libexec/mysqld"
-  pkgdatadir="/usr/local/tidesql/share/mysql"
-  scriptdir="/usr/local/tidesql/bin"
+  mysqld="/tmp/mysql-test/libexec/mysqld"
+  pkgdatadir="/tmp/mysql-test/share/mysql"
+  scriptdir="/tmp/mysql-test/bin"
 fi
 
 # Set up paths to SQL scripts required for bootstrap

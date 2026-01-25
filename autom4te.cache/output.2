@@ -1992,8 +1992,9 @@ Description of plugins:
    === TidesDB Storage Engine ===
   Plugin Name:      tidesdb
   Description:      LSM-based storage engine with ACID transactions
-  Supports build:   dynamic
+  Supports build:   static and dynamic
   Configurations:   max, max-no-ndb
+  Status:           mandatory
               
 
 Report bugs to the package provider.
@@ -32732,6 +32733,49 @@ fi
  
 
 
+ 
+ 
+ 
+  
+ 
+
+
+ 
+
+
+ 
+ 
+ 
+  
+ 
+
+
+ 
+
+
+ 
+ 
+ 
+  
+ 
+
+
+ 
+ 
+ 
+
+
+
+ 
+ 
+ 
+  
+ 
+
+
+ 
+
+
   
   
  
@@ -32980,8 +33024,7 @@ printf "%s\n" "$as_me: WARNING: Example Storage Engine can only be built as a pl
   
     
     
-      { printf "%s\n" "$as_me:${as_lineno-$LINENO}: WARNING: TidesDB Storage Engine can only be built as a plugin" >&5
-printf "%s\n" "$as_me: WARNING: TidesDB Storage Engine can only be built as a plugin" >&2;}
+      mysql_plugin_tidesdb=yes
           
 
   
@@ -34496,16 +34539,12 @@ printf "%s\n" "error" >&6; }
   
 
   
-   case "$with_mysqld_ldflags " in
-     *"-all-static "*)
-       # No need to build shared plugins when mysqld is linked with
-       # -all-static as it won't be able to load them.
-       if test "X$mysql_plugin_tidesdb" != Xyes -a \
-               "X$with_plugin_tidesdb" != Xyes; then
-	     with_plugin_tidesdb=no
-	   fi
-     ;;
-   esac
+   if test "X$with_plugin_tidesdb" = Xno; then
+     { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: error" >&5
+printf "%s\n" "error" >&6; }
+     as_fn_error $? "cannot disable mandatory plugin" "$LINENO" 5
+   fi
+   mysql_plugin_tidesdb=yes
   
 
 
@@ -34513,7 +34552,7 @@ printf "%s\n" "error" >&6; }
     { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
 printf "%s\n" "no" >&6; }
   else
-    with_plugin_tidesdb=''
+    
     if test "X$mysql_plugin_tidesdb" != Xyes -a \
             "X$with_plugin_tidesdb" != Xyes; then
       
@@ -34539,15 +34578,29 @@ printf "%s\n" "no" >&6; }
     else
       
        
-        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: error" >&5
-printf "%s\n" "error" >&6; }
-        as_fn_error $? "Plugin tidesdb does not support static linking" "$LINENO" 5
+        
+         mysql_use_plugin_dir="storage/tidesdb"
+         mysql_plugin_libs="$mysql_plugin_libs \$(top_builddir)/storage/tidesdb/libtidesdb.a"
+        
        
+       
+        printf "%s\n" "@%:@define WITH_TIDESDB_STORAGE_ENGINE 1" >>confdefs.h
+
+       
+       plugin_tidesdb_static_target="libtidesdb.a"
+
+       plugin_tidesdb_shared_target=""
+
       
       mysql_plugin_defs="$mysql_plugin_defs, builtin_tidesdb_plugin"
       with_plugin_tidesdb=yes
       { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 printf "%s\n" "yes" >&6; }
+      
+       condition_dependent_plugin_modules="$condition_dependent_plugin_modules ha_tidesdb.cc"
+       condition_dependent_plugin_objects="$condition_dependent_plugin_objects ha_tidesdb.o"
+       condition_dependent_plugin_links="$condition_dependent_plugin_links storage/tidesdb/ha_tidesdb.cc"
+       condition_dependent_plugin_includes="$condition_dependent_plugin_includes -I\$(top_srcdir)/storage/tidesdb/"
       
     fi
   fi

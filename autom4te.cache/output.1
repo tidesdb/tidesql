@@ -756,10 +756,10 @@ plugin_tidesdb_static_target
 plugin_tidesdb_shared_target
 plugin_ndbcluster_shared_target
 plugin_ndbcluster_static_target
-plugin_myisam_shared_target
-plugin_myisam_static_target
 plugin_myisammrg_shared_target
 plugin_myisammrg_static_target
+plugin_myisam_shared_target
+plugin_myisam_static_target
 plugin_innodb_plugin_static_target
 plugin_innodb_plugin_shared_target
 plugin_innobase_static_target
@@ -1857,7 +1857,7 @@ Optional Packages:
                           all.
                           Available plugins are: partition archive blackhole
                           csv example federated heap innobase innodb_plugin
-                          myisammrg myisam ndbcluster tidesdb.
+                          myisam myisammrg ndbcluster tidesdb.
   --without-plugin-PLUGIN Disable the named plugin from being built.
                           Otherwise, for plugins which are not selected for
                           inclusion in mysqld will be built dynamically (if
@@ -1971,15 +1971,15 @@ Description of plugins:
   Supports build:   static and dynamic
   Configurations:   max, max-no-ndb
      
-   === MyISAM MERGE Engine ===
-  Plugin Name:      myisammrg
-  Description:      Merge multiple MySQL tables into one
-  Supports build:   static 
-  Status:           mandatory
-     
    === MyISAM Storage Engine ===
   Plugin Name:      myisam
   Description:      Traditional non-transactional MySQL tables
+  Supports build:   static 
+  Status:           mandatory
+     
+   === MyISAM MERGE Engine ===
+  Plugin Name:      myisammrg
+  Description:      Merge multiple MySQL tables into one
   Supports build:   static 
   Status:           mandatory
      
@@ -1992,8 +1992,9 @@ Description of plugins:
    === TidesDB Storage Engine ===
   Plugin Name:      tidesdb
   Description:      LSM-based storage engine with ACID transactions
-  Supports build:   dynamic
+  Supports build:   static and dynamic
   Configurations:   max, max-no-ndb
+  Status:           mandatory
               
 
 Report bugs to the package provider.
@@ -32386,8 +32387,7 @@ fi
  
  
 
-
-
+  
  
  
  
@@ -32396,6 +32396,7 @@ fi
 
 
  
+
 
 
   
@@ -32479,16 +32480,16 @@ fi
  
  
 
+
+
+ 
+ 
+ 
   
  
- 
- 
-  
- 
 
 
  
-
 
 
   
@@ -32732,6 +32733,49 @@ fi
  
 
 
+ 
+ 
+ 
+  
+ 
+
+
+ 
+
+
+ 
+ 
+ 
+  
+ 
+
+
+ 
+
+
+ 
+ 
+ 
+  
+ 
+
+
+ 
+ 
+ 
+
+
+
+ 
+ 
+ 
+  
+ 
+
+
+ 
+
+
   
   
  
@@ -32777,7 +32821,7 @@ fi
 
   case "$mysql_plugins" in
   all )
-    mysql_plugins='partition archive blackhole csv example federated heap innobase innodb_plugin myisammrg myisam ndbcluster tidesdb'
+    mysql_plugins='partition archive blackhole csv example federated heap innobase innodb_plugin myisam myisammrg ndbcluster tidesdb'
     ;;
   none )
     mysql_plugins=''
@@ -32936,11 +32980,11 @@ printf "%s\n" "$as_me: WARNING: Example Storage Engine can only be built as a pl
   
    
   
-    myisammrg )
+    myisam )
   
     
     
-      mysql_plugin_myisammrg=yes
+      mysql_plugin_myisam=yes
           
 
   
@@ -32950,11 +32994,11 @@ printf "%s\n" "$as_me: WARNING: Example Storage Engine can only be built as a pl
   
    
   
-    myisam )
+    myisammrg )
   
     
     
-      mysql_plugin_myisam=yes
+      mysql_plugin_myisammrg=yes
           
 
   
@@ -32980,8 +33024,7 @@ printf "%s\n" "$as_me: WARNING: Example Storage Engine can only be built as a pl
   
     
     
-      { printf "%s\n" "$as_me:${as_lineno-$LINENO}: WARNING: TidesDB Storage Engine can only be built as a plugin" >&5
-printf "%s\n" "$as_me: WARNING: TidesDB Storage Engine can only be built as a plugin" >&2;}
+      mysql_plugin_tidesdb=yes
           
 
   
@@ -34149,114 +34192,6 @@ printf "%s\n" "yes" >&6; }
  
   
  
- { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether to use MyISAM MERGE Engine" >&5
-printf %s "checking whether to use MyISAM MERGE Engine... " >&6; }
- mysql_use_plugin_dir=""
- 
-
-  # Plugin is not disabled, determine if it should be built,
-  # or only distributed
-
-  
-    if test ! -d "$srcdir/storage/myisammrg"; then
-      # Plugin directory was removed after autoconf was run; treat
-      # this as a disabled plugin
-      if test "X$with_plugin_myisammrg" = Xyes; then
-        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: error" >&5
-printf "%s\n" "error" >&6; }
-        as_fn_error $? "disabled" "$LINENO" 5
-      fi
-
-      # The result message will be printed below
-      with_plugin_myisammrg=no
-    fi
-  
-
-  
-   if test "X$with_plugin_myisammrg" = Xno; then
-     { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: error" >&5
-printf "%s\n" "error" >&6; }
-     as_fn_error $? "cannot disable mandatory plugin" "$LINENO" 5
-   fi
-   mysql_plugin_myisammrg=yes
-  
-
-
-  if test "X$with_plugin_myisammrg" = Xno; then
-    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
-printf "%s\n" "no" >&6; }
-  else
-    
-    if test "X$mysql_plugin_myisammrg" != Xyes -a \
-            "X$with_plugin_myisammrg" != Xyes; then
-      
-       with_plugin_myisammrg=no
-       { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
-printf "%s\n" "no" >&6; }
-      
-    else
-      
-       
-        
-         mysql_use_plugin_dir="storage/myisammrg"
-         mysql_plugin_libs="$mysql_plugin_libs \$(top_builddir)/storage/myisammrg/libmyisammrg.a"
-        
-       
-       
-        printf "%s\n" "@%:@define WITH_MYISAMMRG_STORAGE_ENGINE 1" >>confdefs.h
-
-       
-       plugin_myisammrg_static_target="libmyisammrg.a"
-
-       plugin_myisammrg_shared_target=""
-
-      
-      mysql_plugin_defs="$mysql_plugin_defs, builtin_myisammrg_plugin"
-      with_plugin_myisammrg=yes
-      { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-printf "%s\n" "yes" >&6; }
-      
-       condition_dependent_plugin_modules="$condition_dependent_plugin_modules ha_myisammrg.cc"
-       condition_dependent_plugin_objects="$condition_dependent_plugin_objects ha_myisammrg.o"
-       condition_dependent_plugin_links="$condition_dependent_plugin_links storage/myisammrg/ha_myisammrg.cc"
-       condition_dependent_plugin_includes="$condition_dependent_plugin_includes -I\$(top_srcdir)/storage/myisammrg/"
-      
-    fi
-  fi
-
-  
-    if test -d "$srcdir/storage/myisammrg"; then
-      # Even if we don't build a plugin, we bundle its source into the dist
-      # file.  So its Makefile (and Makefiles for any subdirs) must be
-      # generated for 'make dist' to work.
-      
-      
-          # autoconf doesn't provide an automatic way to configure DIST_SUBDIRS of
-          # a subdir; for our purposes, it's enough to just check for existing
-          # Makefile.am files and add them in here
-          ac_config_files="$ac_config_files storage/myisammrg/Makefile"
-
-        
-      
-
-      
-          mysql_se_distdirs="$mysql_se_distdirs myisammrg"
-          if test -n "$mysql_use_plugin_dir" ; then
-            mysql_se_dirs="$mysql_se_dirs myisammrg"
-            mysql_se_unittest_dirs="$mysql_se_unittest_dirs ../storage/myisammrg"
-          fi
-    fi
-  
- 
-
-
-  
- 
-  
- 
- 
-  
- 
  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether to use MyISAM Storage Engine" >&5
 printf %s "checking whether to use MyISAM Storage Engine... " >&6; }
  mysql_use_plugin_dir=""
@@ -34352,6 +34287,114 @@ printf "%s\n" "yes" >&6; }
           if test -n "$mysql_use_plugin_dir" ; then
             mysql_se_dirs="$mysql_se_dirs myisam"
             mysql_se_unittest_dirs="$mysql_se_unittest_dirs ../storage/myisam"
+          fi
+    fi
+  
+ 
+
+
+  
+ 
+  
+ 
+ 
+  
+ 
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking whether to use MyISAM MERGE Engine" >&5
+printf %s "checking whether to use MyISAM MERGE Engine... " >&6; }
+ mysql_use_plugin_dir=""
+ 
+
+  # Plugin is not disabled, determine if it should be built,
+  # or only distributed
+
+  
+    if test ! -d "$srcdir/storage/myisammrg"; then
+      # Plugin directory was removed after autoconf was run; treat
+      # this as a disabled plugin
+      if test "X$with_plugin_myisammrg" = Xyes; then
+        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: error" >&5
+printf "%s\n" "error" >&6; }
+        as_fn_error $? "disabled" "$LINENO" 5
+      fi
+
+      # The result message will be printed below
+      with_plugin_myisammrg=no
+    fi
+  
+
+  
+   if test "X$with_plugin_myisammrg" = Xno; then
+     { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: error" >&5
+printf "%s\n" "error" >&6; }
+     as_fn_error $? "cannot disable mandatory plugin" "$LINENO" 5
+   fi
+   mysql_plugin_myisammrg=yes
+  
+
+
+  if test "X$with_plugin_myisammrg" = Xno; then
+    { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+  else
+    
+    if test "X$mysql_plugin_myisammrg" != Xyes -a \
+            "X$with_plugin_myisammrg" != Xyes; then
+      
+       with_plugin_myisammrg=no
+       { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
+printf "%s\n" "no" >&6; }
+      
+    else
+      
+       
+        
+         mysql_use_plugin_dir="storage/myisammrg"
+         mysql_plugin_libs="$mysql_plugin_libs \$(top_builddir)/storage/myisammrg/libmyisammrg.a"
+        
+       
+       
+        printf "%s\n" "@%:@define WITH_MYISAMMRG_STORAGE_ENGINE 1" >>confdefs.h
+
+       
+       plugin_myisammrg_static_target="libmyisammrg.a"
+
+       plugin_myisammrg_shared_target=""
+
+      
+      mysql_plugin_defs="$mysql_plugin_defs, builtin_myisammrg_plugin"
+      with_plugin_myisammrg=yes
+      { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+printf "%s\n" "yes" >&6; }
+      
+       condition_dependent_plugin_modules="$condition_dependent_plugin_modules ha_myisammrg.cc"
+       condition_dependent_plugin_objects="$condition_dependent_plugin_objects ha_myisammrg.o"
+       condition_dependent_plugin_links="$condition_dependent_plugin_links storage/myisammrg/ha_myisammrg.cc"
+       condition_dependent_plugin_includes="$condition_dependent_plugin_includes -I\$(top_srcdir)/storage/myisammrg/"
+      
+    fi
+  fi
+
+  
+    if test -d "$srcdir/storage/myisammrg"; then
+      # Even if we don't build a plugin, we bundle its source into the dist
+      # file.  So its Makefile (and Makefiles for any subdirs) must be
+      # generated for 'make dist' to work.
+      
+      
+          # autoconf doesn't provide an automatic way to configure DIST_SUBDIRS of
+          # a subdir; for our purposes, it's enough to just check for existing
+          # Makefile.am files and add them in here
+          ac_config_files="$ac_config_files storage/myisammrg/Makefile"
+
+        
+      
+
+      
+          mysql_se_distdirs="$mysql_se_distdirs myisammrg"
+          if test -n "$mysql_use_plugin_dir" ; then
+            mysql_se_dirs="$mysql_se_dirs myisammrg"
+            mysql_se_unittest_dirs="$mysql_se_unittest_dirs ../storage/myisammrg"
           fi
     fi
   
@@ -34496,16 +34539,12 @@ printf "%s\n" "error" >&6; }
   
 
   
-   case "$with_mysqld_ldflags " in
-     *"-all-static "*)
-       # No need to build shared plugins when mysqld is linked with
-       # -all-static as it won't be able to load them.
-       if test "X$mysql_plugin_tidesdb" != Xyes -a \
-               "X$with_plugin_tidesdb" != Xyes; then
-	     with_plugin_tidesdb=no
-	   fi
-     ;;
-   esac
+   if test "X$with_plugin_tidesdb" = Xno; then
+     { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: error" >&5
+printf "%s\n" "error" >&6; }
+     as_fn_error $? "cannot disable mandatory plugin" "$LINENO" 5
+   fi
+   mysql_plugin_tidesdb=yes
   
 
 
@@ -34513,7 +34552,7 @@ printf "%s\n" "error" >&6; }
     { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
 printf "%s\n" "no" >&6; }
   else
-    with_plugin_tidesdb=''
+    
     if test "X$mysql_plugin_tidesdb" != Xyes -a \
             "X$with_plugin_tidesdb" != Xyes; then
       
@@ -34539,15 +34578,29 @@ printf "%s\n" "no" >&6; }
     else
       
        
-        { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: error" >&5
-printf "%s\n" "error" >&6; }
-        as_fn_error $? "Plugin tidesdb does not support static linking" "$LINENO" 5
+        
+         mysql_use_plugin_dir="storage/tidesdb"
+         mysql_plugin_libs="$mysql_plugin_libs \$(top_builddir)/storage/tidesdb/libtidesdb.a"
+        
        
+       
+        printf "%s\n" "@%:@define WITH_TIDESDB_STORAGE_ENGINE 1" >>confdefs.h
+
+       
+       plugin_tidesdb_static_target="libtidesdb.a"
+
+       plugin_tidesdb_shared_target=""
+
       
       mysql_plugin_defs="$mysql_plugin_defs, builtin_tidesdb_plugin"
       with_plugin_tidesdb=yes
       { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 printf "%s\n" "yes" >&6; }
+      
+       condition_dependent_plugin_modules="$condition_dependent_plugin_modules ha_tidesdb.cc"
+       condition_dependent_plugin_objects="$condition_dependent_plugin_objects ha_tidesdb.o"
+       condition_dependent_plugin_links="$condition_dependent_plugin_links storage/tidesdb/ha_tidesdb.cc"
+       condition_dependent_plugin_includes="$condition_dependent_plugin_includes -I\$(top_srcdir)/storage/tidesdb/"
       
     fi
   fi
@@ -35889,10 +35942,10 @@ fi
   
  
  
-  if test "X$with_plugin_myisammrg" = Xyes; then
-    if test "X$plugin_myisammrg_static_target" = X -a \
-            "X$plugin_myisammrg_shared_target" = X; then
-      as_fn_error $? "that's strange, myisammrg failed sanity check" "$LINENO" 5
+  if test "X$with_plugin_myisam" = Xyes; then
+    if test "X$plugin_myisam_static_target" = X -a \
+            "X$plugin_myisam_shared_target" = X; then
+      as_fn_error $? "that's strange, myisam failed sanity check" "$LINENO" 5
     fi
      
  
@@ -35905,10 +35958,10 @@ fi
   
  
  
-  if test "X$with_plugin_myisam" = Xyes; then
-    if test "X$plugin_myisam_static_target" = X -a \
-            "X$plugin_myisam_shared_target" = X; then
-      as_fn_error $? "that's strange, myisam failed sanity check" "$LINENO" 5
+  if test "X$with_plugin_myisammrg" = Xyes; then
+    if test "X$plugin_myisammrg_static_target" = X -a \
+            "X$plugin_myisammrg_shared_target" = X; then
+      as_fn_error $? "that's strange, myisammrg failed sanity check" "$LINENO" 5
     fi
      
  
@@ -38293,8 +38346,8 @@ do
     "storage/heap/Makefile") CONFIG_FILES="$CONFIG_FILES storage/heap/Makefile" ;;
     "storage/innobase/Makefile") CONFIG_FILES="$CONFIG_FILES storage/innobase/Makefile" ;;
     "storage/innodb_plugin/Makefile") CONFIG_FILES="$CONFIG_FILES storage/innodb_plugin/Makefile" ;;
-    "storage/myisammrg/Makefile") CONFIG_FILES="$CONFIG_FILES storage/myisammrg/Makefile" ;;
     "storage/myisam/Makefile") CONFIG_FILES="$CONFIG_FILES storage/myisam/Makefile" ;;
+    "storage/myisammrg/Makefile") CONFIG_FILES="$CONFIG_FILES storage/myisammrg/Makefile" ;;
     "storage/ndb/src/common/debugger/Makefile") CONFIG_FILES="$CONFIG_FILES storage/ndb/src/common/debugger/Makefile" ;;
     "storage/ndb/src/common/debugger/signaldata/Makefile") CONFIG_FILES="$CONFIG_FILES storage/ndb/src/common/debugger/signaldata/Makefile" ;;
     "storage/ndb/src/common/portlib/Makefile") CONFIG_FILES="$CONFIG_FILES storage/ndb/src/common/portlib/Makefile" ;;

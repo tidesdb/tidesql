@@ -3490,18 +3490,6 @@ m4trace:configure.in:2461: -1- AC_SUBST_TRACE([plugin_innodb_plugin_shared_targe
 m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_innodb_plugin_shared_target$])
 m4trace:configure.in:2461: -1- AC_CONFIG_FILES([storage/innodb_plugin/Makefile
 ])
-m4trace:configure.in:2461: -1- AH_OUTPUT([WITH_MYISAMMRG_STORAGE_ENGINE], [/* Include Merge multiple MySQL tables into one into mysqld */
-@%:@undef WITH_MYISAMMRG_STORAGE_ENGINE])
-m4trace:configure.in:2461: -1- AC_DEFINE_TRACE_LITERAL([WITH_MYISAMMRG_STORAGE_ENGINE])
-m4trace:configure.in:2461: -1- m4_pattern_allow([^WITH_MYISAMMRG_STORAGE_ENGINE$])
-m4trace:configure.in:2461: -1- AC_SUBST([plugin_myisammrg_static_target], ["libmyisammrg.a"])
-m4trace:configure.in:2461: -1- AC_SUBST_TRACE([plugin_myisammrg_static_target])
-m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_myisammrg_static_target$])
-m4trace:configure.in:2461: -1- AC_SUBST([plugin_myisammrg_shared_target], [""])
-m4trace:configure.in:2461: -1- AC_SUBST_TRACE([plugin_myisammrg_shared_target])
-m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_myisammrg_shared_target$])
-m4trace:configure.in:2461: -1- AC_CONFIG_FILES([storage/myisammrg/Makefile
-])
 m4trace:configure.in:2461: -1- AH_OUTPUT([WITH_MYISAM_STORAGE_ENGINE], [/* Include Traditional non-transactional MySQL tables into mysqld */
 @%:@undef WITH_MYISAM_STORAGE_ENGINE])
 m4trace:configure.in:2461: -1- AC_DEFINE_TRACE_LITERAL([WITH_MYISAM_STORAGE_ENGINE])
@@ -3513,6 +3501,18 @@ m4trace:configure.in:2461: -1- AC_SUBST([plugin_myisam_shared_target], [""])
 m4trace:configure.in:2461: -1- AC_SUBST_TRACE([plugin_myisam_shared_target])
 m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_myisam_shared_target$])
 m4trace:configure.in:2461: -1- AC_CONFIG_FILES([storage/myisam/Makefile
+])
+m4trace:configure.in:2461: -1- AH_OUTPUT([WITH_MYISAMMRG_STORAGE_ENGINE], [/* Include Merge multiple MySQL tables into one into mysqld */
+@%:@undef WITH_MYISAMMRG_STORAGE_ENGINE])
+m4trace:configure.in:2461: -1- AC_DEFINE_TRACE_LITERAL([WITH_MYISAMMRG_STORAGE_ENGINE])
+m4trace:configure.in:2461: -1- m4_pattern_allow([^WITH_MYISAMMRG_STORAGE_ENGINE$])
+m4trace:configure.in:2461: -1- AC_SUBST([plugin_myisammrg_static_target], ["libmyisammrg.a"])
+m4trace:configure.in:2461: -1- AC_SUBST_TRACE([plugin_myisammrg_static_target])
+m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_myisammrg_static_target$])
+m4trace:configure.in:2461: -1- AC_SUBST([plugin_myisammrg_shared_target], [""])
+m4trace:configure.in:2461: -1- AC_SUBST_TRACE([plugin_myisammrg_shared_target])
+m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_myisammrg_shared_target$])
+m4trace:configure.in:2461: -1- AC_CONFIG_FILES([storage/myisammrg/Makefile
 ])
 m4trace:configure.in:2461: -1- AH_OUTPUT([WITH_NDBCLUSTER_STORAGE_ENGINE], [/* Include High Availability Clustered tables into mysqld */
 @%:@undef WITH_NDBCLUSTER_STORAGE_ENGINE])
@@ -3567,6 +3567,14 @@ m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_tidesdb_shared_target$]
 m4trace:configure.in:2461: -1- AC_SUBST([plugin_tidesdb_static_target], [""])
 m4trace:configure.in:2461: -1- AC_SUBST_TRACE([plugin_tidesdb_static_target])
 m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_tidesdb_static_target$])
+m4trace:configure.in:2461: -1- AC_DEFINE_TRACE_LITERAL([WITH_TIDESDB_STORAGE_ENGINE])
+m4trace:configure.in:2461: -1- m4_pattern_allow([^WITH_TIDESDB_STORAGE_ENGINE$])
+m4trace:configure.in:2461: -1- AC_SUBST([plugin_tidesdb_static_target], ["libtidesdb.a"])
+m4trace:configure.in:2461: -1- AC_SUBST_TRACE([plugin_tidesdb_static_target])
+m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_tidesdb_static_target$])
+m4trace:configure.in:2461: -1- AC_SUBST([plugin_tidesdb_shared_target], [""])
+m4trace:configure.in:2461: -1- AC_SUBST_TRACE([plugin_tidesdb_shared_target])
+m4trace:configure.in:2461: -1- m4_pattern_allow([^plugin_tidesdb_shared_target$])
 m4trace:configure.in:2461: -1- AC_CONFIG_FILES([storage/tidesdb/Makefile
 ])
 m4trace:configure.in:2461: -1- AC_SUBST([innodb_system_libs])

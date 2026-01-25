@@ -45,7 +45,8 @@ mysqld_LDADD =		libndb.la \
 			@MYSQLD_EXTRA_LDFLAGS@ \
 			@mysql_plugin_libs@ \
 			$(LDADD)  $(CXXLDFLAGS) $(WRAPLIBS) @LIBDL@ \
-			$(yassl_libs) $(openssl_libs) @MYSQLD_EXTRA_LIBS@
+			$(yassl_libs) $(openssl_libs) @MYSQLD_EXTRA_LIBS@ \
+			-ltidesdb -lzstd -llz4 -lsnappy
 
 noinst_HEADERS =	item.h item_func.h item_sum.h item_cmpfunc.h \
 			item_strfunc.h item_timefunc.h \

@@ -36,7 +36,7 @@ BEGIN {
 
 	# ****************************
 	# information on MySQL
-	$MYSQL     = '/usr/local/tidesql/bin/mysql';    # path to mysql executable
+	$MYSQL     = '/tmp/mysql-test/bin/mysql';    # path to mysql executable
 	$SERVER    = '3.21';
 	$MYSQL_OPT = ' --batch --unbuffered';
 	$ACCESS_DB = 'mysql';		 # name of DB with grant-tables
@@ -51,7 +51,7 @@ BEGIN {
 	$ACCESS_U_BCK = 'user_backup';   
 	$ACCESS_D_BCK = 'db_backup';     
         $DIFF      = '/usr/bin/diff'; 
-        $MYSQLDUMP = '/usr/local/tidesql/bin/mysqldump';
+        $MYSQLDUMP = '/tmp/mysql-test/bin/mysqldump';
                                          #path to mysqldump executable
 
         $MYSQLADMIN= 'http://foobar.com/MySQLadmin';
@@ -481,8 +481,8 @@ MySQLaccess::Report::Print_Header();
   if (-f "./$script_conf") {
      require "./$script_conf";
   }
-  elsif (-f "/usr/local/tidesql/etc/$script_conf") {
-     require "/usr/local/tidesql/etc/$script_conf";
+  elsif (-f "/tmp/mysql-test/etc/$script_conf") {
+     require "/tmp/mysql-test/etc/$script_conf";
   }
   elsif (-f "/etc/$script_conf") {
      require "/etc/$script_conf";
@@ -951,7 +951,7 @@ sub MergeConfigFile {
 # =================================
 sub MergeConfigFiles {
     my ($name,$pass,$uid,$gid,$quota,$comment,$gcos,$dir,$shell) = getpwuid $<;
-    MergeConfigFile("/usr/local/tidesql/etc/my.cnf");
+    MergeConfigFile("/tmp/mysql-test/etc/my.cnf");
     MergeConfigFile("/etc/my.cnf");
     MergeConfigFile("$dir/.my.cnf");
 }

@@ -326,7 +326,35 @@ make -j$(nproc)
 
 ## Running Tests
 
+### TidesDB-Specific Tests
+
 ```bash
 cd mysql-test
-./mysql-test-run.pl --suite=tidesdb
+
+# Run TidesDB storage engine test
+perl mysql-test-run.pl tidesdb
+
+# Run with verbose output
+perl mysql-test-run.pl --verbose tidesdb
+```
+
+### Running Tests with TidesDB as Default Engine
+
+```bash
+# Run basic tests with TidesDB as default storage engine
+perl mysql-test-run.pl --mysqld=--default-storage-engine=TidesDB 1st create insert select
+
+# Run engine-agnostic test suites with TidesDB
+perl mysql-test-run.pl --suite=engines/funcs --mysqld=--default-storage-engine=TidesDB
+perl mysql-test-run.pl --suite=engines/iuds --mysqld=--default-storage-engine=TidesDB
+```
+
+### Full Test Suite
+
+```bash
+# Run all tests (may take a while)
+perl mysql-test-run.pl --force --parallel=auto
+
+# Skip NDB tests (not relevant for TidesDB)
+perl mysql-test-run.pl --force --skip-test=ndb --skip-test=rpl_ndb
 ```

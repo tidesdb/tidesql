@@ -79,22 +79,22 @@ me=`get_full_path $0`
 
 basedir=`echo $me | sed -e 's;/bin/mysql_config;;'`
 
-ldata='/usr/local/tidesql/var'
-execdir='/usr/local/tidesql/libexec'
-bindir='/usr/local/tidesql/bin'
+ldata='/tmp/mysql-test/var'
+execdir='/tmp/mysql-test/libexec'
+bindir='/tmp/mysql-test/bin'
 
 # If installed, search for the compiled in directory first (might be "lib64")
-pkglibdir='/usr/local/tidesql/lib/mysql'
+pkglibdir='/tmp/mysql-test/lib/mysql'
 pkglibdir_rel=`echo $pkglibdir | sed -e "s;^$basedir/;;"`
 
-plugindir='/usr/local/tidesql/lib/mysql/plugin'
+plugindir='/tmp/mysql-test/lib/mysql/plugin'
 
-pkgincludedir='/usr/local/tidesql/include/mysql'
+pkgincludedir='/tmp/mysql-test/include/mysql'
 fix_path pkgincludedir include/mysql include
 
 version='5.1.63'
 socket='/tmp/mysql.sock'
-ldflags='-L/usr/local/lib -ltidesdb -lzstd -llz4 -lsnappy -rdynamic '
+ldflags='-L/usr/local/lib -rdynamic '
 
 if [ 0 -eq 0 ]; then
   port=0

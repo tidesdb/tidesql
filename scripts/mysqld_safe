@@ -207,12 +207,12 @@ parse_arguments() {
 # First, try to find BASEDIR and ledir (where mysqld is)
 #
 
-if echo '/usr/local/tidesql/share/mysql' | grep '^/usr/local/tidesql' > /dev/null
+if echo '/tmp/mysql-test/share/mysql' | grep '^/tmp/mysql-test' > /dev/null
 then
-  relpkgdata=`echo '/usr/local/tidesql/share/mysql' | sed -e 's,^/usr/local/tidesql,,' -e 's,^/,,' -e 's,^,./,'`
+  relpkgdata=`echo '/tmp/mysql-test/share/mysql' | sed -e 's,^/tmp/mysql-test,,' -e 's,^/,,' -e 's,^,./,'`
 else
   # pkgdatadir is not relative to prefix
-  relpkgdata='/usr/local/tidesql/share/mysql'
+  relpkgdata='/tmp/mysql-test/share/mysql'
 fi
 
 MY_PWD=`pwd`
@@ -239,8 +239,8 @@ then
   ledir="$MY_PWD/libexec"		# Where mysqld is
 # Since we didn't find anything, used the compiled-in defaults
 else
-  MY_BASEDIR_VERSION='/usr/local/tidesql'
-  ledir='/usr/local/tidesql/libexec'
+  MY_BASEDIR_VERSION='/tmp/mysql-test'
+  ledir='/tmp/mysql-test/libexec'
 fi
 
 
@@ -262,7 +262,7 @@ then
   DATADIR=$MY_BASEDIR_VERSION/var
 # Or just give up and use our compiled-in default
 else
-  DATADIR=/usr/local/tidesql/var
+  DATADIR=/tmp/mysql-test/var
 fi
 
 if test -z "$MYSQL_HOME"
@@ -296,12 +296,12 @@ then
 elif test -x ./bin/my_print_defaults
 then
   print_defaults="./bin/my_print_defaults"
-elif test -x /usr/local/tidesql/bin/my_print_defaults
+elif test -x /tmp/mysql-test/bin/my_print_defaults
 then
-  print_defaults="/usr/local/tidesql/bin/my_print_defaults"
-elif test -x /usr/local/tidesql/bin/mysql_print_defaults
+  print_defaults="/tmp/mysql-test/bin/my_print_defaults"
+elif test -x /tmp/mysql-test/bin/mysql_print_defaults
 then
-  print_defaults="/usr/local/tidesql/bin/mysql_print_defaults"
+  print_defaults="/tmp/mysql-test/bin/mysql_print_defaults"
 else
   print_defaults="my_print_defaults"
 fi
