@@ -76,50 +76,53 @@ typedef struct st_tidesdb_share {
   uint use_count;
   pthread_mutex_t mutex;
   THR_LOCK lock;
-  
+
   /* TidesDB column family for this table (primary data) */
   tidesdb_column_family_t *cf;
-  
+
   /* Secondary index column families (one per non-primary index) */
   tidesdb_column_family_t *index_cf[TIDESDB_MAX_INDEXES];
   uint num_indexes;
-  
+
   /* Primary key info */
   bool has_primary_key;
   uint pk_parts;  /* Number of key parts in primary key */
-  
+
   /* TTL column index (-1 if no TTL column) */
   int ttl_field_index;
-  
+
   /* Auto-increment tracking */
   ulonglong auto_increment_value;
   pthread_mutex_t auto_inc_mutex;
-  
+
   /* Row count cache */
   ha_rows row_count;
   bool row_count_valid;
-  
+
   /* Hidden primary key counter for tables without explicit PK */
   ulonglong hidden_pk_value;
   pthread_mutex_t hidden_pk_mutex;
-  
+
   /* Fulltext index column families (inverted indexes) */
   tidesdb_column_family_t *ft_cf[TIDESDB_MAX_FT_INDEXES];
   uint ft_key_nr[TIDESDB_MAX_FT_INDEXES];  /* Key number for each FT index */
   uint num_ft_indexes;
-  
+
   /* Spatial index column families (Z-order encoded) */
   tidesdb_column_family_t *spatial_cf[TIDESDB_MAX_INDEXES];
   uint spatial_key_nr[TIDESDB_MAX_INDEXES];  /* Key number for each spatial index */
   uint num_spatial_indexes;
-  
+
   /* Foreign key constraints on this table (child FKs) */
   TIDESDB_FK fk[TIDESDB_MAX_FK];
   uint num_fk;
-  
+
   /* Tables that reference this table (parent FKs) -- for DELETE/UPDATE checks */
   char referencing_tables[TIDESDB_MAX_FK][256];  /* "db.table" format */
   uint num_referencing;
+
+  /* Tablespace state -- for DISCARD/IMPORT TABLESPACE */
+  bool tablespace_discarded;
 } TIDESDB_SHARE;
 
 /** @brief
@@ -129,31 +132,31 @@ class ha_tidesdb: public handler
 {
   THR_LOCK_DATA lock;           ///< MySQL lock
   TIDESDB_SHARE *share;         ///< Shared lock info and CF handle
-  
+
   /* Current transaction for this handler */
   tidesdb_txn_t *current_txn;
-  
+
   /* Iterator for table scans */
   tidesdb_iter_t *scan_iter;
   bool scan_initialized;
-  
+
   /* Buffer for current row's primary key */
   uchar *pk_buffer;
   uint pk_buffer_len;
-  
+
   /* Buffer for serialized row data */
   uchar *row_buffer;
   uint row_buffer_len;
-  
+
   /* Current row position (for rnd_pos) */
   uchar *current_key;
   size_t current_key_len;
-  
+
   /* Bulk insert state */
   bool bulk_insert_active;
   tidesdb_txn_t *bulk_txn;
   ha_rows bulk_insert_rows;
-  
+
   /* Fulltext search state */
   uint ft_current_idx;              /* Current FT index being searched */
   tidesdb_iter_t *ft_iter;          /* Iterator for FT results */
@@ -175,7 +178,7 @@ class ha_tidesdb: public handler
   void persist_hidden_pk_value(ulonglong value);
   void load_hidden_pk_value();
   void free_current_key();
-  
+
   /* Secondary index helper methods */
   int build_index_key(uint idx, const uchar *buf, uchar **key, size_t *key_len);
   int insert_index_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn);
@@ -183,7 +186,7 @@ class ha_tidesdb: public handler
   int update_index_entries(const uchar *old_buf, const uchar *new_buf, tidesdb_txn_t *txn);
   int create_secondary_indexes(const char *table_name);
   int open_secondary_indexes(const char *table_name);
-  
+
   /* Fulltext index helper methods */
   int create_fulltext_indexes(const char *table_name);
   int open_fulltext_indexes(const char *table_name);
@@ -191,21 +194,21 @@ class ha_tidesdb: public handler
   int delete_ft_words(uint ft_idx, const uchar *buf, tidesdb_txn_t *txn);
   int tokenize_text(const char *text, size_t len, CHARSET_INFO *cs,
                     void (*callback)(const char *word, size_t word_len, void *arg), void *arg);
-  
+
   /* Foreign key enforcement helper methods */
   int parse_foreign_keys();
   int check_fk_parent_exists(uint fk_idx, const uchar *buf, tidesdb_txn_t *txn);
   int check_fk_children_exist(const uchar *buf, tidesdb_txn_t *txn);
   int check_foreign_key_constraints_insert(const uchar *buf, tidesdb_txn_t *txn);
   int check_foreign_key_constraints_delete(const uchar *buf, tidesdb_txn_t *txn);
-  
+
   /* Spatial index helper methods (Z-order encoding) */
   uint64_t encode_zorder(double x, double y);
   void decode_zorder(uint64_t z, double *x, double *y);
   int create_spatial_index(const char *table_name, uint key_nr);
   int insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn);
   int delete_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn);
-  
+
 public:
   ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg);
   ~ha_tidesdb();
@@ -227,7 +230,7 @@ public:
 
   /** @brief
     Table flags indicating what functionality the storage engine implements.
-    
+
     TidesDB uses MVCC (Multi-Version Concurrency Control) for row-level
     concurrency -- no table-level locking is needed. Each transaction sees
     a consistent snapshot based on its isolation level.
@@ -274,7 +277,7 @@ public:
 
   /** @brief
     Cost estimates for the optimizer.
-    
+
     LSM-tree cost model considerations:
     -- Point lookups: memtable check + bloom filter checks + level lookups
     -- Range scans: merge across multiple levels (more expensive than B-tree)
@@ -282,26 +285,26 @@ public:
   */
   virtual IO_AND_CPU_COST scan_time() override;
   IO_AND_CPU_COST read_time(uint index, uint ranges, ha_rows rows);
-  
+
   /* Table lifecycle */
   int open(const char *name, int mode, uint test_if_locked);
   int close(void);
   int create(const char *name, TABLE *form, HA_CREATE_INFO *create_info);
   int delete_table(const char *name) override;
   int rename_table(const char *from, const char *to);
-  
+
   /* Row operations */
   int write_row(const uchar *buf) override;
   int update_row(const uchar *old_data, const uchar *new_data) override;
   int delete_row(const uchar *buf);
-  
+
   /* Table scans */
   int rnd_init(bool scan);
   int rnd_end();
   int rnd_next(uchar *buf);
   int rnd_pos(uchar *buf, uchar *pos);
   void position(const uchar *record);
-  
+
   /* Index operations (basic support) */
   int index_init(uint idx, bool sorted);
   int index_end();
@@ -312,19 +315,19 @@ public:
   int index_prev(uchar *buf);
   int index_first(uchar *buf);
   int index_last(uchar *buf);
-  
-  /* Full-text search (TODO: implement inverted index) */
+
+  /* Full-text search using inverted index */
   int ft_init() { return ft_handler ? 0 : HA_ERR_WRONG_COMMAND; }
   FT_INFO *ft_init_ext(uint flags, uint inx, String *key);
   int ft_read(uchar *buf);
-  
+
   /* Statistics and info */
   int info(uint flag);
   int extra(enum ha_extra_function operation);
   int delete_all_rows() override;
   ha_rows records_in_range(uint inx, const key_range *min_key,
                            const key_range *max_key, page_range *pages) override;
-  
+
   /* Table maintenance */
   int optimize(THD* thd, HA_CHECK_OPT* check_opt);
   int analyze(THD* thd, HA_CHECK_OPT* check_opt);
@@ -333,33 +336,33 @@ public:
   int backup(THD* thd, HA_CHECK_OPT* check_opt);
   bool check_and_repair(THD *thd);
   bool is_crashed() const;
-  
+
   /* Foreign key support */
   char *get_foreign_key_create_info();
   int get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list);
   bool referenced_by_foreign_key() const noexcept override;
   void free_foreign_key_create_info(char *str);
   bool can_switch_engines();
-  
+
   /* Auto-increment */
   virtual void get_auto_increment(ulonglong offset, ulonglong increment,
                                   ulonglong nb_desired_values,
                                   ulonglong *first_value,
                                   ulonglong *nb_reserved_values);
   int reset_auto_increment(ulonglong value);
-  
+
   /* Bulk insert optimization */
   void start_bulk_insert(ha_rows rows, uint flags) override;
   int end_bulk_insert();
-  
+
   /* Tablespace support */
   int discard_or_import_tablespace(my_bool discard);
-  
+
   /* Locking */
   int external_lock(THD *thd, int lock_type);
   THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to,
                              enum thr_lock_type lock_type);
-  
+
   /* Reset handler state */
   int reset(void);
 };

@@ -233,7 +233,8 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
     share->row_count = 0;
     share->row_count_valid = false;
     share->hidden_pk_value = 0;  /* Will be loaded from metadata on open */
-    
+    share->tablespace_discarded = false;
+
     if (my_hash_insert(&tidesdb_open_tables, (uchar*) share))
       goto error;
     thr_lock_init(&share->lock);
@@ -286,12 +287,12 @@ static void get_cf_name(const char *table_path, char *cf_name, size_t cf_name_le
 {
   const char *db_start = table_path;
   const char *tbl_start = NULL;
-  
+
   /* Find the database and table parts */
   /* Path format: /path/to/datadir/database/table */
   const char *p = table_path + strlen(table_path);
   int slashes = 0;
-  
+
   while (p > table_path && slashes < 2)
   {
     p--;
@@ -304,12 +305,12 @@ static void get_cf_name(const char *table_path, char *cf_name, size_t cf_name_le
         db_start = p + 1;
     }
   }
-  
+
   if (tbl_start && db_start < tbl_start)
   {
     size_t db_len = tbl_start - db_start - 1;
     size_t tbl_len = strlen(tbl_start);
-    
+
     if (db_len + 1 + tbl_len < cf_name_len)
     {
       memcpy(cf_name, db_start, db_len);
@@ -350,7 +351,7 @@ static int tidesdb_init_func(void *p)
   DBUG_ENTER("tidesdb_init_func");
 
   tidesdb_hton = (handlerton *)p;
-  
+
   (void)pthread_mutex_init(&tidesdb_mutex, MY_MUTEX_INIT_FAST);
   (void) my_hash_init(PSI_INSTRUMENT_ME, &tidesdb_open_tables, system_charset_info, 32, 0, 0,
                    (my_hash_get_key) tidesdb_get_key, 0, 0);
@@ -361,19 +362,19 @@ static int tidesdb_init_func(void *p)
   tidesdb_hton->commit = tidesdb_commit;
   tidesdb_hton->rollback = tidesdb_rollback;
   tidesdb_hton->show_status = tidesdb_show_status;
-  
+
   /* Savepoint support */
   tidesdb_hton->savepoint_offset = sizeof(tidesdb_savepoint_t);
   tidesdb_hton->savepoint_set = tidesdb_savepoint_set;
   tidesdb_hton->savepoint_rollback = tidesdb_savepoint_rollback;
   tidesdb_hton->savepoint_release = tidesdb_savepoint_release;
-  
+
   /* XA transaction support (2-phase commit) */
   tidesdb_hton->prepare = tidesdb_xa_prepare;
   tidesdb_hton->recover = tidesdb_xa_recover;
   tidesdb_hton->commit_by_xid = tidesdb_commit_by_xid;
   tidesdb_hton->rollback_by_xid = tidesdb_rollback_by_xid;
-  
+
   /* Initialize TidesDB instance */
   static char db_path[FN_REFLEN];  /* Static to ensure it persists */
   if (tidesdb_data_dir)
@@ -386,7 +387,7 @@ static int tidesdb_init_func(void *p)
     snprintf(db_path, sizeof(db_path), "%s/tidesdb", mysql_data_home);
   }
   db_path[sizeof(db_path) - 1] = '\0';
-  
+
   tidesdb_config_t config = tidesdb_default_config();
   config.db_path = db_path;
   config.num_flush_threads = (int)tidesdb_flush_threads;
@@ -394,15 +395,15 @@ static int tidesdb_init_func(void *p)
   config.log_level = (tidesdb_log_level_t)tidesdb_log_level;
   config.block_cache_size = tidesdb_block_cache_size;
   config.max_open_sstables = (int)tidesdb_max_open_sstables;
-  
+
   if (tidesdb_open(&config, &tidesdb_instance) != TDB_SUCCESS)
   {
     sql_print_error("TidesDB: Failed to open database at %s", db_path);
     DBUG_RETURN(1);
   }
-  
+
   sql_print_information("TidesDB: Storage engine initialized at %s", db_path);
-  
+
   DBUG_RETURN(0);
 }
 
@@ -417,10 +418,10 @@ static int tidesdb_done_func(void *p)
 
   if (tidesdb_open_tables.records)
     error = 1;
-  
+
   my_hash_free(&tidesdb_open_tables);
   pthread_mutex_destroy(&tidesdb_mutex);
-  
+
   /* Clean up any remaining prepared XA transactions */
   pthread_mutex_lock(&tidesdb_xa_mutex);
   while (tidesdb_prepared_xids)
@@ -436,13 +437,13 @@ static int tidesdb_done_func(void *p)
   }
   pthread_mutex_unlock(&tidesdb_xa_mutex);
   pthread_mutex_destroy(&tidesdb_xa_mutex);
-  
+
   if (tidesdb_instance)
   {
     tidesdb_close(tidesdb_instance);
     tidesdb_instance = NULL;
   }
-  
+
   sql_print_information("TidesDB: Storage engine shutdown");
 
   DBUG_RETURN(error);
@@ -465,7 +466,7 @@ static void set_thd_txn(THD *thd, handlerton *hton, tidesdb_txn_t *txn)
 /**
   @brief
   Commit a transaction.
-  
+
   Called by MySQL when COMMIT is issued or when auto-commit commits
   a statement. For multi-statement transactions, this commits the
   THD-level transaction.
@@ -473,16 +474,16 @@ static void set_thd_txn(THD *thd, handlerton *hton, tidesdb_txn_t *txn)
 static int tidesdb_commit(THD *thd, bool all)
 {
   DBUG_ENTER("tidesdb_commit");
-  
+
   tidesdb_txn_t *txn = get_thd_txn(thd, tidesdb_hton);
-  
+
   if (txn && all)
   {
     /* Commit the THD-level transaction */
     int ret = tidesdb_txn_commit(txn);
     tidesdb_txn_free(txn);
     set_thd_txn(thd, tidesdb_hton, NULL);
-    
+
     if (ret != TDB_SUCCESS)
     {
       sql_print_error("TidesDB: Failed to commit transaction: %d", ret);
@@ -490,30 +491,30 @@ static int tidesdb_commit(THD *thd, bool all)
     }
     DBUG_PRINT("info", ("TidesDB: Transaction committed"));
   }
-  
+
   DBUG_RETURN(0);
 }
 
 /**
   @brief
   Rollback a transaction.
-  
+
   Called by MySQL when ROLLBACK is issued. For multi-statement
   transactions, this rolls back the THD-level transaction.
 */
 static int tidesdb_rollback(THD *thd, bool all)
 {
   DBUG_ENTER("tidesdb_rollback");
-  
+
   tidesdb_txn_t *txn = get_thd_txn(thd, tidesdb_hton);
-  
+
   if (txn && all)
   {
     /* Rollback the THD-level transaction */
     int ret = tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
     set_thd_txn(thd, tidesdb_hton, NULL);
-    
+
     if (ret != TDB_SUCCESS)
     {
       sql_print_error("TidesDB: Failed to rollback transaction: %d", ret);
@@ -521,17 +522,17 @@ static int tidesdb_rollback(THD *thd, bool all)
     }
     DBUG_PRINT("info", ("TidesDB: Transaction rolled back"));
   }
-  
+
   DBUG_RETURN(0);
 }
 
 /*
   XA Transaction Support
-  
+
   TidesDB supports XA (eXtended Architecture) distributed transactions
   for 2-phase commit protocol. This allows TidesDB to participate in
   distributed transactions coordinated by an external transaction manager.
-  
+
   Note: tidesdb_xa_txn_t, tidesdb_prepared_xids, and tidesdb_xa_mutex
   are defined at the top of the file for use in shutdown cleanup.
 */
@@ -539,7 +540,7 @@ static int tidesdb_rollback(THD *thd, bool all)
 /**
   @brief
   Prepare a transaction for XA 2-phase commit.
-  
+
   This is called during the first phase of 2PC. The transaction
   is prepared but not yet committed. It can be committed or rolled
   back later using commit_by_xid or rollback_by_xid.
@@ -547,34 +548,34 @@ static int tidesdb_rollback(THD *thd, bool all)
 static int tidesdb_xa_prepare(THD *thd, bool all)
 {
   DBUG_ENTER("tidesdb_xa_prepare");
-  
+
   tidesdb_txn_t *txn = get_thd_txn(thd, tidesdb_hton);
-  
+
   if (!txn)
   {
     /* No active transaction -- nothing to prepare */
     DBUG_RETURN(0);
   }
-  
+
   if (!all)
   {
     /* Statement-level prepare -- just return success */
     DBUG_RETURN(0);
   }
-  
-  /* 
+
+  /*
     For XA PREPARE, we need to:
     1. Flush the transaction to WAL (ensures durability)
     2. Keep the transaction in prepared state
     3. Store the XID for later recovery
   */
-  
+
   /* Get the XID from the THD */
   const XID *xid = thd->get_xid();
-  
+
   /* Store the prepared transaction for potential recovery */
   pthread_mutex_lock(&tidesdb_xa_mutex);
-  
+
   tidesdb_xa_txn_t *xa_txn = (tidesdb_xa_txn_t *)my_malloc(PSI_INSTRUMENT_ME,
                                                            sizeof(tidesdb_xa_txn_t),
                                                            MYF(MY_WME | MY_ZEROFILL));
@@ -585,45 +586,45 @@ static int tidesdb_xa_prepare(THD *thd, bool all)
     xa_txn->next = tidesdb_prepared_xids;
     tidesdb_prepared_xids = xa_txn;
   }
-  
+
   pthread_mutex_unlock(&tidesdb_xa_mutex);
-  
-  /* 
+
+  /*
     Note: TidesDB transactions are already durable when operations are performed.
     The prepare phase just marks the transaction as ready for commit.
     We keep the transaction handle for later commit/rollback by XID.
   */
-  
+
   /* Don't free the transaction -- it will be committed/rolled back by XID */
   set_thd_txn(thd, tidesdb_hton, NULL);
-  
+
   sql_print_information("TidesDB: XA transaction prepared");
-  
+
   DBUG_RETURN(0);
 }
 
 /**
   @brief
   Recover prepared XA transactions after crash.
-  
+
   This is called during server startup to find any transactions
   that were prepared but not yet committed before a crash.
-  
+
   @return Number of prepared transactions found
 */
 static int tidesdb_xa_recover(XID *xid_list, uint len)
 {
   DBUG_ENTER("tidesdb_xa_recover");
-  
+
   if (len == 0 || xid_list == NULL)
   {
     DBUG_RETURN(0);
   }
-  
+
   uint count = 0;
-  
+
   pthread_mutex_lock(&tidesdb_xa_mutex);
-  
+
   tidesdb_xa_txn_t *xa_txn = tidesdb_prepared_xids;
   while (xa_txn && count < len)
   {
@@ -631,38 +632,38 @@ static int tidesdb_xa_recover(XID *xid_list, uint len)
     count++;
     xa_txn = xa_txn->next;
   }
-  
+
   pthread_mutex_unlock(&tidesdb_xa_mutex);
-  
+
   if (count > 0)
   {
     sql_print_information("TidesDB: Recovered %u prepared XA transactions", count);
   }
-  
+
   DBUG_RETURN(count);
 }
 
 /**
   @brief
   Commit a prepared XA transaction by XID.
-  
+
   This is called to commit a transaction that was previously prepared.
 */
 static int tidesdb_commit_by_xid(XID *xid)
 {
   DBUG_ENTER("tidesdb_commit_by_xid");
-  
+
   if (!xid)
   {
     DBUG_RETURN(XAER_INVAL);
   }
-  
+
   pthread_mutex_lock(&tidesdb_xa_mutex);
-  
+
   /* Find the prepared transaction by XID */
   tidesdb_xa_txn_t *xa_txn = tidesdb_prepared_xids;
   tidesdb_xa_txn_t *prev = NULL;
-  
+
   while (xa_txn)
   {
     if (memcmp(&xa_txn->xid, xid, sizeof(XID)) == 0)
@@ -672,15 +673,15 @@ static int tidesdb_commit_by_xid(XID *xid)
         prev->next = xa_txn->next;
       else
         tidesdb_prepared_xids = xa_txn->next;
-      
+
       pthread_mutex_unlock(&tidesdb_xa_mutex);
-      
+
       /* Commit the transaction */
       if (xa_txn->txn)
       {
         int ret = tidesdb_txn_commit(xa_txn->txn);
         tidesdb_txn_free(xa_txn->txn);
-        
+
         if (ret != TDB_SUCCESS)
         {
           sql_print_error("TidesDB: XA commit failed: %d", ret);
@@ -688,7 +689,7 @@ static int tidesdb_commit_by_xid(XID *xid)
           DBUG_RETURN(XAER_RMERR);
         }
       }
-      
+
       my_free(xa_txn);
       sql_print_information("TidesDB: XA transaction committed by XID");
       DBUG_RETURN(XA_OK);
@@ -696,9 +697,9 @@ static int tidesdb_commit_by_xid(XID *xid)
     prev = xa_txn;
     xa_txn = xa_txn->next;
   }
-  
+
   pthread_mutex_unlock(&tidesdb_xa_mutex);
-  
+
   /* Transaction not found */
   DBUG_RETURN(XAER_NOTA);
 }
@@ -706,24 +707,24 @@ static int tidesdb_commit_by_xid(XID *xid)
 /**
   @brief
   Rollback a prepared XA transaction by XID.
-  
+
   This is called to rollback a transaction that was previously prepared.
 */
 static int tidesdb_rollback_by_xid(XID *xid)
 {
   DBUG_ENTER("tidesdb_rollback_by_xid");
-  
+
   if (!xid)
   {
     DBUG_RETURN(XAER_INVAL);
   }
-  
+
   pthread_mutex_lock(&tidesdb_xa_mutex);
-  
+
   /* Find the prepared transaction by XID */
   tidesdb_xa_txn_t *xa_txn = tidesdb_prepared_xids;
   tidesdb_xa_txn_t *prev = NULL;
-  
+
   while (xa_txn)
   {
     if (memcmp(&xa_txn->xid, xid, sizeof(XID)) == 0)
@@ -733,15 +734,15 @@ static int tidesdb_rollback_by_xid(XID *xid)
         prev->next = xa_txn->next;
       else
         tidesdb_prepared_xids = xa_txn->next;
-      
+
       pthread_mutex_unlock(&tidesdb_xa_mutex);
-      
+
       /* Rollback the transaction */
       if (xa_txn->txn)
       {
         int ret = tidesdb_txn_rollback(xa_txn->txn);
         tidesdb_txn_free(xa_txn->txn);
-        
+
         if (ret != TDB_SUCCESS)
         {
           sql_print_error("TidesDB: XA rollback failed: %d", ret);
@@ -749,7 +750,7 @@ static int tidesdb_rollback_by_xid(XID *xid)
           DBUG_RETURN(XAER_RMERR);
         }
       }
-      
+
       my_free(xa_txn);
       sql_print_information("TidesDB: XA transaction rolled back by XID");
       DBUG_RETURN(XA_OK);
@@ -757,9 +758,9 @@ static int tidesdb_rollback_by_xid(XID *xid)
     prev = xa_txn;
     xa_txn = xa_txn->next;
   }
-  
+
   pthread_mutex_unlock(&tidesdb_xa_mutex);
-  
+
   /* Transaction not found */
   DBUG_RETURN(XAER_NOTA);
 }
@@ -767,22 +768,22 @@ static int tidesdb_rollback_by_xid(XID *xid)
 /**
   @brief
   Set a transaction savepoint.
-  
+
   Creates a savepoint in the current TidesDB transaction using
   tidesdb_txn_savepoint().
 */
 static int tidesdb_savepoint_set(THD *thd, void *savepoint)
 {
   DBUG_ENTER("tidesdb_savepoint_set");
-  
+
   tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)savepoint;
-  
+
   /* Generate a unique savepoint name from the pointer address */
   snprintf(sp->name, sizeof(sp->name), "sp_%lx", (ulong)savepoint);
-  
+
   /* Get the current transaction for this thread */
   tidesdb_txn_t *txn = get_thd_txn(thd, tidesdb_hton);
-  
+
   if (txn)
   {
     int ret = tidesdb_txn_savepoint(txn, sp->name);
@@ -797,26 +798,26 @@ static int tidesdb_savepoint_set(THD *thd, void *savepoint)
   {
     sp->txn = NULL;
   }
-  
+
   DBUG_RETURN(0);
 }
 
 /**
   @brief
   Rollback to a transaction savepoint.
-  
+
   Rolls back all changes made after the savepoint was set using
   tidesdb_txn_rollback_to_savepoint().
 */
 static int tidesdb_savepoint_rollback(THD *thd, void *savepoint)
 {
   DBUG_ENTER("tidesdb_savepoint_rollback");
-  
+
   tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)savepoint;
-  
+
   /* Get the current transaction for this thread */
   tidesdb_txn_t *txn = get_thd_txn(thd, tidesdb_hton);
-  
+
   if (txn)
   {
     int ret = tidesdb_txn_rollback_to_savepoint(txn, sp->name);
@@ -826,26 +827,26 @@ static int tidesdb_savepoint_rollback(THD *thd, void *savepoint)
       DBUG_RETURN(HA_ERR_NO_SAVEPOINT);
     }
   }
-  
+
   DBUG_RETURN(0);
 }
 
 /**
   @brief
   Release a transaction savepoint.
-  
+
   Releases the savepoint without rolling back using
   tidesdb_txn_release_savepoint().
 */
 static int tidesdb_savepoint_release(THD *thd, void *savepoint)
 {
   DBUG_ENTER("tidesdb_savepoint_release");
-  
+
   tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)savepoint;
-  
+
   /* Get the current transaction for this thread */
   tidesdb_txn_t *txn = get_thd_txn(thd, tidesdb_hton);
-  
+
   if (txn)
   {
     /* Release savepoint in TidesDB */
@@ -862,14 +863,14 @@ static int tidesdb_savepoint_release(THD *thd, void *savepoint)
     /* No active transaction -- nothing to release */
     DBUG_PRINT("info", ("TidesDB: No active transaction for savepoint release"));
   }
-  
+
   DBUG_RETURN(0);
 }
 
 /**
   @brief
   Show TidesDB engine status.
-  
+
   Called by SHOW ENGINE TIDESDB STATUS.
 */
 static bool tidesdb_show_status(handlerton *hton, THD *thd,
@@ -877,12 +878,12 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd,
                                 enum ha_stat_type stat_type)
 {
   DBUG_ENTER("tidesdb_show_status");
-  
+
   if (stat_type != HA_ENGINE_STATUS)
   {
     DBUG_RETURN(FALSE);
   }
-  
+
   const size_t buf_size = 16384;
   char *buf = (char *)my_malloc(PSI_INSTRUMENT_ME, buf_size, MYF(MY_WME));
   if (!buf)
@@ -6134,7 +6135,7 @@ int ha_tidesdb::check(THD* thd, HA_CHECK_OPT* check_opt)
   {
     DBUG_RETURN(HA_ADMIN_FAILED);
   }
-  
+
   tidesdb_iter_t *iter = NULL;
   ret = tidesdb_iter_new(txn, share->cf, &iter);
   if (ret != TDB_SUCCESS)
@@ -6142,26 +6143,26 @@ int ha_tidesdb::check(THD* thd, HA_CHECK_OPT* check_opt)
     tidesdb_txn_free(txn);
     DBUG_RETURN(HA_ADMIN_FAILED);
   }
-  
+
   ha_rows count = 0;
   tidesdb_iter_seek_to_first(iter);
-  
+
   while (tidesdb_iter_valid(iter))
   {
     count++;
     tidesdb_iter_next(iter);
   }
-  
+
   tidesdb_iter_free(iter);
   tidesdb_txn_free(txn);
-  
+
   /* Update row count cache */
   share->row_count = count;
   share->row_count_valid = true;
-  
-  sql_print_information("TidesDB: Table check completed, %lu rows verified", 
+
+  sql_print_information("TidesDB: Table check completed, %lu rows verified",
                         (ulong)count);
-  
+
   DBUG_RETURN(HA_ADMIN_OK);
 }
 
@@ -6172,79 +6173,183 @@ int ha_tidesdb::check(THD* thd, HA_CHECK_OPT* check_opt)
 int ha_tidesdb::repair(THD* thd, HA_CHECK_OPT* check_opt)
 {
   DBUG_ENTER("ha_tidesdb::repair");
-  
+
   if (!share || !share->cf)
   {
     DBUG_RETURN(HA_ADMIN_FAILED);
   }
-  
+
   /* First flush the memtable */
   int ret = tidesdb_flush_memtable(share->cf);
   if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
   {
     sql_print_warning("TidesDB: Memtable flush returned: %d", ret);
   }
-  
+
   /* TidesDB's compaction removes tombstones and merges data */
   ret = tidesdb_compact(share->cf);
   if (ret != TDB_SUCCESS)
   {
     sql_print_warning("TidesDB: Repair (compaction) returned: %d (non-fatal)", ret);
   }
-  
+
   sql_print_information("TidesDB: Table repair completed");
-  
+
   DBUG_RETURN(HA_ADMIN_OK);
 }
 
 /**
   @brief
   Discard or import tablespace.
-  
+
   For TidesDB, this allows exporting/importing column family data.
-  -- discard=TRUE: Prepare table for import (flush and close CF)
-  -- discard=FALSE: Import tablespace data
+  Similar to InnoDB's approach:
+
+  DISCARD (discard=TRUE):
+    1. Flush memtable to ensure all data is on disk
+    2. Drop the column family (closes handles, releases files)
+    3. Mark table as discarded
+    4. User can now copy/replace the CF directory files
+
+  IMPORT (discard=FALSE):
+    1. Verify table was previously discarded
+    2. Recreate column family (picks up new files)
+    3. Clear discarded flag
 */
 int ha_tidesdb::discard_or_import_tablespace(my_bool discard)
 {
   DBUG_ENTER("ha_tidesdb::discard_or_import_tablespace");
-  
-  if (!share || !share->cf)
+
+  if (!share)
   {
     DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
   }
-  
+
+  char cf_name[256];
+  get_cf_name(share->table_name, cf_name, sizeof(cf_name));
+
   if (discard)
   {
-    /* Discard tablespace -- flush all data to disk */
-    sql_print_information("TidesDB: Discarding tablespace for table");
-    
-    int ret = tidesdb_flush_memtable(share->cf);
+    /* Already discarded? */
+    if (share->tablespace_discarded)
+    {
+      sql_print_warning("TidesDB: Tablespace already discarded for %s", cf_name);
+      DBUG_RETURN(0);
+    }
+
+    /* Flush memtable to ensure all data is persisted */
+    if (share->cf)
+    {
+      sql_print_information("TidesDB: Flushing memtable for %s", cf_name);
+      int ret = tidesdb_flush_memtable(share->cf);
+      if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
+      {
+        sql_print_warning("TidesDB: Flush returned: %d", ret);
+      }
+    }
+
+    /* Drop the column family to release file handles */
+    sql_print_information("TidesDB: Dropping column family %s for DISCARD", cf_name);
+    int ret = tidesdb_drop_column_family(tidesdb_instance, cf_name);
     if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
     {
-      sql_print_warning("TidesDB: Flush during discard returned: %d", ret);
+      sql_print_error("TidesDB: Failed to drop column family for DISCARD: %d", ret);
+      DBUG_RETURN(HA_ERR_GENERIC);
     }
-    
-    /* Mark table as discarded -- data files can now be replaced */
-    sql_print_information("TidesDB: Tablespace discarded - data files can be replaced");
+
+    /* Also drop secondary index column families */
+    for (uint i = 0; i < table->s->keys; i++)
+    {
+      char idx_cf_name[256];
+      snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%u", cf_name, i);
+      tidesdb_drop_column_family(tidesdb_instance, idx_cf_name);
+    }
+
+    /* Drop fulltext index column families */
+    for (uint i = 0; i < share->num_ft_indexes; i++)
+    {
+      char ft_cf_name[256];
+      snprintf(ft_cf_name, sizeof(ft_cf_name), "%s_ft_%u", cf_name, share->ft_key_nr[i]);
+      tidesdb_drop_column_family(tidesdb_instance, ft_cf_name);
+    }
+
+    /* Drop spatial index column families */
+    for (uint i = 0; i < share->num_spatial_indexes; i++)
+    {
+      char spatial_cf_name[256];
+      snprintf(spatial_cf_name, sizeof(spatial_cf_name), "%s_spatial_%u", cf_name, share->spatial_key_nr[i]);
+      tidesdb_drop_column_family(tidesdb_instance, spatial_cf_name);
+    }
+
+    /* Mark as discarded and clear CF handle */
+    share->cf = NULL;
+    share->tablespace_discarded = true;
+
+    sql_print_information("TidesDB: Tablespace discarded for %s - "
+                          "copy new data files to CF directory, then run IMPORT TABLESPACE",
+                          cf_name);
   }
   else
   {
-    /* Import tablespace -- reload column family */
-    sql_print_information("TidesDB: Importing tablespace for table");
-    
-    char cf_name[256];
-    get_cf_name(share->table_name, cf_name, sizeof(cf_name));
-    
-    /* Re-get the column family handle after import */
+    /* IMPORT TABLESPACE */
+
+    /* Must be discarded first (like InnoDB) */
+    if (!share->tablespace_discarded)
+    {
+      sql_print_error("TidesDB: Cannot import - tablespace not discarded. "
+                      "Run ALTER TABLE ... DISCARD TABLESPACE first.");
+      DBUG_RETURN(HA_ERR_TABLESPACE_EXISTS);
+    }
+
+    sql_print_information("TidesDB: Importing tablespace for %s", cf_name);
+
+    /* Recreate the column family - this will pick up any new files */
+    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
+    cf_config.write_buffer_size = tidesdb_write_buffer_size;
+    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
+    cf_config.bloom_fpr = tidesdb_bloom_fpr;
+    cf_config.level_size_ratio = tidesdb_level_size_ratio;
+    cf_config.skip_list_max_level = tidesdb_skip_list_max_level;
+    cf_config.enable_block_indexes = tidesdb_enable_block_indexes ? 1 : 0;
+    cf_config.sync_mode = tidesdb_sync_mode;
+
+    if (tidesdb_enable_compression)
+      cf_config.compression_algo = (compression_algorithm)tidesdb_compression_algo;
+    else
+      cf_config.compression_algo = NO_COMPRESSION;
+
+    int ret = tidesdb_create_column_family(tidesdb_instance, cf_name, &cf_config);
+    if (ret != TDB_SUCCESS && ret != TDB_ERR_EXISTS)
+    {
+      sql_print_error("TidesDB: Failed to create column family for IMPORT: %d", ret);
+      DBUG_RETURN(HA_ERR_TABLESPACE_MISSING);
+    }
+
+    /* Get the new column family handle */
     share->cf = tidesdb_get_column_family(tidesdb_instance, cf_name);
     if (!share->cf)
     {
-      sql_print_error("TidesDB: Failed to import tablespace - column family not found");
+      sql_print_error("TidesDB: Failed to get column family after IMPORT");
       DBUG_RETURN(HA_ERR_TABLESPACE_MISSING);
     }
-    
-    sql_print_information("TidesDB: Tablespace imported successfully");
+
+    /* Recreate secondary index column families */
+    for (uint i = 0; i < table->s->keys; i++)
+    {
+      if (i == table->s->primary_key)
+        continue;
+
+      char idx_cf_name[256];
+      snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%u", cf_name, i);
+      tidesdb_create_column_family(tidesdb_instance, idx_cf_name, &cf_config);
+
+      share->index_cf[i] = tidesdb_get_column_family(tidesdb_instance, idx_cf_name);
+    }
+
+    /* Clear discarded flag */
+    share->tablespace_discarded = false;
+
+    sql_print_information("TidesDB: Tablespace imported successfully for %s", cf_name);
   }
   
   DBUG_RETURN(0);
