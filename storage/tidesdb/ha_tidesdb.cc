@@ -1812,13 +1812,13 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
     ref_length = 8;  /* Hidden 8-byte PK */
   }
   
-  /* Check for TTL column (_tidesdb_ttl or _ttl) */
+  /* Check for TTL column (TTL is the primary name, _ttl for backwards compatibility) */
   share->ttl_field_index = -1;
   for (uint i = 0; i < table->s->fields; i++)
   {
     Field *field = table->field[i];
     const char *field_name = field->field_name;
-    if (strcasecmp(field_name, "_tidesdb_ttl") == 0 ||
+    if (strcasecmp(field_name, "TTL") == 0 ||
         strcasecmp(field_name, "_ttl") == 0)
     {
       /* Found TTL column - must be an integer type */

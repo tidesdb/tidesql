@@ -97,17 +97,17 @@ To make TidesDB the default for new tables, start the server with:
 
 ## TTL (Time-to-Live) Support
 
-TidesDB supports automatic row expiration using a special `_ttl` column.
+TidesDB supports automatic row expiration using a `TTL` column.
 
 ### Creating a Table with TTL
 
 ```sql
--- Add a _ttl column (INT type) to enable per-row TTL
+-- Add a TTL column (INT type) to enable per-row TTL
 CREATE TABLE sessions (
   id INT PRIMARY KEY,
   user_id INT,
   session_data TEXT,
-  _ttl INT DEFAULT 0  -- TTL in seconds (0 = no expiration)
+  TTL INT DEFAULT 0  -- TTL in seconds (0 = no expiration)
 ) ENGINE=TidesDB;
 ```
 
@@ -115,15 +115,15 @@ CREATE TABLE sessions (
 
 ```sql
 -- Row expires in 60 seconds
-INSERT INTO sessions (id, user_id, session_data, _ttl) 
+INSERT INTO sessions (id, user_id, session_data, TTL) 
 VALUES (1, 100, 'session data', 60);
 
 -- Row expires in 1 hour (3600 seconds)
-INSERT INTO sessions (id, user_id, session_data, _ttl) 
+INSERT INTO sessions (id, user_id, session_data, TTL) 
 VALUES (2, 101, 'session data', 3600);
 
 -- Row never expires (TTL = 0 or NULL)
-INSERT INTO sessions (id, user_id, session_data, _ttl) 
+INSERT INTO sessions (id, user_id, session_data, TTL) 
 VALUES (3, 102, 'permanent data', 0);
 ```
 
@@ -135,20 +135,20 @@ VALUES (3, 102, 'permanent data', 0);
 | `0` | Row never expires |
 | `NULL` | Row never expires |
 
-**Column naming:** Use `_ttl` or `_tidesdb_ttl`
+**Column naming:** Use `TTL` (or `_ttl` for backwards compatibility)
 
 **Column type:** Must be an integer type (INT, BIGINT, SMALLINT, TINYINT)
 
 ### Updating TTL
 
 ```sql
--- Extend session TTL by updating the _ttl column
-UPDATE sessions SET _ttl = 7200 WHERE id = 1;  -- Now expires in 2 hours
+-- Extend session TTL by updating the TTL column
+UPDATE sessions SET TTL = 7200 WHERE id = 1;  -- Now expires in 2 hours
 ```
 
 ### Global Default TTL
 
-For tables without a `_ttl` column, you can set a global default:
+For tables without a `TTL` column, you can set a global default:
 
 ```sql
 SET GLOBAL tidesdb_default_ttl = 3600;  -- 1 hour default for all new rows
