@@ -1,0 +1,113 @@
+--echo #
+--echo # TidesDB Virtual/Generated Columns Tests
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Virtual column (computed on read)
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  first_name VARCHAR(50),
+  last_name VARCHAR(50),
+  full_name VARCHAR(101) AS (CONCAT(first_name, ' ', last_name)) VIRTUAL
+) ENGINE=TidesDB;
+
+INSERT INTO t1 (id, first_name, last_name) VALUES (1, 'John', 'Doe');
+INSERT INTO t1 (id, first_name, last_name) VALUES (2, 'Jane', 'Smith');
+INSERT INTO t1 (id, first_name, last_name) VALUES (3, 'Bob', 'Johnson');
+
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 2: Stored generated column (computed on write)
+CREATE TABLE t2 (
+  id INT PRIMARY KEY,
+  price DECIMAL(10,2),
+  quantity INT,
+  total DECIMAL(12,2) AS (price * quantity) STORED
+) ENGINE=TidesDB;
+
+INSERT INTO t2 (id, price, quantity) VALUES (1, 10.50, 5);
+INSERT INTO t2 (id, price, quantity) VALUES (2, 25.00, 3);
+INSERT INTO t2 (id, price, quantity) VALUES (3, 7.99, 10);
+
+SELECT * FROM t2 ORDER BY id;
+
+--echo # Test 3: Virtual column with mathematical expression
+CREATE TABLE t3 (
+  id INT PRIMARY KEY,
+  radius DOUBLE,
+  area DOUBLE AS (PI() * radius * radius) VIRTUAL,
+  circumference DOUBLE AS (2 * PI() * radius) VIRTUAL
+) ENGINE=TidesDB;
+
+INSERT INTO t3 (id, radius) VALUES (1, 5.0);
+INSERT INTO t3 (id, radius) VALUES (2, 10.0);
+INSERT INTO t3 (id, radius) VALUES (3, 2.5);
+
+SELECT id, radius, ROUND(area, 2) AS area, ROUND(circumference, 2) AS circumference FROM t3 ORDER BY id;
+
+--echo # Test 4: Update base column and verify virtual column updates
+UPDATE t1 SET first_name = 'Jonathan' WHERE id = 1;
+SELECT * FROM t1 WHERE id = 1;
+
+--echo # Test 5: Virtual column with date functions
+CREATE TABLE t4 (
+  id INT PRIMARY KEY,
+  birth_date DATE,
+  age INT AS (TIMESTAMPDIFF(YEAR, birth_date, CURDATE())) VIRTUAL
+) ENGINE=TidesDB;
+
+INSERT INTO t4 (id, birth_date) VALUES (1, '1990-05-15');
+INSERT INTO t4 (id, birth_date) VALUES (2, '2000-12-01');
+
+SELECT id, birth_date FROM t4 ORDER BY id;
+
+--echo # Test 6: Stored generated column with index
+CREATE TABLE t5 (
+  id INT PRIMARY KEY,
+  email VARCHAR(100),
+  email_domain VARCHAR(100) AS (SUBSTRING_INDEX(email, '@', -1)) STORED,
+  INDEX idx_domain (email_domain)
+) ENGINE=TidesDB;
+
+INSERT INTO t5 (id, email) VALUES (1, 'user1@gmail.com');
+INSERT INTO t5 (id, email) VALUES (2, 'user2@yahoo.com');
+INSERT INTO t5 (id, email) VALUES (3, 'user3@gmail.com');
+INSERT INTO t5 (id, email) VALUES (4, 'user4@hotmail.com');
+
+SELECT * FROM t5 WHERE email_domain = 'gmail.com' ORDER BY id;
+
+--echo # Test 7: Virtual column in WHERE clause
+SELECT * FROM t2 WHERE total > 50 ORDER BY id;
+
+--echo # Test 8: Multiple virtual columns
+CREATE TABLE t6 (
+  id INT PRIMARY KEY,
+  a INT,
+  b INT,
+  sum_ab INT AS (a + b) VIRTUAL,
+  diff_ab INT AS (a - b) VIRTUAL,
+  prod_ab INT AS (a * b) VIRTUAL
+) ENGINE=TidesDB;
+
+INSERT INTO t6 (id, a, b) VALUES (1, 10, 5);
+INSERT INTO t6 (id, a, b) VALUES (2, 20, 8);
+INSERT INTO t6 (id, a, b) VALUES (3, 15, 15);
+
+SELECT * FROM t6 ORDER BY id;
+
+--echo # Cleanup
+DROP TABLE t1, t2, t3, t4, t5, t6;
+
+--echo #
+--echo # Virtual columns tests completed!
+--echo #

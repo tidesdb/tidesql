@@ -1,1 +1,0 @@
-../strings/is_prefix.c

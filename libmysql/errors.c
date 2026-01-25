@@ -1,1 +1,0 @@
-../mysys/errors.c

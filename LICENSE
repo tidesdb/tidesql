@@ -1,7 +1,8 @@
-TIDESQL
+TidesDB Storage Engine for MariaDB
 ===================================
 
-A pluggable storage engine for MariaDB using TidesDB
+A pluggable storage engine for MariaDB using TidesDB - an LSM-tree based
+embedded database with ACID transactions and MVCC concurrency control.
 
 
 INSTALLATION

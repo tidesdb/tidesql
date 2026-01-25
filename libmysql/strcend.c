@@ -1,1 +1,0 @@
-../strings/strcend.c

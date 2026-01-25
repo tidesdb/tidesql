@@ -1,1 +1,0 @@
-../libmysql/ctype-euc_kr.c

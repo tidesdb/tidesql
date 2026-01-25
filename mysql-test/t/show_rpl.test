@@ -1,3 +1,0 @@
-
-show global status like "rpl_count%";
-show global status like "rpl_seconds%";

@@ -1,1 +1,0 @@
-../libmysql/ctype-czech.c

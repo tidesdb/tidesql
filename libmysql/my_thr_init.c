@@ -1,1 +1,0 @@
-../mysys/my_thr_init.c

@@ -1,1 +1,0 @@
-../libmysql/ctype-gb2312.c

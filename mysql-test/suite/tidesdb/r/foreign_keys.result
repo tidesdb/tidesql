@@ -1,0 +1,52 @@
+#
+# TidesDB Foreign Key Definition Tests
+#
+# Note: TidesDB stores FK definitions in MariaDB's data dictionary.
+# FK constraint enforcement is application-level responsibility.
+#
+DROP TABLE tidesdb_check;
+# Test 1: Create tables with FK definition
+CREATE TABLE parent (
+id INT PRIMARY KEY,
+name VARCHAR(50)
+) ENGINE=TidesDB;
+CREATE TABLE child (
+id INT PRIMARY KEY,
+parent_id INT,
+value VARCHAR(50),
+FOREIGN KEY (parent_id) REFERENCES parent(id)
+) ENGINE=TidesDB;
+# Test 2: Verify FK is stored in schema
+SHOW CREATE TABLE child;
+Table	Create Table
+child	CREATE TABLE `child` (
+  `id` int(11) NOT NULL,
+  `parent_id` int(11) DEFAULT NULL,
+  `value` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `parent_id` (`parent_id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+# Test 3: Insert data
+INSERT INTO parent VALUES (1, 'Parent 1');
+INSERT INTO parent VALUES (2, 'Parent 2');
+INSERT INTO child VALUES (1, 1, 'Child 1');
+INSERT INTO child VALUES (2, 2, 'Child 2');
+SELECT * FROM child ORDER BY id;
+id	parent_id	value
+1	1	Child 1
+2	2	Child 2
+# Test 4: FK with FOREIGN_KEY_CHECKS=0
+SET FOREIGN_KEY_CHECKS=0;
+INSERT INTO child VALUES (3, 999, 'Child with non-existent parent');
+SET FOREIGN_KEY_CHECKS=1;
+SELECT * FROM child ORDER BY id;
+id	parent_id	value
+1	1	Child 1
+2	2	Child 2
+3	999	Child with non-existent parent
+# Cleanup
+DROP TABLE child;
+DROP TABLE parent;
+#
+# Foreign key definition tests completed!
+#

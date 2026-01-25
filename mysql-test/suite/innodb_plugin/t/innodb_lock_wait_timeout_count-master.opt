@@ -1,3 +1,0 @@
---innodb_file_per_table
---innodb_file_format=barracuda
---innodb_lock_wait_timeout=2

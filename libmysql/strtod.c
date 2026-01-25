@@ -1,1 +1,0 @@
-../strings/strtod.c

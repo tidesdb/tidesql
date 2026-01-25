@@ -1,1 +1,0 @@
-../strings/ctype-gb2312.c

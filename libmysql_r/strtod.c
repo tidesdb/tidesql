@@ -1,1 +1,0 @@
-../libmysql/strtod.c

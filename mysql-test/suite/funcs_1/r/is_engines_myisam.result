@@ -1,8 +1,0 @@
-SELECT * FROM information_schema.engines
-WHERE ENGINE = 'MyISAM';
-ENGINE	MyISAM
-SUPPORT	DEFAULT
-COMMENT	Default engine as of MySQL 3.23 with great performance
-TRANSACTIONS	NO
-XA	NO
-SAVEPOINTS	NO

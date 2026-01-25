@@ -1,1 +1,0 @@
-../strings/ctype-euc_kr.c

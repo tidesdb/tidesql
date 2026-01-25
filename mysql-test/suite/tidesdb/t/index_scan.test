@@ -1,0 +1,122 @@
+--echo #
+--echo # TidesDB index scan tests
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--disable_result_log
+CREATE TABLE t_check (id INT) ENGINE=TidesDB;
+DROP TABLE t_check;
+--enable_result_log
+--enable_query_log
+
+--echo #
+--echo # Test 1: Primary key ordered scan
+--echo #
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  val VARCHAR(50)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (5, 'five'), (1, 'one'), (3, 'three'), (2, 'two'), (4, 'four');
+
+--echo # Should return rows in primary key order
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Reverse order
+SELECT * FROM t1 ORDER BY id DESC;
+
+DROP TABLE t1;
+
+--echo #
+--echo # Test 2: Secondary index ordered scan
+--echo #
+
+CREATE TABLE t2 (
+  id INT PRIMARY KEY,
+  name VARCHAR(50),
+  INDEX idx_name (name)
+) ENGINE=TidesDB;
+
+INSERT INTO t2 VALUES (1, 'charlie'), (2, 'alice'), (3, 'bob'), (4, 'david'), (5, 'eve');
+
+--echo # Should return rows in name order using index
+SELECT id, name FROM t2 ORDER BY name;
+
+--echo # Range scan on secondary index
+SELECT id, name FROM t2 WHERE name >= 'bob' AND name <= 'david' ORDER BY name;
+
+DROP TABLE t2;
+
+--echo #
+--echo # Test 3: Index scan with LIMIT
+--echo #
+
+CREATE TABLE t3 (
+  id INT PRIMARY KEY,
+  score INT,
+  INDEX idx_score (score)
+) ENGINE=TidesDB;
+
+INSERT INTO t3 VALUES (1, 100), (2, 50), (3, 75), (4, 25), (5, 90);
+
+--echo # Top 3 scores
+SELECT id, score FROM t3 ORDER BY score DESC LIMIT 3;
+
+--echo # Bottom 2 scores
+SELECT id, score FROM t3 ORDER BY score LIMIT 2;
+
+DROP TABLE t3;
+
+--echo #
+--echo # Test 4: Composite index scan
+--echo #
+
+CREATE TABLE t4 (
+  id INT PRIMARY KEY,
+  category VARCHAR(20),
+  price DECIMAL(10,2),
+  INDEX idx_cat_price (category, price)
+) ENGINE=TidesDB;
+
+INSERT INTO t4 VALUES 
+  (1, 'electronics', 299.99),
+  (2, 'electronics', 99.99),
+  (3, 'books', 19.99),
+  (4, 'books', 29.99),
+  (5, 'electronics', 199.99);
+
+--echo # Scan by category and price
+SELECT id, category, price FROM t4 WHERE category = 'electronics' ORDER BY price;
+
+--echo # All items ordered by category, then price
+SELECT id, category, price FROM t4 ORDER BY category, price;
+
+DROP TABLE t4;
+
+--echo #
+--echo # Test 5: Index scan after updates
+--echo #
+
+CREATE TABLE t5 (
+  id INT PRIMARY KEY,
+  val INT,
+  INDEX idx_val (val)
+) ENGINE=TidesDB;
+
+INSERT INTO t5 VALUES (1, 10), (2, 20), (3, 30);
+
+--echo # Before update
+SELECT * FROM t5 ORDER BY val;
+
+UPDATE t5 SET val = 25 WHERE id = 1;
+
+--echo # After update - order should change
+SELECT * FROM t5 ORDER BY val;
+
+DROP TABLE t5;
+
+--echo #
+--echo # Index scan tests completed!
+--echo #
