@@ -2,9 +2,41 @@
 # TidesDB and InnoDB Concurrent Benchmark Script
 # Tests concurrent read/write workloads with multiple parallel connections
 
-MYSQL_BIN="${MYSQL_BIN:-/home/agpmastersystem/server-mariadb-12.1.2/build/client/mariadb}"
-SOCKET="${SOCKET:-/home/agpmastersystem/server-mariadb-12.1.2/build/mysql-test/var/tmp/mysqld.1.sock}"
-MYSQL_USER="${MYSQL_USER:-root}"
+echo "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░"
+echo "TidesDB Concurrent Benchmark Configuration"
+echo "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░"
+echo ""
+
+# Prompt for MySQL binary path
+echo "Enter path to MySQL/MariaDB client binary"
+echo "  (e.g., /usr/bin/mysql, /usr/local/mysql/bin/mysql, or for MariaDB build: /path/to/server-mariadb/build/client/mariadb)"
+read -p "MYSQL_BIN: " MYSQL_BIN
+if [ -z "$MYSQL_BIN" ]; then
+    echo "Error: MYSQL_BIN is required"
+    exit 1
+fi
+
+# Prompt for socket path
+echo ""
+echo "Enter path to MySQL/MariaDB socket"
+echo "  (e.g., /var/run/mysqld/mysqld.sock, /tmp/mysql.sock, or for MTR: /path/to/build/mysql-test/var/tmp/mysqld.1.sock)"
+read -p "SOCKET: " SOCKET
+if [ -z "$SOCKET" ]; then
+    echo "Error: SOCKET is required"
+    exit 1
+fi
+
+# Prompt for MySQL user
+echo ""
+echo "Enter MySQL/MariaDB user"
+echo "  (e.g., root, mysql, or your database user)"
+read -p "MYSQL_USER: " MYSQL_USER
+if [ -z "$MYSQL_USER" ]; then
+    echo "Error: MYSQL_USER is required"
+    exit 1
+fi
+
+echo ""
 ROW_COUNT="${ROW_COUNT:-10000}"
 THREADS="${THREADS:-4}"
 OUTPUT_FILE="${OUTPUT_FILE:-benchmark_concurrent_results.csv}"
