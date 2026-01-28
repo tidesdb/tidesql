@@ -122,7 +122,18 @@ typedef struct st_tidesdb_share
     uint num_fk;
 
     /* Tables that reference this table (parent FKs) -- for DELETE/UPDATE checks */
-    char referencing_tables[TIDESDB_MAX_FK][256]; /* "db.table" format */
+    char referencing_tables[TIDESDB_MAX_FK][256];  /* "db.table" format */
+    int referencing_fk_rules[TIDESDB_MAX_FK];      /* delete_rule for each referencing FK */
+    uint referencing_fk_cols[TIDESDB_MAX_FK][16];  /* FK column indices in child table */
+    uint referencing_fk_col_count[TIDESDB_MAX_FK]; /* Number of FK columns per reference */
+
+    /* Change buffer for secondary index updates */
+    struct
+    {
+        bool enabled;
+        uint pending_count;
+        pthread_mutex_t mutex;
+    } change_buffer;
     uint num_referencing;
 
     /* Tablespace state -- for DISCARD/IMPORT TABLESPACE */
@@ -208,6 +219,12 @@ class ha_tidesdb : public handler
     int check_fk_children_exist(const uchar *buf, tidesdb_txn_t *txn);
     int check_foreign_key_constraints_insert(const uchar *buf, tidesdb_txn_t *txn);
     int check_foreign_key_constraints_delete(const uchar *buf, tidesdb_txn_t *txn);
+    int execute_fk_cascade_delete(const uchar *buf, tidesdb_txn_t *txn);
+    int execute_fk_set_null(const uchar *buf, tidesdb_txn_t *txn);
+    int execute_fk_cascade_update(const uchar *old_buf, const uchar *new_buf, tidesdb_txn_t *txn,
+                                  uint ref_idx);
+    int check_foreign_key_constraints_update(const uchar *old_buf, const uchar *new_buf,
+                                             tidesdb_txn_t *txn);
 
     /* Spatial index helper methods (Z-order encoding) */
     uint64_t encode_zorder(double x, double y);
@@ -385,6 +402,23 @@ class ha_tidesdb : public handler
 
     /* Reset handler state */
     int reset(void);
+
+    /* Online DDL support */
+    enum_alter_inplace_result check_if_supported_inplace_alter(
+        TABLE *altered_table, Alter_inplace_info *ha_alter_info) override;
+
+   protected:
+    bool prepare_inplace_alter_table(TABLE *altered_table,
+                                     Alter_inplace_info *ha_alter_info) override;
+    bool inplace_alter_table(TABLE *altered_table, Alter_inplace_info *ha_alter_info) override;
+    bool commit_inplace_alter_table(TABLE *altered_table, Alter_inplace_info *ha_alter_info,
+                                    bool commit) override;
+
+   private:
+    /* Online DDL helper methods */
+    int add_index_inplace(TABLE *altered_table, Alter_inplace_info *ha_alter_info);
+    int drop_index_inplace(Alter_inplace_info *ha_alter_info);
+    int rebuild_secondary_index(uint key_nr, TABLE *altered_table);
 };
 
 #endif /* HA_TIDESDB_H */

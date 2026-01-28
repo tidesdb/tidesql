@@ -1,11 +1,11 @@
 TIDESQL
-===================================
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-A pluggable storage engine for MariaDB/MySQL using TidesDB
+A pluggable write and space optimized storage engine for MariaDB/MySQL using TidesDB.
 
 
 INSTALLATION
-============
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 1. Clone MariaDB server:
 
@@ -46,7 +46,7 @@ INSTALLATION
 
 
 FEATURES
-========
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 Core:
 - ACID transactions with commit, rollback, savepoints
@@ -60,14 +60,18 @@ Advanced:
 - XA distributed transactions (two-phase commit)
 - TTL (time-to-live) per-row expiration
 - Spatial indexes (Z-order/Morton code)
-- Foreign key constraint enforcement
+- Foreign key constraints (CASCADE, SET NULL)
 - Full-text search indexing
 - Virtual/generated columns
 - Online backup
+- Partitioning (RANGE, LIST, HASH, KEY)
+- Data-at-rest encryption
+- Online DDL for index operations
+- Change buffer for secondary indexes
 
 
 CONFIGURATION
-=============
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 All variables are prefixed with tidesdb_
 
@@ -90,7 +94,7 @@ Bloom Filters:
   bloom_fpr                 False positive rate 0.0-1.0 (default: 0.01)
 
 Durability:
-  sync_mode                 Sync mode: none/interval/full (default: interval)
+  sync_mode                 Sync mode: none/interval/full (default: full)
   sync_interval_us          Sync interval microseconds (default: 128000)
 
 Isolation:
@@ -127,10 +131,23 @@ Full-Text:
 
 Logging:
   log_level                 debug/info/warn/error/fatal/none (default: info)
+  log_to_file               Log to file instead of stderr (default: OFF)
+  log_truncation_at         Log file truncation size in bytes (default: 24MB)
+
+Encryption:
+  enable_encryption         Enable data-at-rest encryption (default: OFF)
+  encryption_key_id         Encryption key ID (default: 1)
+
+Change Buffer:
+  enable_change_buffer      Enable change buffer for secondary indexes (default: ON)
+  change_buffer_max_size    Max pending entries before flush (default: 1024)
+
+SSI (Serializable Snapshot Isolation):
+  active_txn_buffer_size    Buffer size for SSI conflict detection (default: 64KB)
 
 
 TESTING
-=======
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 Run all TidesDB tests:
 
@@ -145,26 +162,33 @@ Run with verbose output:
   ./mysql-test/mtr --suite=tidesdb --verbose
 
 Available tests:
+  auto_increment    - Auto-increment columns
+  backup            - Backup operations
   basic             - Basic CRUD operations
-  blob              - BLOB data types
-  compression       - Compression algorithms
+  bulk_insert       - Bulk insert performance
+  datatypes         - Data type handling
+  ddl               - DDL operations (CREATE, DROP, RENAME)
+  encryption        - Encryption configuration
+  fk_cascade        - Foreign key CASCADE/SET NULL
+  foreign_keys      - Foreign key definitions
   fulltext          - Full-text search
-  indexes           - Secondary indexes
-  isolation         - Transaction isolation levels
-  secondary_indexes - Secondary index operations
-  show_status       - SHOW ENGINE STATUS
+  index_operations  - Index create/drop
+  index_scan        - Index scan operations
+  maintenance       - OPTIMIZE, ANALYZE, CHECK
+  online_ddl        - Online ALTER TABLE
+  partitioning      - Table partitioning
+  secondary_index   - Secondary index operations
+  spatial           - Spatial data types
+  spatial_geometry  - Geometry functions
+  spatial_index     - Spatial indexing
   transactions      - Transaction commit/rollback
   ttl               - Time-to-live expiration
   virtual_columns   - Generated columns
-  spatial           - Spatial data types
-  backup            - Backup operations
   xa_transactions   - XA distributed transactions
-  foreign_keys      - Foreign key constraints
-  spatial_index     - Spatial indexing
 
 
 QUICK TEST
-==========
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
   CREATE TABLE t (id INT PRIMARY KEY, data VARCHAR(100)) ENGINE=TidesDB;
   INSERT INTO t VALUES (1, 'hello'), (2, 'world');
@@ -173,6 +197,6 @@ QUICK TEST
 
 
 LICENSE
-=======
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 GNU General Public License v2
