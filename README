@@ -1,7 +1,7 @@
 TIDESQL
 ===================================
 
-A pluggable storage engine for MariaDB using TidesDB
+A pluggable storage engine for MariaDB/MySQL using TidesDB
 
 
 INSTALLATION
