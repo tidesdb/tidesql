@@ -1,0 +1,99 @@
+--echo #
+--echo # TidesDB Composite Key Tests
+--echo #
+--echo # Tests for multi-column primary keys and indexes
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Composite PRIMARY KEY
+CREATE TABLE t1 (
+  a INT,
+  b INT,
+  c VARCHAR(100),
+  PRIMARY KEY (a, b)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 1, 'one-one');
+INSERT INTO t1 VALUES (1, 2, 'one-two');
+INSERT INTO t1 VALUES (2, 1, 'two-one');
+INSERT INTO t1 VALUES (2, 2, 'two-two');
+
+SELECT * FROM t1 ORDER BY a, b;
+
+--echo # Test 2: Lookup by full composite key
+SELECT * FROM t1 WHERE a = 1 AND b = 2;
+
+--echo # Test 3: Lookup by partial key (prefix)
+SELECT * FROM t1 WHERE a = 1 ORDER BY b;
+
+--echo # Test 4: Duplicate composite key error
+--error ER_DUP_KEY
+INSERT INTO t1 VALUES (1, 1, 'duplicate');
+
+--echo # Test 5: UPDATE with composite key
+UPDATE t1 SET c = 'updated' WHERE a = 1 AND b = 1;
+SELECT * FROM t1 ORDER BY a, b;
+
+--echo # Test 6: DELETE with composite key
+DELETE FROM t1 WHERE a = 2 AND b = 1;
+SELECT * FROM t1 ORDER BY a, b;
+
+--echo # Test 7: Composite secondary index
+DROP TABLE t1;
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  a INT,
+  b INT,
+  c VARCHAR(100),
+  INDEX idx_ab (a, b)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 10, 20, 'row1');
+INSERT INTO t1 VALUES (2, 10, 30, 'row2');
+INSERT INTO t1 VALUES (3, 20, 20, 'row3');
+INSERT INTO t1 VALUES (4, 20, 30, 'row4');
+
+--echo # Index lookup with full key
+SELECT * FROM t1 WHERE a = 10 AND b = 20;
+
+--echo # Index lookup with prefix
+SELECT * FROM t1 WHERE a = 10 ORDER BY b;
+
+--echo # Range scan on composite index
+SELECT * FROM t1 WHERE a >= 10 AND a <= 20 ORDER BY a, b;
+
+--echo # Test 8: Three-column composite key
+DROP TABLE t1;
+CREATE TABLE t1 (
+  a INT,
+  b INT,
+  c INT,
+  d VARCHAR(100),
+  PRIMARY KEY (a, b, c)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 1, 1, 'one');
+INSERT INTO t1 VALUES (1, 1, 2, 'two');
+INSERT INTO t1 VALUES (1, 2, 1, 'three');
+INSERT INTO t1 VALUES (2, 1, 1, 'four');
+
+SELECT * FROM t1 ORDER BY a, b, c;
+SELECT * FROM t1 WHERE a = 1 ORDER BY b, c;
+SELECT * FROM t1 WHERE a = 1 AND b = 1 ORDER BY c;
+
+--echo # Cleanup
+DROP TABLE t1;
+
+--echo #
+--echo # Composite key tests completed!
+--echo #

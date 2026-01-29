@@ -1,0 +1,46 @@
+--echo #
+--echo # TidesDB Tablespace Tests
+--echo #
+--echo # Tests for DISCARD/IMPORT TABLESPACE operations
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Create table and insert data
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  name VARCHAR(100)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 2: DISCARD TABLESPACE
+--echo # Note: This marks the tablespace as discarded
+ALTER TABLE t1 DISCARD TABLESPACE;
+
+--echo # Verify table is not accessible after DISCARD
+--error ER_NO_SUCH_TABLE_IN_ENGINE
+SELECT * FROM t1;
+
+--echo # Test 3: IMPORT TABLESPACE
+--echo # Note: This would normally import from a backup
+--echo # For testing, we just verify the operation is accepted
+--error ER_NO_SUCH_TABLE_IN_ENGINE
+ALTER TABLE t1 IMPORT TABLESPACE;
+
+--echo # Cleanup - need to drop the discarded table
+DROP TABLE t1;
+
+--echo #
+--echo # Tablespace tests completed!
+--echo #

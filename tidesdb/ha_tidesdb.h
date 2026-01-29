@@ -98,6 +98,7 @@ typedef struct st_tidesdb_share
     /* Auto-increment tracking */
     ulonglong auto_increment_value;
     pthread_mutex_t auto_inc_mutex;
+    bool auto_inc_loaded; /* Whether auto-increment was loaded from storage */
 
     /* Row count cache */
     ha_rows row_count;
@@ -122,10 +123,12 @@ typedef struct st_tidesdb_share
     uint num_fk;
 
     /* Tables that reference this table (parent FKs) -- for DELETE/UPDATE checks */
-    char referencing_tables[TIDESDB_MAX_FK][256];  /* "db.table" format */
-    int referencing_fk_rules[TIDESDB_MAX_FK];      /* delete_rule for each referencing FK */
-    uint referencing_fk_cols[TIDESDB_MAX_FK][16];  /* FK column indices in child table */
-    uint referencing_fk_col_count[TIDESDB_MAX_FK]; /* Number of FK columns per reference */
+    char referencing_tables[TIDESDB_MAX_FK][256];      /* "db.table" format */
+    int referencing_fk_rules[TIDESDB_MAX_FK];          /* delete_rule for each referencing FK */
+    uint referencing_fk_cols[TIDESDB_MAX_FK][16];      /* FK column indices in child table */
+    uint referencing_fk_col_count[TIDESDB_MAX_FK];     /* Number of FK columns per reference */
+    size_t referencing_fk_offsets[TIDESDB_MAX_FK][16]; /* Byte offset of each FK col in child row */
+    size_t referencing_fk_lengths[TIDESDB_MAX_FK][16]; /* Byte length of each FK column */
 
     /* Change buffer for secondary index updates */
     struct
@@ -232,6 +235,10 @@ class ha_tidesdb : public handler
     int create_spatial_index(const char *table_name, uint key_nr);
     int insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn);
     int delete_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn);
+
+    /* Auto-increment persistence */
+    void persist_auto_increment_value(ulonglong value);
+    void load_auto_increment_value();
 
    public:
     ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg);
@@ -418,7 +425,7 @@ class ha_tidesdb : public handler
     /* Online DDL helper methods */
     int add_index_inplace(TABLE *altered_table, Alter_inplace_info *ha_alter_info);
     int drop_index_inplace(Alter_inplace_info *ha_alter_info);
-    int rebuild_secondary_index(uint key_nr, TABLE *altered_table);
+    int rebuild_secondary_index(KEY *key_info, const char *key_name, TABLE *target_table);
 };
 
 #endif /* HA_TIDESDB_H */
