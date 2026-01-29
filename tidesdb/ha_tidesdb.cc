@@ -225,6 +225,7 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
         share->has_primary_key = false;
         share->pk_parts = 0;
         share->auto_increment_value = 1;
+        share->auto_inc_loaded = false; /* Will be loaded from metadata on first use */
         share->row_count = 0;
         share->row_count_valid = false;
         share->hidden_pk_value = 0; /* Will be loaded from metadata on open */
@@ -502,6 +503,11 @@ static int tidesdb_commit(THD *thd, bool all)
 
         if (ret != TDB_SUCCESS)
         {
+            if (ret == TDB_ERR_CONFLICT)
+            {
+                /* Transaction conflict -- tell MySQL to retry */
+                DBUG_RETURN(HA_ERR_LOCK_DEADLOCK);
+            }
             sql_print_error("TidesDB: Failed to commit transaction: %d", ret);
             DBUG_RETURN(HA_ERR_GENERIC);
         }
@@ -1643,6 +1649,108 @@ void ha_tidesdb::persist_hidden_pk_value(ulonglong value)
 
 /**
   @brief
+  Persist the auto-increment value to TidesDB metadata.
+*/
+void ha_tidesdb::persist_auto_increment_value(ulonglong value)
+{
+    if (!share || !share->cf || !tidesdb_instance) return;
+
+    static const char *meta_key = "\x00__auto_inc_max__";
+    size_t meta_key_len = 17;
+
+    uchar value_buf[8];
+    int8store(value_buf, value);
+
+    tidesdb_txn_t *txn = NULL;
+    if (tidesdb_txn_begin(tidesdb_instance, &txn) == TDB_SUCCESS)
+    {
+        tidesdb_txn_put(txn, share->cf, (uint8_t *)meta_key, meta_key_len, value_buf, 8, -1);
+        tidesdb_txn_commit(txn);
+        tidesdb_txn_free(txn);
+    }
+}
+
+/**
+  @brief
+  Load the auto-increment value from TidesDB metadata on table open.
+  If not found, scans the table to find the maximum existing auto-increment value.
+*/
+void ha_tidesdb::load_auto_increment_value()
+{
+    if (!share || !share->cf || !tidesdb_instance) return;
+
+    static const char *meta_key = "\x00__auto_inc_max__";
+    size_t meta_key_len = 17;
+
+    tidesdb_txn_t *txn = NULL;
+    if (tidesdb_txn_begin(tidesdb_instance, &txn) == TDB_SUCCESS)
+    {
+        uint8_t *value = NULL;
+        size_t value_len = 0;
+
+        if (tidesdb_txn_get(txn, share->cf, (uint8_t *)meta_key, meta_key_len, &value,
+                            &value_len) == TDB_SUCCESS &&
+            value_len == 8)
+        {
+            share->auto_increment_value = uint8korr(value);
+            tidesdb_free(value);
+        }
+        else
+        {
+            /* No persisted value -- scan table to find max auto-increment */
+            if (table && table->s->primary_key != MAX_KEY)
+            {
+                KEY *pk = &table->key_info[table->s->primary_key];
+                if (pk->user_defined_key_parts == 1)
+                {
+                    /* Single-column PK -- scan for max value */
+                    tidesdb_iter_t *iter = NULL;
+                    if (tidesdb_iter_new(txn, share->cf, &iter) == TDB_SUCCESS)
+                    {
+                        tidesdb_iter_seek_to_last(iter);
+                        while (tidesdb_iter_valid(iter))
+                        {
+                            uint8_t *key = NULL;
+                            size_t key_len = 0;
+                            if (tidesdb_iter_key(iter, &key, &key_len) == TDB_SUCCESS)
+                            {
+                                /* Skip metadata keys */
+                                if (key_len > 0 && key[0] == 0)
+                                {
+                                    tidesdb_iter_prev(iter);
+                                    continue;
+                                }
+                                /* Extract the integer value from the key */
+                                if (key_len >= 4)
+                                {
+                                    ulonglong max_val = 0;
+                                    if (key_len == 4)
+                                        max_val = uint4korr(key);
+                                    else if (key_len >= 8)
+                                        max_val = uint8korr(key);
+                                    if (max_val >= share->auto_increment_value)
+                                        share->auto_increment_value = max_val + 1;
+                                }
+                                break;
+                            }
+                            tidesdb_iter_prev(iter);
+                        }
+                        tidesdb_iter_free(iter);
+                    }
+                }
+            }
+        }
+
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+    }
+
+    /* Ensure at least 1 */
+    if (share->auto_increment_value == 0) share->auto_increment_value = 1;
+}
+
+/**
+  @brief
   Load the hidden PK max value from TidesDB metadata on table open.
   If not found, scans the table to find the maximum existing key.
 */
@@ -1735,7 +1843,7 @@ void ha_tidesdb::load_hidden_pk_value()
   The index key format is: index_columns + primary_key
   This ensures uniqueness even for non-unique indexes.
 
-  Note: This allocates a new buffer that the caller must free.
+  ** This allocates a new buffer that the caller must free.
 */
 int ha_tidesdb::build_index_key(uint idx, const uchar *buf, uchar **key, size_t *key_len)
 {
@@ -2007,10 +2115,17 @@ int ha_tidesdb::open_secondary_indexes(const char *table_name)
             continue;
         }
 
-        /* Try to open CF for this secondary index */
         snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%u", cf_name, i);
-
         share->index_cf[i] = tidesdb_get_column_family(tidesdb_instance, idx_cf_name);
+
+        if (!share->index_cf[i])
+        {
+            /* Try name-based convention (used by INPLACE ADD INDEX) */
+            snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%s", cf_name,
+                     table->key_info[i].name.str);
+            share->index_cf[i] = tidesdb_get_column_family(tidesdb_instance, idx_cf_name);
+        }
+
         if (share->index_cf[i])
         {
             share->num_indexes = i + 1;
@@ -2452,20 +2567,65 @@ int ha_tidesdb::parse_foreign_keys()
 
     if (ret == TDB_SUCCESS && ref_data && ref_data_len > 0)
     {
-        /* Parse referencing tables: format is "table1\0table2\0..." */
-        const char *ptr = (const char *)ref_data;
-        const char *end = ptr + ref_data_len;
+        /*
+          Parse referencing tables. Extended format:
+          For each referencing table:
+            -- table_name (null-terminated string)
+            -- num_cols (1 byte)
+            -- For each column:
+              -- col_idx (1 byte) -- column index in child table
+              -- offset (4 bytes) -- byte offset in child row
+              -- length (4 bytes) -- byte length of column
+            -- delete_rule (1 byte)
+            -- update_rule (1 byte)
+
+          Legacy format (for backward compatibility):
+            -- Just null-terminated table names
+        */
+        const uint8_t *ptr = ref_data;
+        const uint8_t *end = ptr + ref_data_len;
 
         while (ptr < end && share->num_referencing < TIDESDB_MAX_FK)
         {
-            size_t len = strnlen(ptr, end - ptr);
+            /* Read table name */
+            size_t len = strnlen((const char *)ptr, end - ptr);
             if (len == 0) break;
 
-            strncpy(share->referencing_tables[share->num_referencing], ptr, 255);
-            share->referencing_tables[share->num_referencing][255] = '\0';
-            share->num_referencing++;
-
+            uint ref_idx = share->num_referencing;
+            strncpy(share->referencing_tables[ref_idx], (const char *)ptr, 255);
+            share->referencing_tables[ref_idx][255] = '\0';
             ptr += len + 1;
+
+            /* Check if extended format follows (starts with non-zero byte for num_cols) */
+            if (ptr<end && * ptr> 0 && *ptr <= 16)
+            {
+                /* Extended format: read column metadata */
+                uint8_t num_cols = *ptr++;
+                share->referencing_fk_col_count[ref_idx] = num_cols;
+
+                for (uint c = 0; c < num_cols && ptr + 9 <= end; c++)
+                {
+                    share->referencing_fk_cols[ref_idx][c] = *ptr++;
+                    share->referencing_fk_offsets[ref_idx][c] = uint4korr(ptr);
+                    ptr += 4;
+                    share->referencing_fk_lengths[ref_idx][c] = uint4korr(ptr);
+                    ptr += 4;
+                }
+
+                /* Read rules */
+                if (ptr + 2 <= end)
+                {
+                    share->referencing_fk_rules[ref_idx] = (int8_t)*ptr++;
+                    ptr++; /* update_rule -- skip for now */
+                }
+            }
+            else
+            {
+                /* Legacy format: no column metadata available */
+                share->referencing_fk_col_count[ref_idx] = 0;
+            }
+
+            share->num_referencing++;
         }
 
         tidesdb_free(ref_data);
@@ -3138,11 +3298,16 @@ int ha_tidesdb::execute_fk_cascade_update(const uchar *old_buf, const uchar *new
                 /*
                   CASCADE UPDATE implementation:
 
-                  We need to update the FK column values in the child row
-                  from the old parent PK to the new parent PK.
+                  We need to update the FK column values in the child row from the
+                  old parent PK to the new parent PK. The FK columns in the child
+                  table store the parent's PK values.
 
-                  The FK columns are stored at specific offsets in the packed row.
-                  We copy the new PK bytes to those positions.
+                  Since we store rows using MySQL's native format, the FK column
+                  offsets are stored in share->referencing_fk_offsets[ref_idx][].
+                  These offsets were populated when the FK relationship was registered.
+
+                  For each FK column, we copy the corresponding bytes from new_pk
+                  to the child row at the stored offset.
                 */
 
                 /* Make a mutable copy of the child row */
@@ -3152,24 +3317,30 @@ int ha_tidesdb::execute_fk_cascade_update(const uchar *old_buf, const uchar *new
                 {
                     memcpy(modified_row, child_row, child_row_len);
 
-                    /* Get FK column info */
+                    /*
+                      Update FK column values in the child row.
+
+                      The FK columns reference the parent's PK columns. We need to
+                      copy the new PK values to the FK column positions in the child row.
+
+                      share->referencing_fk_offsets[ref_idx][c] = byte offset in child row
+                      share->referencing_fk_lengths[ref_idx][c] = byte length of column
+                    */
                     uint fk_col_count = share->referencing_fk_col_count[ref_idx];
-                    size_t pk_offset = 0;
+                    size_t src_offset = 0; /* Offset within new_pk */
 
-                    for (uint c = 0; c < fk_col_count && pk_offset < new_pk_len; c++)
+                    for (uint c = 0; c < fk_col_count && src_offset < new_pk_len; c++)
                     {
-                        uint col_idx = share->referencing_fk_cols[ref_idx][c];
+                        size_t dst_offset = share->referencing_fk_offsets[ref_idx][c];
+                        size_t col_len = share->referencing_fk_lengths[ref_idx][c];
 
-                        /*
-                          Copy the corresponding portion of new_pk to the FK column.
-                          This assumes FK columns are stored contiguously and match
-                          the parent PK structure.
-                        */
-                        uint byte_offset =
-                            col_idx; /* Simplified -- actual offset depends on field */
-
-                        /* For a proper implementation, we'd need the child table's field info */
-                        /* For now, update the FK index to point to new PK */
+                        /* Bounds check */
+                        if (dst_offset + col_len <= child_row_len &&
+                            src_offset + col_len <= new_pk_len)
+                        {
+                            memcpy(modified_row + dst_offset, new_pk + src_offset, col_len);
+                        }
+                        src_offset += col_len;
                     }
 
                     /* Write the modified row back to storage */
@@ -3816,7 +3987,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
     }
 
     /* Create secondary index column families */
-    /* Note: table_arg has the key definitions */
+    /*** table_arg has the key definitions */
     TABLE *saved_table = table;
     table = table_arg; /* Temporarily set for create_secondary_indexes */
     ret = create_secondary_indexes(name);
@@ -3863,6 +4034,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 /**
   @brief
   Delete a table (drop column family in TidesDB).
+  Also drops all secondary index, fulltext, and spatial index column families.
 */
 int ha_tidesdb::delete_table(const char *name)
 {
@@ -3871,7 +4043,45 @@ int ha_tidesdb::delete_table(const char *name)
     char cf_name[256];
     get_cf_name(name, cf_name, sizeof(cf_name));
 
-    int ret = tidesdb_drop_column_family(tidesdb_instance, cf_name);
+    /*
+      Drop secondary index column families.
+      We don't have access to table->s->keys here since the table may not be open,
+      so we try a reasonable range. tidesdb_drop_column_family returns
+      TDB_ERR_NOT_FOUND for non-existent CFs which is fine.
+    */
+    for (uint i = 0; i < 16; i++)
+    {
+        char idx_cf_name[512];
+        snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%u", cf_name, i);
+        tidesdb_drop_column_family(tidesdb_instance, idx_cf_name);
+    }
+
+    /*
+      Drop the main column family.
+      Use rename first to wait for any in-progress flush/compaction,
+      then drop. This works around a race condition in tidesdb_drop_column_family.
+    */
+    char tmp_cf_name[512];
+    snprintf(tmp_cf_name, sizeof(tmp_cf_name), "%s__dropping_%lu", cf_name,
+             (unsigned long)time(NULL));
+
+    int ret = tidesdb_rename_column_family(tidesdb_instance, cf_name, tmp_cf_name);
+    if (ret == TDB_SUCCESS)
+    {
+        /* Rename succeeded -- now drop the renamed CF */
+        ret = tidesdb_drop_column_family(tidesdb_instance, tmp_cf_name);
+    }
+    else if (ret == TDB_ERR_NOT_FOUND)
+    {
+        /* CF doesn't exist -- that's fine */
+        ret = TDB_SUCCESS;
+    }
+    else
+    {
+        /* Rename failed -- try direct drop */
+        ret = tidesdb_drop_column_family(tidesdb_instance, cf_name);
+    }
+
     if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
     {
         sql_print_error("TidesDB: Failed to drop column family '%s': %d", cf_name, ret);
@@ -3885,12 +4095,10 @@ int ha_tidesdb::delete_table(const char *name)
 
 /**
   @brief
-  Rename a table by copying all data to a new column family and dropping the old one.
+  Rename a table using TidesDB's native rename_column_family function.
 
-  TidesDB doesn't support renaming column families directly, so we:
-  1. Create new column family with new name
-  2. Copy all data from old CF to new CF
-  3. Drop old column family
+  This atomically renames the column family and waits for any in-progress
+  flush or compaction to complete before renaming.
 */
 int ha_tidesdb::rename_table(const char *from, const char *to)
 {
@@ -3903,107 +4111,54 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
     get_cf_name(from, old_cf_name, sizeof(old_cf_name));
     get_cf_name(to, new_cf_name, sizeof(new_cf_name));
 
-    /* Get the old column family */
-    tidesdb_column_family_t *old_cf = tidesdb_get_column_family(tidesdb_instance, old_cf_name);
-    if (!old_cf)
-    {
-        sql_print_error("TidesDB: Cannot rename - source table '%s' not found", from);
-        DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
-    }
-
-    /* Create new column family with default config */
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
-    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-    cf_config.bloom_fpr = tidesdb_bloom_fpr;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    }
-
-    ret = tidesdb_create_column_family(tidesdb_instance, new_cf_name, &cf_config);
+    /* Use TidesDB's native rename which waits for flush/compaction */
+    ret = tidesdb_rename_column_family(tidesdb_instance, old_cf_name, new_cf_name);
     if (ret != TDB_SUCCESS)
     {
-        sql_print_error("TidesDB: Failed to create destination column family '%s': %d", new_cf_name,
-                        ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
-    }
-
-    tidesdb_column_family_t *new_cf = tidesdb_get_column_family(tidesdb_instance, new_cf_name);
-    if (!new_cf)
-    {
-        sql_print_error("TidesDB: Failed to get new column family '%s'", new_cf_name);
-        DBUG_RETURN(HA_ERR_GENERIC);
-    }
-
-    /* Copy all data from old CF to new CF */
-    tidesdb_txn_t *txn = NULL;
-    ret = tidesdb_txn_begin(tidesdb_instance, &txn);
-    if (ret != TDB_SUCCESS)
-    {
-        tidesdb_drop_column_family(tidesdb_instance, new_cf_name);
-        sql_print_error("TidesDB: Failed to begin transaction for rename: %d", ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
-    }
-
-    tidesdb_iter_t *iter = NULL;
-    ret = tidesdb_iter_new(txn, old_cf, &iter);
-    if (ret != TDB_SUCCESS)
-    {
-        tidesdb_txn_free(txn);
-        tidesdb_drop_column_family(tidesdb_instance, new_cf_name);
-        sql_print_error("TidesDB: Failed to create iterator for rename: %d", ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
-    }
-
-    tidesdb_iter_seek_to_first(iter);
-
-    while (tidesdb_iter_valid(iter))
-    {
-        uint8_t *key = NULL;
-        size_t key_size = 0;
-        uint8_t *value = NULL;
-        size_t value_size = 0;
-
-        if (tidesdb_iter_key(iter, &key, &key_size) == TDB_SUCCESS &&
-            tidesdb_iter_value(iter, &value, &value_size) == TDB_SUCCESS)
+        if (ret == TDB_ERR_NOT_FOUND)
         {
-            /* Copy to new CF */
-            ret = tidesdb_txn_put(txn, new_cf, key, key_size, value, value_size, -1);
-            if (ret != TDB_SUCCESS)
-            {
-                tidesdb_iter_free(iter);
-                tidesdb_txn_rollback(txn);
-                tidesdb_txn_free(txn);
-                tidesdb_drop_column_family(tidesdb_instance, new_cf_name);
-                sql_print_error("TidesDB: Failed to copy data during rename: %d", ret);
-                DBUG_RETURN(HA_ERR_GENERIC);
-            }
+            sql_print_error("TidesDB: Cannot rename - source table '%s' not found", from);
+            DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
         }
-
-        tidesdb_iter_next(iter);
-    }
-
-    tidesdb_iter_free(iter);
-
-    /* Commit the copy transaction */
-    ret = tidesdb_txn_commit(txn);
-    tidesdb_txn_free(txn);
-
-    if (ret != TDB_SUCCESS)
-    {
-        tidesdb_drop_column_family(tidesdb_instance, new_cf_name);
-        sql_print_error("TidesDB: Failed to commit rename transaction: %d", ret);
+        if (ret == TDB_ERR_EXISTS)
+        {
+            sql_print_error("TidesDB: Cannot rename - destination table '%s' already exists", to);
+            DBUG_RETURN(HA_ERR_TABLE_EXIST);
+        }
+        sql_print_error("TidesDB: Failed to rename column family '%s' to '%s': %d", old_cf_name,
+                        new_cf_name, ret);
         DBUG_RETURN(HA_ERR_GENERIC);
     }
 
-    /* Drop the old column family */
-    ret = tidesdb_drop_column_family(tidesdb_instance, old_cf_name);
-    if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
+    /* Rename secondary index column families */
+    for (uint i = 0; i < TIDESDB_MAX_INDEXES; i++)
     {
-        sql_print_warning("TidesDB: Failed to drop old column family '%s': %d", old_cf_name, ret);
-        /* Continue anyway -- data was copied successfully */
+        char old_idx_cf[512], new_idx_cf[512];
+        snprintf(old_idx_cf, sizeof(old_idx_cf), "%s_idx_%u", old_cf_name, i);
+        snprintf(new_idx_cf, sizeof(new_idx_cf), "%s_idx_%u", new_cf_name, i);
+
+        /* Try to rename -- ignore errors for non-existent indexes */
+        tidesdb_rename_column_family(tidesdb_instance, old_idx_cf, new_idx_cf);
+    }
+
+    /* Rename fulltext index column families */
+    for (uint i = 0; i < TIDESDB_MAX_FT_INDEXES; i++)
+    {
+        char old_ft_cf[512], new_ft_cf[512];
+        snprintf(old_ft_cf, sizeof(old_ft_cf), "%s_ft_%u", old_cf_name, i);
+        snprintf(new_ft_cf, sizeof(new_ft_cf), "%s_ft_%u", new_cf_name, i);
+
+        tidesdb_rename_column_family(tidesdb_instance, old_ft_cf, new_ft_cf);
+    }
+
+    /* Rename spatial index column families */
+    for (uint i = 0; i < TIDESDB_MAX_INDEXES; i++)
+    {
+        char old_spatial_cf[512], new_spatial_cf[512];
+        snprintf(old_spatial_cf, sizeof(old_spatial_cf), "%s_spatial_%u", old_cf_name, i);
+        snprintf(new_spatial_cf, sizeof(new_spatial_cf), "%s_spatial_%u", new_cf_name, i);
+
+        tidesdb_rename_column_family(tidesdb_instance, old_spatial_cf, new_spatial_cf);
     }
 
     sql_print_information("TidesDB: Renamed table '%s' to '%s'", from, to);
@@ -4123,6 +4278,23 @@ int ha_tidesdb::write_row(const uchar *buf)
     {
         /* Fall back to global default TTL */
         ttl = time(NULL) + tidesdb_default_ttl;
+    }
+
+    /* Check for duplicate primary key before insert */
+    uint8_t *existing_value = NULL;
+    size_t existing_len = 0;
+    ret = tidesdb_txn_get(txn, share->cf, key, key_len, &existing_value, &existing_len);
+    if (ret == TDB_SUCCESS && existing_value)
+    {
+        /* Key already exists -- duplicate key error */
+        tidesdb_free(existing_value);
+        if (own_txn)
+        {
+            tidesdb_txn_rollback(txn);
+            tidesdb_txn_free(txn);
+        }
+        my_free(value);
+        DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
     }
 
     /* Insert the row */
@@ -5038,7 +5210,7 @@ int ha_tidesdb::index_next(uchar *buf)
         current_key_len = pk_len;
 
         /* Fetch the actual row using the primary key.
-         * IMPORTANT: Reuse current_txn to avoid creating transaction per row.
+         *** Reuse current_txn to avoid creating transaction per row.
          * current_txn should be set by external_lock() or rnd_init(). */
         if (!current_txn)
         {
@@ -5173,7 +5345,7 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
         current_key_len = pk_len;
 
         /* Fetch the actual row using the primary key.
-         * IMPORTANT: Reuse current_txn to avoid creating transaction per row. */
+         **** Reuse current_txn to avoid creating transaction per row. */
         if (!current_txn)
         {
             sql_print_error("TidesDB: No transaction available for index_next_same");
@@ -6742,6 +6914,13 @@ void ha_tidesdb::get_auto_increment(ulonglong offset, ulonglong increment,
 
     pthread_mutex_lock(&share->auto_inc_mutex);
 
+    /* Load auto-increment from storage if not yet loaded */
+    if (!share->auto_inc_loaded)
+    {
+        load_auto_increment_value();
+        share->auto_inc_loaded = true;
+    }
+
     /* Ensure auto_increment_value is at least 1 */
     if (share->auto_increment_value == 0) share->auto_increment_value = 1;
 
@@ -6749,6 +6928,9 @@ void ha_tidesdb::get_auto_increment(ulonglong offset, ulonglong increment,
 
     /* Reserve the requested number of values */
     share->auto_increment_value += nb_desired_values * increment;
+
+    /* Persist the new auto-increment value */
+    persist_auto_increment_value(share->auto_increment_value);
 
     /* TidesDB supports concurrent inserts, so reserve all requested */
     *nb_reserved_values = nb_desired_values;
@@ -7331,59 +7513,113 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
     alter_table_operations flags = ha_alter_info->handler_flags;
 
     /*
-      Operations that require table rebuild (copy algorithm).
-      ADD/DROP COLUMN requires rebuild because TidesDB's packed row format
-      doesn't support schema-on-read for stored columns.
+      Operations that require table rebuild (COPY algorithm).
+      These modify the row format or require full data transformation.
     */
-    alter_table_operations dominated_flags =
-        ALTER_CHANGE_COLUMN | ALTER_COLUMN_TYPE_CHANGE_BY_ENGINE | ALTER_STORED_COLUMN_ORDER |
-        ALTER_RECREATE_TABLE | ALTER_PARTITIONED | ALTER_ADD_STORED_BASE_COLUMN |
-        ALTER_ADD_STORED_GENERATED_COLUMN | ALTER_DROP_STORED_COLUMN;
+    alter_table_operations copy_flags =
+        ALTER_CHANGE_COLUMN |                             /* CHANGE/MODIFY column definition */
+        ALTER_COLUMN_TYPE_CHANGE_BY_ENGINE |              /* Engine-specific type change */
+        ALTER_STORED_COLUMN_ORDER |                       /* Reorder stored columns */
+        ALTER_RECREATE_TABLE |                            /* FORCE/ENGINE rebuild */
+        ALTER_PARTITIONED |                               /* Partition changes */
+        ALTER_ADD_STORED_BASE_COLUMN |                    /* ADD stored column */
+        ALTER_ADD_STORED_GENERATED_COLUMN |               /* ADD stored generated column */
+        ALTER_DROP_STORED_COLUMN |                        /* DROP stored column */
+        ALTER_STORED_COLUMN_TYPE |                        /* Change stored column type */
+        ALTER_VIRTUAL_COLUMN_TYPE |                       /* Change virtual column type */
+        ALTER_STORED_GCOL_EXPR |                          /* Change stored generated expr */
+        ALTER_COLUMN_NULLABLE |                           /* NOT NULL -> NULL */
+        ALTER_COLUMN_NOT_NULLABLE |                       /* NULL -> NOT NULL */
+        ALTER_ORDER |                                     /* ORDER BY clause */
+        ALTER_CONVERT_TO |                                /* CONVERT TO charset */
+        ALTER_COLUMN_VCOL |                               /* Virtual column affecting storage */
+        ALTER_ADD_SYSTEM_VERSIONING |                     /* System versioning */
+        ALTER_DROP_SYSTEM_VERSIONING | ALTER_ADD_PERIOD | /* Period for system time */
+        ALTER_DROP_PERIOD;
 
-    if (flags & dominated_flags)
+    if (flags & copy_flags)
     {
         ha_alter_info->unsupported_reason = "TidesDB requires table rebuild for this operation";
         DBUG_RETURN(HA_ALTER_INPLACE_NOT_SUPPORTED);
     }
 
-    /* Operations we can do instantly (metadata only) */
+    /*
+      Operations we can do instantly (metadata only).
+      These don't require any data changes, just .frm updates.
+    */
     alter_table_operations instant_flags =
-        ALTER_DROP_VIRTUAL_COLUMN | ALTER_ADD_VIRTUAL_COLUMN | ALTER_VIRTUAL_COLUMN_ORDER |
-        ALTER_COLUMN_NAME | ALTER_RENAME | ALTER_RENAME_INDEX | ALTER_INDEX_IGNORABILITY |
-        ALTER_CHANGE_COLUMN_DEFAULT | ALTER_COLUMN_OPTION;
+        ALTER_PARSER_ADD_COLUMN |   /* Parser flag for ADD COLUMN */
+        ALTER_PARSER_DROP_COLUMN |  /* Parser flag for DROP COLUMN */
+        ALTER_DROP_VIRTUAL_COLUMN | /* Virtual columns are computed */
+        ALTER_ADD_VIRTUAL_COLUMN | ALTER_VIRTUAL_COLUMN_ORDER |
+        ALTER_VIRTUAL_GCOL_EXPR |                                /* Virtual generated expr change */
+        ALTER_COLUMN_NAME |                                      /* Rename column */
+        ALTER_RENAME |                                           /* Rename table */
+        ALTER_RENAME_INDEX |                                     /* Rename index */
+        ALTER_RENAME_COLUMN |                                    /* Rename column (parser flag) */
+        ALTER_INDEX_IGNORABILITY |                               /* Index visibility */
+        ALTER_CHANGE_COLUMN_DEFAULT |                            /* Default value change */
+        ALTER_COLUMN_OPTION |                                    /* Column options */
+        ALTER_COLUMN_COLUMN_FORMAT |                             /* Column format */
+        ALTER_CHANGE_INDEX_COMMENT |                             /* Index comment */
+        ALTER_OPTIONS |                                          /* Table options (comment, etc) */
+        ALTER_COLUMN_INDEX_LENGTH |                              /* Index length change */
+        ALTER_ADD_CHECK_CONSTRAINT |                             /* CHECK constraints (metadata) */
+        ALTER_DROP_CHECK_CONSTRAINT | ALTER_COLUMN_UNVERSIONED | /* Unversioned column flag */
+        ALTER_KEYS_ONOFF |                                       /* ENABLE/DISABLE KEYS */
+        ALTER_VERS_EXPLICIT;                                     /* Explicit versioning flag */
 
-    /* Operations we can do in-place with shared lock (indexes only) */
-    alter_table_operations inplace_shared_flags = ALTER_ADD_INDEX | ALTER_DROP_INDEX |
-                                                  ALTER_ADD_UNIQUE_INDEX | ALTER_DROP_UNIQUE_INDEX |
-                                                  ALTER_ADD_PK_INDEX | ALTER_DROP_PK_INDEX;
+    /*
+      Operations we can do in-place (index operations).
+      These require scanning data but don't change row format.
+    */
+    alter_table_operations inplace_flags =
+        ALTER_ADD_INDEX |                            /* Generic ADD INDEX */
+        ALTER_DROP_INDEX |                           /* Generic DROP INDEX */
+        ALTER_ADD_UNIQUE_INDEX |                     /* ADD UNIQUE INDEX */
+        ALTER_DROP_UNIQUE_INDEX |                    /* DROP UNIQUE INDEX */
+        ALTER_ADD_PK_INDEX |                         /* ADD PRIMARY KEY */
+        ALTER_DROP_PK_INDEX |                        /* DROP PRIMARY KEY */
+        ALTER_ADD_NON_UNIQUE_NON_PRIM_INDEX |        /* ADD non-unique non-primary */
+        ALTER_DROP_NON_UNIQUE_NON_PRIM_INDEX |       /* DROP non-unique non-primary */
+        ALTER_INDEX_ORDER |                          /* Index order change */
+        ALTER_ADD_FOREIGN_KEY |                      /* Foreign key (metadata only for TidesDB) */
+        ALTER_DROP_FOREIGN_KEY | ALTER_COLUMN_ORDER; /* Column order (metadata) */
 
     /* Check if all flags are covered */
-    alter_table_operations all_supported = instant_flags | inplace_shared_flags;
+    alter_table_operations all_supported = instant_flags | inplace_flags;
 
     if (flags & ~all_supported)
     {
-        /* Some unsupported flags remain */
+        sql_print_information(
+            "TidesDB: Unsupported inplace flags: 0x%llx "
+            "(supported: 0x%llx, unsupported: 0x%llx)",
+            (unsigned long long)flags, (unsigned long long)all_supported,
+            (unsigned long long)(flags & ~all_supported));
         ha_alter_info->unsupported_reason =
             "TidesDB does not support this ALTER operation in-place";
         DBUG_RETURN(HA_ALTER_INPLACE_NOT_SUPPORTED);
     }
 
     /* If only instant flags, we can do it instantly */
-    if (!(flags & inplace_shared_flags))
+    if (!(flags & inplace_flags))
     {
         DBUG_RETURN(HA_ALTER_INPLACE_INSTANT);
     }
 
-    /* For ADD/DROP INDEX, we can allow concurrent reads */
+    /*
+      For secondary index operations (not PK), allow concurrent reads.
+      PK changes require exclusive lock since they affect row storage.
+    */
     if ((flags &
-         (ALTER_ADD_INDEX | ALTER_DROP_INDEX | ALTER_ADD_UNIQUE_INDEX | ALTER_DROP_UNIQUE_INDEX)) &&
-        !(flags & (ALTER_ADD_STORED_BASE_COLUMN | ALTER_DROP_STORED_COLUMN | ALTER_ADD_PK_INDEX |
-                   ALTER_DROP_PK_INDEX)))
+         (ALTER_ADD_INDEX | ALTER_DROP_INDEX | ALTER_ADD_UNIQUE_INDEX | ALTER_DROP_UNIQUE_INDEX |
+          ALTER_ADD_NON_UNIQUE_NON_PRIM_INDEX | ALTER_DROP_NON_UNIQUE_NON_PRIM_INDEX)) &&
+        !(flags & (ALTER_ADD_PK_INDEX | ALTER_DROP_PK_INDEX)))
     {
         DBUG_RETURN(HA_ALTER_INPLACE_NO_LOCK);
     }
 
-    /* For column changes, we need shared lock */
+    /* PK changes and other operations need shared lock */
     DBUG_RETURN(HA_ALTER_INPLACE_SHARED_LOCK);
 }
 
@@ -7457,7 +7693,7 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
     int ret;
 
     /* Handle ADD INDEX */
-    if (flags & (ALTER_ADD_INDEX | ALTER_ADD_UNIQUE_INDEX))
+    if (flags & (ALTER_ADD_INDEX | ALTER_ADD_UNIQUE_INDEX | ALTER_ADD_NON_UNIQUE_NON_PRIM_INDEX))
     {
         ret = add_index_inplace(altered_table, ha_alter_info);
         if (ret)
@@ -7468,7 +7704,7 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
     }
 
     /* Handle DROP INDEX */
-    if (flags & (ALTER_DROP_INDEX | ALTER_DROP_UNIQUE_INDEX))
+    if (flags & (ALTER_DROP_INDEX | ALTER_DROP_UNIQUE_INDEX | ALTER_DROP_NON_UNIQUE_NON_PRIM_INDEX))
     {
         ret = drop_index_inplace(ha_alter_info);
         if (ret)
@@ -7526,17 +7762,59 @@ bool ha_tidesdb::commit_inplace_alter_table(TABLE *altered_table, Alter_inplace_
         DBUG_RETURN(false);
     }
 
-    /* Commit: indexes are already created, just log success */
+    /* Commit: indexes are already created, update share and log success */
     alter_table_operations flags = ha_alter_info->handler_flags;
 
-    if (flags & (ALTER_ADD_INDEX | ALTER_ADD_UNIQUE_INDEX))
+    if (flags & (ALTER_ADD_INDEX | ALTER_ADD_UNIQUE_INDEX | ALTER_ADD_NON_UNIQUE_NON_PRIM_INDEX))
     {
+        /* Update share->index_cf for newly added indexes */
+        char cf_name[256];
+        char idx_cf_name[512];
+        get_cf_name(share->table_name, cf_name, sizeof(cf_name));
+
+        for (uint i = 0; i < ha_alter_info->index_add_count; i++)
+        {
+            uint key_idx = ha_alter_info->index_add_buffer[i];
+            KEY *key = &ha_alter_info->key_info_buffer[key_idx];
+
+            /* Find the index position in altered_table */
+            for (uint j = 0; j < altered_table->s->keys && j < TIDESDB_MAX_INDEXES; j++)
+            {
+                if (strcmp(altered_table->key_info[j].name.str, key->name.str) == 0)
+                {
+                    snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%s", cf_name, key->name.str);
+                    share->index_cf[j] = tidesdb_get_column_family(tidesdb_instance, idx_cf_name);
+                    if (share->index_cf[j] && j >= share->num_indexes)
+                    {
+                        share->num_indexes = j + 1;
+                    }
+                    break;
+                }
+            }
+        }
+
         sql_print_information("TidesDB: Committed %u new index(es)",
                               ha_alter_info->index_add_count);
     }
 
-    if (flags & (ALTER_DROP_INDEX | ALTER_DROP_UNIQUE_INDEX))
+    if (flags & (ALTER_DROP_INDEX | ALTER_DROP_UNIQUE_INDEX | ALTER_DROP_NON_UNIQUE_NON_PRIM_INDEX))
     {
+        /* Clear share->index_cf for dropped indexes */
+        for (uint i = 0; i < ha_alter_info->index_drop_count; i++)
+        {
+            KEY *key = ha_alter_info->index_drop_buffer[i];
+
+            /* Find and clear the index in share */
+            for (uint j = 0; j < table->s->keys && j < TIDESDB_MAX_INDEXES; j++)
+            {
+                if (strcmp(table->key_info[j].name.str, key->name.str) == 0)
+                {
+                    share->index_cf[j] = NULL;
+                    break;
+                }
+            }
+        }
+
         sql_print_information("TidesDB: Committed drop of %u index(es)",
                               ha_alter_info->index_drop_count);
     }
@@ -7600,7 +7878,7 @@ int ha_tidesdb::add_index_inplace(TABLE *altered_table, Alter_inplace_info *ha_a
         }
 
         /* Populate the index by scanning existing data */
-        ret = rebuild_secondary_index(key_idx, altered_table);
+        ret = rebuild_secondary_index(key, key->name.str, altered_table);
         if (ret)
         {
             sql_print_error("TidesDB: Failed to populate index '%s': %d", key->name.str, ret);
@@ -7654,32 +7932,19 @@ int ha_tidesdb::drop_index_inplace(Alter_inplace_info *ha_alter_info)
   @brief
   Rebuild a secondary index by scanning all table data.
 
-  @param key_nr         Index number in key_info_buffer
-  @param altered_table  TABLE object with new schema
+  @param key_info       KEY structure for the index being built
+  @param key_name       Name of the key (for CF lookup)
+  @param target_table   TABLE object (used for key_copy with new key definitions)
 */
-int ha_tidesdb::rebuild_secondary_index(uint key_nr, TABLE *altered_table)
+int ha_tidesdb::rebuild_secondary_index(KEY *key_info, const char *key_name, TABLE *target_table)
 {
     DBUG_ENTER("ha_tidesdb::rebuild_secondary_index");
 
     if (!share->cf) DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
 
-    /* Start a transaction for the rebuild */
-    tidesdb_txn_t *txn = NULL;
-    int ret = tidesdb_txn_begin(tidesdb_instance, &txn);
-    if (ret != TDB_SUCCESS)
+    if (!table || !table->s)
     {
-        sql_print_error("TidesDB: Failed to begin rebuild transaction: %d", ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
-    }
-
-    /* Create iterator to scan all rows */
-    tidesdb_iter_t *iter = NULL;
-    ret = tidesdb_iter_new(txn, share->cf, &iter);
-    if (ret != TDB_SUCCESS || !iter)
-    {
-        tidesdb_txn_rollback(txn);
-        tidesdb_txn_free(txn);
-        sql_print_error("TidesDB: Failed to create rebuild iterator: %d", ret);
+        sql_print_error("TidesDB: No table available for rebuild_secondary_index");
         DBUG_RETURN(HA_ERR_GENERIC);
     }
 
@@ -7688,27 +7953,56 @@ int ha_tidesdb::rebuild_secondary_index(uint key_nr, TABLE *altered_table)
     char idx_cf_name[512];
     get_cf_name(share->table_name, cf_name, sizeof(cf_name));
 
-    KEY *key = &altered_table->key_info[key_nr];
-    snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%s", cf_name, key->name.str);
+    snprintf(idx_cf_name, sizeof(idx_cf_name), "%s_idx_%s", cf_name, key_name);
 
     tidesdb_column_family_t *idx_cf = tidesdb_get_column_family(tidesdb_instance, idx_cf_name);
     if (!idx_cf)
     {
-        tidesdb_iter_free(iter);
-        tidesdb_txn_rollback(txn);
-        tidesdb_txn_free(txn);
+        sql_print_error("TidesDB: Index CF '%s' not found", idx_cf_name);
         DBUG_RETURN(HA_ERR_GENERIC);
     }
 
+    /* Use table->s->reclength since stored data matches the original table format */
+    uchar *row_buf = (uchar *)my_malloc(PSI_INSTRUMENT_ME, table->s->reclength, MYF(MY_WME));
+    if (!row_buf) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+
     ha_rows rows_indexed = 0;
-    uchar *row_buf =
-        (uchar *)my_malloc(PSI_INSTRUMENT_ME, altered_table->s->reclength, MYF(MY_WME));
-    if (!row_buf)
+    ha_rows batch_count = 0;
+    const ha_rows BATCH_SIZE = 1000; /* Small batches to avoid TDB_ERR_TOO_LARGE */
+    int ret;
+
+    /* Use separate read transaction for iterator (long-lived) */
+    tidesdb_txn_t *read_txn = NULL;
+    ret = tidesdb_txn_begin(tidesdb_instance, &read_txn);
+    if (ret != TDB_SUCCESS)
+    {
+        sql_print_error("TidesDB: Failed to begin read transaction: %d", ret);
+        my_free(row_buf);
+        DBUG_RETURN(HA_ERR_GENERIC);
+    }
+
+    tidesdb_iter_t *iter = NULL;
+    ret = tidesdb_iter_new(read_txn, share->cf, &iter);
+    if (ret != TDB_SUCCESS || !iter)
+    {
+        tidesdb_txn_rollback(read_txn);
+        tidesdb_txn_free(read_txn);
+        my_free(row_buf);
+        sql_print_error("TidesDB: Failed to create rebuild iterator: %d", ret);
+        DBUG_RETURN(HA_ERR_GENERIC);
+    }
+
+    /* Use separate write transaction for index puts (short-lived, committed frequently) */
+    tidesdb_txn_t *write_txn = NULL;
+    ret = tidesdb_txn_begin(tidesdb_instance, &write_txn);
+    if (ret != TDB_SUCCESS)
     {
         tidesdb_iter_free(iter);
-        tidesdb_txn_rollback(txn);
-        tidesdb_txn_free(txn);
-        DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+        tidesdb_txn_rollback(read_txn);
+        tidesdb_txn_free(read_txn);
+        my_free(row_buf);
+        sql_print_error("TidesDB: Failed to begin write transaction: %d", ret);
+        DBUG_RETURN(HA_ERR_GENERIC);
     }
 
     /* Scan all rows and build index entries */
@@ -7723,8 +8017,15 @@ int ha_tidesdb::rebuild_secondary_index(uint key_nr, TABLE *altered_table)
 
         int key_ret = tidesdb_iter_key(iter, &pk_data, &pk_len);
         int val_ret = tidesdb_iter_value(iter, &row_data, &row_len);
-        ret = (key_ret == TDB_SUCCESS && val_ret == TDB_SUCCESS) ? TDB_SUCCESS : -1;
-        if (ret != TDB_SUCCESS)
+
+        if (key_ret != TDB_SUCCESS || val_ret != TDB_SUCCESS)
+        {
+            tidesdb_iter_next(iter);
+            continue;
+        }
+
+        /* Skip internal metadata keys (start with underscore) */
+        if (pk_len > 0 && pk_data[0] == '_')
         {
             tidesdb_iter_next(iter);
             continue;
@@ -7732,38 +8033,150 @@ int ha_tidesdb::rebuild_secondary_index(uint key_nr, TABLE *altered_table)
 
         if (unpack_row(row_buf, row_data, row_len) == 0)
         {
-            /* Build index key for this row */
-            uchar *idx_key = NULL;
-            size_t idx_key_len = 0;
+            /*
+              Build index key for this row.
 
-            if (build_index_key(key_nr, row_buf, &idx_key, &idx_key_len) == 0 && idx_key)
+              We need to extract the key columns from row_buf and build the index key.
+              The key_info passed from add_index_inplace has key_parts that reference
+              altered_table's fields, but our row_buf is in the original table's format.
+
+              We use the column indices from key_info->key_part[].fieldnr to find the
+              corresponding fields in the original table.
+            */
+            uint idx_key_length = key_info->key_length;
+            size_t total_key_len = idx_key_length + pk_len;
+            uchar *idx_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, total_key_len, MYF(MY_WME));
+
+            if (idx_key)
             {
+                /* Build index key by copying field data from row_buf */
+                uchar *key_ptr = idx_key;
+                for (uint p = 0; p < key_info->user_defined_key_parts; p++)
+                {
+                    KEY_PART_INFO *key_part = &key_info->key_part[p];
+                    uint fieldnr = key_part->fieldnr;
+
+                    /* Find the corresponding field in the original table */
+                    if (fieldnr > 0 && fieldnr <= table->s->fields)
+                    {
+                        Field *field = table->field[fieldnr - 1];
+                        uint key_part_len = key_part->length;
+
+                        /* Copy field data to key buffer */
+                        if (field->is_null())
+                        {
+                            /* NULL handling -- set null byte if key part allows nulls */
+                            if (key_part->null_bit)
+                            {
+                                *key_ptr++ = 1; /* NULL indicator */
+                                memset(key_ptr, 0, key_part_len);
+                                key_ptr += key_part_len;
+                            }
+                        }
+                        else
+                        {
+                            if (key_part->null_bit)
+                            {
+                                *key_ptr++ = 0; /* NOT NULL indicator */
+                            }
+                            /* Copy the field data using pack_key_from_key_image or direct copy */
+                            uint bytes = field->pack_length();
+                            if (bytes > key_part_len) bytes = key_part_len;
+                            memcpy(key_ptr, field->ptr, bytes);
+                            if (bytes < key_part_len)
+                                memset(key_ptr + bytes, 0, key_part_len - bytes);
+                            key_ptr += key_part_len;
+                        }
+                    }
+                }
+
+                /* Append primary key to ensure uniqueness */
+                memcpy(key_ptr, pk_data, pk_len);
+                size_t idx_key_len = (key_ptr - idx_key) + pk_len;
+
                 /* Insert into index: idx_key -> pk */
-                ret = tidesdb_txn_put(txn, idx_cf, idx_key, idx_key_len, pk_data, pk_len, -1);
+                ret = tidesdb_txn_put(write_txn, idx_cf, idx_key, idx_key_len, pk_data, pk_len, -1);
                 my_free(idx_key);
 
-                if (ret == TDB_SUCCESS) rows_indexed++;
+                if (ret != TDB_SUCCESS)
+                {
+                    sql_print_error("TidesDB: Failed to write index entry at row %llu: %d",
+                                    (unsigned long long)rows_indexed, ret);
+                    tidesdb_iter_free(iter);
+                    tidesdb_txn_rollback(read_txn);
+                    tidesdb_txn_free(read_txn);
+                    tidesdb_txn_rollback(write_txn);
+                    tidesdb_txn_free(write_txn);
+                    my_free(row_buf);
+                    DBUG_RETURN(HA_ERR_GENERIC);
+                }
+
+                rows_indexed++;
+                batch_count++;
+
+                /* Commit write transaction in small batches */
+                if (batch_count >= BATCH_SIZE)
+                {
+                    ret = tidesdb_txn_commit(write_txn);
+                    tidesdb_txn_free(write_txn);
+
+                    if (ret != TDB_SUCCESS)
+                    {
+                        sql_print_error("TidesDB: Failed to commit batch at %llu rows: %d",
+                                        (unsigned long long)rows_indexed, ret);
+                        tidesdb_iter_free(iter);
+                        tidesdb_txn_rollback(read_txn);
+                        tidesdb_txn_free(read_txn);
+                        my_free(row_buf);
+                        DBUG_RETURN(HA_ERR_GENERIC);
+                    }
+
+                    /* Start new write transaction for next batch */
+                    ret = tidesdb_txn_begin(tidesdb_instance, &write_txn);
+                    if (ret != TDB_SUCCESS)
+                    {
+                        sql_print_error("TidesDB: Failed to begin new batch transaction: %d", ret);
+                        tidesdb_iter_free(iter);
+                        tidesdb_txn_rollback(read_txn);
+                        tidesdb_txn_free(read_txn);
+                        my_free(row_buf);
+                        DBUG_RETURN(HA_ERR_GENERIC);
+                    }
+
+                    batch_count = 0;
+                }
             }
         }
 
         tidesdb_iter_next(iter);
     }
 
-    my_free(row_buf);
+    /* Cleanup read transaction and iterator */
     tidesdb_iter_free(iter);
+    tidesdb_txn_rollback(read_txn); /* Read-only, just cleanup */
+    tidesdb_txn_free(read_txn);
+    my_free(row_buf);
 
-    /* Commit the transaction */
-    ret = tidesdb_txn_commit(txn);
-    tidesdb_txn_free(txn);
-
-    if (ret != TDB_SUCCESS)
+    /* Commit any remaining rows in write transaction */
+    if (batch_count > 0)
     {
-        sql_print_error("TidesDB: Failed to commit index rebuild: %d", ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        ret = tidesdb_txn_commit(write_txn);
+        tidesdb_txn_free(write_txn);
+
+        if (ret != TDB_SUCCESS)
+        {
+            sql_print_error("TidesDB: Failed to commit final index batch: %d", ret);
+            DBUG_RETURN(HA_ERR_GENERIC);
+        }
+    }
+    else
+    {
+        tidesdb_txn_rollback(write_txn);
+        tidesdb_txn_free(write_txn);
     }
 
     sql_print_information("TidesDB: Indexed %llu rows for '%s'", (unsigned long long)rows_indexed,
-                          key->name.str);
+                          key_name);
 
     DBUG_RETURN(0);
 }
@@ -7971,17 +8384,18 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(change_buffer_max_size),
     NULL};
 
-mysql_declare_plugin(tidesdb){
+maria_declare_plugin(tidesdb){
     MYSQL_STORAGE_ENGINE_PLUGIN,
     &tidesdb_storage_engine,
     "TidesDB",
     "TidesDB Authors",
     "TidesDB LSM-based storage engine with ACID transactions",
     PLUGIN_LICENSE_GPL,
-    tidesdb_init_func,        /* Plugin Init */
-    tidesdb_done_func,        /* Plugin Deinit */
-    0x0704,                   /* version: TidesDB 7.4+ */
-    NULL,                     /* status variables */
-    tidesdb_system_variables, /* system variables */
-    NULL                      /* config options */
-} mysql_declare_plugin_end;
+    tidesdb_init_func,             /* Plugin Init */
+    tidesdb_done_func,             /* Plugin Deinit */
+    0x0704,                        /* version: TidesDB 7.4+ */
+    NULL,                          /* status variables */
+    tidesdb_system_variables,      /* system variables */
+    "7.4.2",                       /* version string */
+    MariaDB_PLUGIN_MATURITY_STABLE /* maturity */
+} maria_declare_plugin_end;

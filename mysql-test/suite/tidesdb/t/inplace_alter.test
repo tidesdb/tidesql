@@ -1,0 +1,91 @@
+--echo #
+--echo # TidesDB INPLACE ALTER TABLE Tests
+--echo #
+--echo # Tests for ALGORITHM=INPLACE and ALGORITHM=INSTANT operations
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Create base table
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  name VARCHAR(100),
+  value INT
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 'Alice', 100);
+INSERT INTO t1 VALUES (2, 'Bob', 200);
+INSERT INTO t1 VALUES (3, 'Charlie', 300);
+
+--echo # Test 2: ADD INDEX with ALGORITHM=INPLACE
+ALTER TABLE t1 ADD INDEX idx_name (name), ALGORITHM=INPLACE;
+SHOW INDEX FROM t1;
+SELECT * FROM t1 WHERE name = 'Bob';
+
+--echo # Test 3: ADD UNIQUE INDEX with ALGORITHM=INPLACE
+ALTER TABLE t1 ADD UNIQUE INDEX idx_value (value), ALGORITHM=INPLACE;
+SHOW INDEX FROM t1;
+
+--echo # Test 4: DROP INDEX with ALGORITHM=INPLACE
+ALTER TABLE t1 DROP INDEX idx_name, ALGORITHM=INPLACE;
+SHOW INDEX FROM t1;
+
+--echo # Test 5: RENAME INDEX with ALGORITHM=INSTANT
+ALTER TABLE t1 RENAME INDEX idx_value TO idx_val, ALGORITHM=INSTANT;
+SHOW INDEX FROM t1;
+
+--echo # Test 6: Change column default with ALGORITHM=INSTANT
+ALTER TABLE t1 ALTER COLUMN value SET DEFAULT 0, ALGORITHM=INSTANT;
+SHOW CREATE TABLE t1;
+
+--echo # Test 7: Table comment with ALGORITHM=INSTANT
+ALTER TABLE t1 COMMENT='Test table for INPLACE operations', ALGORITHM=INSTANT;
+SHOW CREATE TABLE t1;
+
+--echo # Test 8: Multiple index operations in one ALTER
+DROP TABLE t1;
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  a INT,
+  b INT,
+  c INT
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 10, 20, 30), (2, 40, 50, 60), (3, 70, 80, 90);
+
+ALTER TABLE t1 
+  ADD INDEX idx_a (a),
+  ADD INDEX idx_b (b),
+  ADD INDEX idx_c (c),
+  ALGORITHM=INPLACE;
+
+SHOW INDEX FROM t1;
+
+--echo # Test 9: Verify indexes work after INPLACE ADD
+SELECT * FROM t1 WHERE a = 40;
+SELECT * FROM t1 WHERE b = 50;
+SELECT * FROM t1 WHERE c = 90;
+
+--echo # Test 10: DROP multiple indexes
+ALTER TABLE t1 
+  DROP INDEX idx_a,
+  DROP INDEX idx_b,
+  ALGORITHM=INPLACE;
+
+SHOW INDEX FROM t1;
+
+--echo # Cleanup
+DROP TABLE t1;
+
+--echo #
+--echo # INPLACE ALTER tests completed!
+--echo #

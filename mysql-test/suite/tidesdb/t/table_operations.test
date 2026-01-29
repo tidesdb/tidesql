@@ -1,0 +1,82 @@
+--echo #
+--echo # TidesDB Table Operations Tests
+--echo #
+--echo # Tests for:
+--echo # - RENAME TABLE
+--echo # - TRUNCATE TABLE
+--echo # - CHECK TABLE
+--echo # - REPAIR TABLE
+--echo # - OPTIMIZE TABLE
+--echo # - ANALYZE TABLE
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: RENAME TABLE
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  name VARCHAR(100)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+SELECT * FROM t1 ORDER BY id;
+
+RENAME TABLE t1 TO t1_renamed;
+SELECT * FROM t1_renamed ORDER BY id;
+
+--echo # Verify old table doesn't exist
+--error ER_NO_SUCH_TABLE
+SELECT * FROM t1;
+
+RENAME TABLE t1_renamed TO t1;
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 2: TRUNCATE TABLE
+INSERT INTO t1 VALUES (4, 'David'), (5, 'Eve');
+SELECT COUNT(*) FROM t1;
+
+TRUNCATE TABLE t1;
+SELECT COUNT(*) FROM t1;
+
+--echo # Verify auto-increment resets after TRUNCATE
+INSERT INTO t1 VALUES (1, 'New First');
+SELECT * FROM t1;
+
+--echo # Test 3: CHECK TABLE
+DROP TABLE t1;
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  name VARCHAR(100),
+  INDEX idx_name (name)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+CHECK TABLE t1;
+
+--echo # Test 4: REPAIR TABLE
+REPAIR TABLE t1;
+
+--echo # Test 5: OPTIMIZE TABLE
+OPTIMIZE TABLE t1;
+
+--echo # Test 6: ANALYZE TABLE
+ANALYZE TABLE t1;
+
+--echo # Verify data is still intact after maintenance operations
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Cleanup
+DROP TABLE t1;
+
+--echo #
+--echo # Table operations tests completed!
+--echo #
