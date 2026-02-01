@@ -192,7 +192,7 @@ class ha_tidesdb : public handler
     /* Index-only scan mode */
     bool keyread_only;
 
-    /* FIX 1: Track if current transaction is read-only (skip commit overhead) */
+    /* Track if current transaction is read-only (skip commit overhead) */
     bool txn_read_only;
 
     /* Buffer pooling for build_index_key() */
@@ -211,9 +211,9 @@ class ha_tidesdb : public handler
     tidesdb_iter_t *index_iter;  /* Iterator for secondary index scans */
     uchar *index_key_buf;        /* Saved search key for index_next_same */
     uint index_key_len;          /* Length of saved search key */
-    uint index_key_buf_capacity; /* FIX 2: Pre-allocated capacity */
+    uint index_key_buf_capacity; /* Pre-allocated capacity */
 
-    /* FIX 3: Buffer for saved old key in update_row */
+    /* Buffer for saved old key in update_row */
     uchar *saved_key_buffer;
     size_t saved_key_buffer_capacity;
 
