@@ -178,6 +178,27 @@ class ha_tidesdb : public handler
     tidesdb_txn_t *bulk_txn;
     ha_rows bulk_insert_rows;
 
+    /* Skip redundant duplicate key check */
+    bool skip_dup_check;
+
+    /* Buffer pooling for pack_row() */
+    uchar *pack_buffer;
+    size_t pack_buffer_capacity;
+
+    /* Index Condition Pushdown */
+    Item *pushed_idx_cond;
+    uint pushed_idx_cond_keyno;
+
+    /* Index-only scan mode */
+    bool keyread_only;
+
+    /* FIX 1: Track if current transaction is read-only (skip commit overhead) */
+    bool txn_read_only;
+
+    /* Buffer pooling for build_index_key() */
+    uchar *idx_key_buffer;
+    size_t idx_key_buffer_capacity;
+
     /* Fulltext search state */
     uint ft_current_idx;        /* Current FT index being searched */
     tidesdb_iter_t *ft_iter;    /* Iterator for FT results */
@@ -187,9 +208,14 @@ class ha_tidesdb : public handler
     uint ft_current_match;      /* Current position in matches */
 
     /* Secondary index scan state */
-    tidesdb_iter_t *index_iter; /* Iterator for secondary index scans */
-    uchar *index_key_buf;       /* Saved search key for index_next_same */
-    uint index_key_len;         /* Length of saved search key */
+    tidesdb_iter_t *index_iter;  /* Iterator for secondary index scans */
+    uchar *index_key_buf;        /* Saved search key for index_next_same */
+    uint index_key_len;          /* Length of saved search key */
+    uint index_key_buf_capacity; /* FIX 2: Pre-allocated capacity */
+
+    /* FIX 3: Buffer for saved old key in update_row */
+    uchar *saved_key_buffer;
+    size_t saved_key_buffer_capacity;
 
     /* Helper methods */
     int pack_row(const uchar *buf, uchar **packed, size_t *packed_len);
@@ -287,7 +313,8 @@ class ha_tidesdb : public handler
                HA_CAN_EXPORT |             /* Supports transportable tablespaces */
                HA_CAN_ONLINE_BACKUPS |     /* Supports online backup */
                HA_CONCURRENT_OPTIMIZE |    /* OPTIMIZE doesn't block */
-               HA_CAN_RTREEKEYS;           /* Supports spatial indexes via Z-order */
+               HA_CAN_RTREEKEYS |          /* Supports spatial indexes via Z-order */
+               HA_TABLE_SCAN_ON_INDEX;     /* Can scan table via index */
     }
 
     /** @brief
@@ -409,6 +436,9 @@ class ha_tidesdb : public handler
 
     /* Reset handler state */
     int reset(void);
+
+    /* Index Condition Pushdown */
+    Item *idx_cond_push(uint keyno, Item *idx_cond) override;
 
     /* Online DDL support */
     enum_alter_inplace_result check_if_supported_inplace_alter(
