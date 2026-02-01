@@ -148,7 +148,7 @@ typedef struct st_tidesdb_share
 */
 class ha_tidesdb : public handler
 {
-    THR_LOCK_DATA lock;    ///< MySQL lock
+    THR_LOCK_DATA lock;    ///< MySQL/MariaDB lock
     TIDESDB_SHARE *share;  ///< Shared lock info and CF handle
 
     /* Current transaction for this handler */
