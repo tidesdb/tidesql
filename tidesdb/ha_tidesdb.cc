@@ -22,7 +22,7 @@
   The ha_tidesdb storage engine implementation backed by TidesDB.
 
   @details
-  Each MySQL table maps to a TidesDB column family.
+  Each MySQL/MariaDB table maps to a TidesDB column family.
   Rows are stored as: primary_key -> serialized_row_data
 
   For tables without explicit primary keys, we generate a hidden
@@ -384,7 +384,7 @@ static int tidesdb_init_func(void *p)
     }
     else
     {
-        /* Default to MySQL data directory + tidesdb */
+        /* Default to MySQL/MariaDB data directory + tidesdb */
         snprintf(db_path, sizeof(db_path), "%s/tidesdb", mysql_data_home);
     }
     db_path[sizeof(db_path) - 1] = '\0';
@@ -481,7 +481,7 @@ static void set_thd_txn(THD *thd, handlerton *hton, tidesdb_txn_t *txn)
   @brief
   Commit a transaction.
 
-  Called by MySQL when COMMIT is issued or when auto-commit commits
+  Called by MySQL/MariaDB when COMMIT is issued or when auto-commit commits
   a statement. For multi-statement transactions, this commits the
   THD-level transaction.
 */
@@ -518,7 +518,7 @@ static int tidesdb_commit(THD *thd, bool all)
   @brief
   Rollback a transaction.
 
-  Called by MySQL when ROLLBACK is issued. For multi-statement
+  Called by MySQL/MariaDB when ROLLBACK is issued. For multi-statement
   transactions, this rolls back the THD-level transaction.
 */
 static int tidesdb_rollback(THD *thd, bool all)
@@ -1136,7 +1136,7 @@ void ha_tidesdb::free_current_key()
 
 /**
   @brief
-  Pack a MySQL row into a byte buffer for storage.
+  Pack a MySQL/MariaDB row into a byte buffer for storage.
 
   Uses MySQL's/MariaDB's native row format.
 
@@ -1223,7 +1223,7 @@ int ha_tidesdb::pack_row(const uchar *buf, uchar **packed, size_t *packed_len)
 
 /**
   @brief
-  Unpack a stored row back into MySQL's row buffer.
+  Unpack a stored row back into MySQL's/MariaDB's row buffer.
 
   For BLOB/TEXT fields, the data is stored after the fixed-length row portion
   with a 4-byte length prefix for each blob field. We copy blob data to
@@ -2977,7 +2977,7 @@ int ha_tidesdb::execute_fk_set_null(const uchar *buf, tidesdb_txn_t *txn)
                     /*
                       SET NULL implementation:
 
-                      The packed row format uses MySQL's native format where:
+                      The packed row format uses MySQL's/MariaDB's native format where:
                       -- The null bitmap is at offset table->s->null_bytes from start
                       -- Each field has a null bit at field->null_bit in the bitmap
 
@@ -2997,7 +2997,7 @@ int ha_tidesdb::execute_fk_set_null(const uchar *buf, tidesdb_txn_t *txn)
                           For each FK column, set its null bit in the null bitmap.
 
                           The null bitmap location depends on the table structure.
-                          In MySQL's row format, null flags are stored at the beginning
+                          In MySQL's/MariaDB's row format, null flags are stored at the beginning
                           of the record, with each nullable field having a bit.
                         */
 
@@ -3280,7 +3280,7 @@ int ha_tidesdb::execute_fk_cascade_update(const uchar *old_buf, const uchar *new
                   old parent PK to the new parent PK. The FK columns in the child
                   table store the parent's PK values.
 
-                  Since we store rows using MySQL's native format, the FK column
+                  Since we store rows using MySQL's/MariaDB's native format, the FK column
                   offsets are stored in share->referencing_fk_offsets[ref_idx][].
                   These offsets were populated when the FK relationship was registered.
 
@@ -6058,9 +6058,9 @@ ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const k
 
 /**
   @brief
-  Map MySQL isolation level to TidesDB isolation level.
+  Map MySQL/MariaDB isolation level to TidesDB isolation level.
 
-  MySQL: ISO_READ_UNCOMMITTED=0, ISO_READ_COMMITTED=1,
+  MySQL/MariaDB: ISO_READ_UNCOMMITTED=0, ISO_READ_COMMITTED=1,
          ISO_REPEATABLE_READ=2, ISO_SERIALIZABLE=3
   TidesDB: READ_UNCOMMITTED=0, READ_COMMITTED=1, REPEATABLE_READ=2,
            SNAPSHOT=3, SERIALIZABLE=4
