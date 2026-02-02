@@ -73,6 +73,9 @@ static int tidesdb_xa_recover(XID *xid_list, uint len);
 static int tidesdb_commit_by_xid(XID *xid);
 static int tidesdb_rollback_by_xid(XID *xid);
 
+/* Optimizer cost callback */
+static void tidesdb_update_optimizer_costs(OPTIMIZER_COSTS *costs);
+
 /* XA transaction tracking structures (defined early for use in shutdown) */
 struct tidesdb_xa_txn_t
 {
@@ -174,6 +177,9 @@ static ulonglong tidesdb_min_disk_space = 100 * 1024 * 1024; /* 100MB minimum di
 static ulong tidesdb_l1_file_count_trigger = 4;     /* L1 file count trigger for compaction */
 static ulong tidesdb_l0_queue_stall_threshold = 20; /* L0 queue stall threshold */
 static ulong tidesdb_max_open_sstables = 256;       /* Max cached SSTable structures */
+
+/* B+tree format for column families (faster point lookups via O(log N) traversal) */
+static my_bool tidesdb_use_btree = TRUE;
 
 /* Logging configuration */
 static my_bool tidesdb_log_to_file = FALSE;                    /* Log to file instead of stderr */
@@ -343,6 +349,86 @@ static int tidesdb_savepoint_release(THD *thd, void *savepoint);
 
 /**
   @brief
+  Update optimizer costs for TidesDB (LSM-tree specific).
+
+  LSM-tree characteristics that affect costs:
+  -- Point lookups: Check memtable + bloom filters + multiple SSTable levels
+  -- Range scans: Merge iterator across levels (more expensive than B-tree)
+  -- Writes: Fast (append to memtable), but read amplification
+  -- Block cache: Hot data is cached, reducing disk reads
+
+  Cost adjustments vs default B-tree assumptions:
+  -- key_lookup_cost: Higher due to multi-level search (but bloom filters help)
+  -- row_lookup_cost: Similar to key lookup (data is with keys in LSM)
+  -- key_next_find_cost: Higher due to merge iterator overhead
+  -- disk_read_ratio: Lower if bloom filters enabled (fewer false reads)
+*/
+static void tidesdb_update_optimizer_costs(OPTIMIZER_COSTS *costs)
+{
+    /*
+     * LSM-tree point lookup cost:
+     * -- Memtable check: O(log N) in skip list
+     * -- Bloom filter checks: O(1) per SSTable, ~1% false positive
+     * -- Level lookups: O(log N) per level, but bloom filters eliminate most
+     *
+     * With bloom filters enabled (default), point lookups are efficient.
+     * Without bloom filters, cost increases significantly.
+     */
+    if (tidesdb_enable_bloom_filter)
+    {
+        /* Bloom filters reduce effective lookup cost significantly */
+        costs->key_lookup_cost = 0.0008; /* Slightly higher than B-tree */
+        costs->row_lookup_cost = 0.0010; /* Row fetch after key lookup */
+    }
+    else
+    {
+        /* Without bloom filters, must check more SSTables */
+        costs->key_lookup_cost = 0.0020; /* Much higher without bloom */
+        costs->row_lookup_cost = 0.0025;
+    }
+
+    /*
+     * LSM-tree sequential access cost:
+     * - Merge iterator overhead: O(log S) where S = number of sources
+     * - But sequential within each SSTable is efficient
+     */
+    costs->key_next_find_cost = 0.00012; /* Merge iterator overhead */
+    costs->row_next_find_cost = 0.00015;
+
+    /*
+     * Key/row copy costs - similar to other engines
+     */
+    costs->key_copy_cost = 0.000015;
+    costs->row_copy_cost = 0.000060;
+
+    /*
+     * Disk read characteristics:
+     * -- Block cache reduces disk reads significantly
+     * -- 64KB blocks are read sequentially
+     */
+    costs->disk_read_cost = 0.000875; /* Cost per 4KB page */
+    costs->disk_read_ratio = 0.20;    /* 20% of reads hit disk (80% cached) */
+
+    /*
+     * Index block copy cost -- TidesDB uses 64KB blocks/nodes
+     * (both block-based and B+tree formats use 64KB)
+     */
+    costs->index_block_copy_cost = 0.000030;
+
+    /*
+     * Key comparison cost -- standard
+     */
+    costs->key_cmp_cost = 0.000011;
+
+    /*
+     * Rowid costs for MRR/rowid filter
+     */
+    costs->rowid_cmp_cost = 0.000006;
+    costs->rowid_copy_cost = 0.000012;
+}
+
+/**
+  @brief
   Initialize the TidesDB storage engine.
 */
 static int tidesdb_init_func(void *p)
@@ -375,6 +461,9 @@ static int tidesdb_init_func(void *p)
 
     /* Partitioning support */
     tidesdb_hton->partition_flags = tidesdb_partition_flags;
+
+    /* LSM-tree specific optimizer costs */
+    tidesdb_hton->update_optimizer_costs = tidesdb_update_optimizer_costs;
 
     /* We initialize TidesDB instance */
     static char db_path[FN_REFLEN]; /* Static to ensure it persists */
@@ -1040,7 +1129,105 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *stat_
     buf_len += snprintf(
         buf + buf_len, buf_size - buf_len,
         "\n"
-        "=░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\n"
+        "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\n"
+        "INDEX FORMAT\n"
+        "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\n"
+        "| %-24s | %-20s |\n",
+        "Default Format", tidesdb_use_btree ? "B+TREE" : "SKIP-LIST");
+
+    /* Per-column family statistics */
+    buf_len += snprintf(
+        buf + buf_len, buf_size - buf_len,
+        "\n"
+        "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\n"
+        "COLUMN FAMILY STATISTICS\n"
+        "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\n");
+
+    char **cf_names = NULL;
+    int cf_count = 0;
+    if (tidesdb_list_column_families(tidesdb_instance, &cf_names, &cf_count) == TDB_SUCCESS)
+    {
+        buf_len += snprintf(buf + buf_len, buf_size - buf_len, "| %-24s | %-20d |\n\n",
+                            "Total Column Families", cf_count);
+
+        for (int i = 0; i < cf_count && buf_len < (int)(buf_size - 2048); i++)
+        {
+            tidesdb_column_family_t *cf = tidesdb_get_column_family(tidesdb_instance, cf_names[i]);
+            if (cf)
+            {
+                tidesdb_stats_t *cf_stats = NULL;
+                if (tidesdb_get_stats(cf, &cf_stats) == TDB_SUCCESS && cf_stats)
+                {
+                    buf_len +=
+                        snprintf(buf + buf_len, buf_size - buf_len, "--- %s ---\n", cf_names[i]);
+                    buf_len +=
+                        snprintf(buf + buf_len, buf_size - buf_len, "  Format:          %s\n",
+                                 cf_stats->use_btree ? "B+TREE" : "SKIP-LIST");
+                    buf_len += snprintf(buf + buf_len, buf_size - buf_len,
+                                        "  Total Keys:      %" PRIu64 "\n", cf_stats->total_keys);
+                    buf_len +=
+                        snprintf(buf + buf_len, buf_size - buf_len, "  Data Size:       %.2f MB\n",
+                                 cf_stats->total_data_size / (1024.0 * 1024.0));
+                    buf_len +=
+                        snprintf(buf + buf_len, buf_size - buf_len, "  Memtable Size:   %.2f KB\n",
+                                 cf_stats->memtable_size / 1024.0);
+                    buf_len += snprintf(buf + buf_len, buf_size - buf_len,
+                                        "  LSM Levels:      %d\n", cf_stats->num_levels);
+                    buf_len += snprintf(buf + buf_len, buf_size - buf_len,
+                                        "  Read Amp:        %.2f\n", cf_stats->read_amp);
+                    buf_len += snprintf(buf + buf_len, buf_size - buf_len,
+                                        "  Cache Hit Rate:  %.1f%%\n", cf_stats->hit_rate * 100.0);
+                    buf_len += snprintf(buf + buf_len, buf_size - buf_len,
+                                        "  Avg Key Size:    %.1f bytes\n", cf_stats->avg_key_size);
+                    buf_len +=
+                        snprintf(buf + buf_len, buf_size - buf_len,
+                                 "  Avg Value Size:  %.1f bytes\n", cf_stats->avg_value_size);
+
+                    /* B+tree specific stats */
+                    if (cf_stats->use_btree)
+                    {
+                        buf_len += snprintf(buf + buf_len, buf_size - buf_len,
+                                            "  B+tree Nodes:    %" PRIu64 "\n",
+                                            cf_stats->btree_total_nodes);
+                        buf_len +=
+                            snprintf(buf + buf_len, buf_size - buf_len, "  B+tree Max Height: %u\n",
+                                     cf_stats->btree_max_height);
+                        buf_len +=
+                            snprintf(buf + buf_len, buf_size - buf_len,
+                                     "  B+tree Avg Height: %.2f\n", cf_stats->btree_avg_height);
+                    }
+
+                    /* Per-level stats (compact format) */
+                    if (cf_stats->num_levels > 0)
+                    {
+                        buf_len += snprintf(buf + buf_len, buf_size - buf_len, "  Levels: ");
+                        for (int lvl = 0; lvl < cf_stats->num_levels && lvl < 7; lvl++)
+                        {
+                            buf_len +=
+                                snprintf(buf + buf_len, buf_size - buf_len, "L%d(%d/%.1fMB) ", lvl,
+                                         cf_stats->level_num_sstables[lvl],
+                                         cf_stats->level_sizes[lvl] / (1024.0 * 1024.0));
+                        }
+                        buf_len += snprintf(buf + buf_len, buf_size - buf_len, "\n");
+                    }
+
+                    buf_len += snprintf(buf + buf_len, buf_size - buf_len, "\n");
+                    tidesdb_free_stats(cf_stats);
+                }
+            }
+            free(cf_names[i]);
+        }
+        free(cf_names);
+    }
+    else
+    {
+        buf_len += snprintf(buf + buf_len, buf_size - buf_len, "| %-24s | %-20s |\n", "Status",
+                            "UNAVAILABLE");
+    }
+
+    buf_len += snprintf(
+        buf + buf_len, buf_size - buf_len,
+        "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\n"
         "                         END OF TIDESDB ENGINE STATUS\n"
         "░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\n");
 
@@ -1172,8 +1359,12 @@ int ha_tidesdb::pack_row(const uchar *buf, uchar **packed, size_t *packed_len)
     if (total_len > pack_buffer_capacity)
     {
         size_t new_capacity = total_len > 4096 ? total_len * 2 : 4096;
-        uchar *new_buf =
-            (uchar *)my_realloc(PSI_INSTRUMENT_ME, pack_buffer, new_capacity, MYF(MY_WME));
+        uchar *new_buf;
+        if (pack_buffer == NULL)
+            new_buf = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+        else
+            new_buf =
+                (uchar *)my_realloc(PSI_INSTRUMENT_ME, pack_buffer, new_capacity, MYF(MY_WME));
         if (!new_buf) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
         pack_buffer = new_buf;
         pack_buffer_capacity = new_capacity;
@@ -1584,10 +1775,14 @@ int ha_tidesdb::build_hidden_pk(uchar **key, size_t *key_len)
         pk_buffer_len = 8;
     }
 
-    /* We get next hidden PK value atomically using per-table mutex */
-    pthread_mutex_lock(&share->hidden_pk_mutex);
-
-    ulonglong pk_val = ++share->hidden_pk_value;
+    /*
+     * SCALABILITY: Use lock-free atomic increment for hidden PK
+     * This eliminates mutex contention on high-concurrency inserts.
+     * TidesDB itself is lockless, so the plugin should match.
+     */
+    ulonglong pk_val = my_atomic_add64_explicit((volatile int64 *)&share->hidden_pk_value, 1,
+                                                MY_MEMORY_ORDER_RELAXED) +
+                       1;
 
     /* We persist the new max value to TidesDB metadata every N inserts for performance.
        We persist every 100 values and on close. On recovery, we'll scan to find
@@ -1596,8 +1791,6 @@ int ha_tidesdb::build_hidden_pk(uchar **key, size_t *key_len)
     {
         persist_hidden_pk_value(pk_val);
     }
-
-    pthread_mutex_unlock(&share->hidden_pk_mutex);
 
     /* We store as big-endian for proper sort order in TidesDB */
     int8store(pk_buffer, pk_val);
@@ -1744,11 +1937,18 @@ void ha_tidesdb::load_hidden_pk_value()
 {
     if (!share || !share->cf || !tidesdb_instance) return;
 
-    /* Already loaded? */
-    if (share->hidden_pk_value > 0) return;
+    /* Already loaded? Use atomic load for lock-free check */
+    if (my_atomic_load64_explicit((volatile int64 *)&share->hidden_pk_value,
+                                  MY_MEMORY_ORDER_ACQUIRE) > 0)
+        return;
 
+    /*
+     * For initialization, we still need a mutex to prevent multiple threads
+     * from scanning simultaneously. But this only happens once per table open.
+     */
     pthread_mutex_lock(&share->hidden_pk_mutex);
 
+    /* Double-check after acquiring lock */
     if (share->hidden_pk_value > 0)
     {
         pthread_mutex_unlock(&share->hidden_pk_mutex);
@@ -1816,7 +2016,9 @@ void ha_tidesdb::load_hidden_pk_value()
         tidesdb_txn_free(txn);
     }
 
-    share->hidden_pk_value = max_pk;
+    /* Use atomic store with release semantics to ensure visibility */
+    my_atomic_store64_explicit((volatile int64 *)&share->hidden_pk_value, max_pk,
+                               MY_MEMORY_ORDER_RELEASE);
 
     pthread_mutex_unlock(&share->hidden_pk_mutex);
 }
@@ -1854,8 +2056,12 @@ int ha_tidesdb::build_index_key(uint idx, const uchar *buf, uchar **key, size_t 
     if (total_len > idx_key_buffer_capacity)
     {
         size_t new_capacity = total_len > 256 ? total_len * 2 : 256;
-        uchar *new_buf =
-            (uchar *)my_realloc(PSI_INSTRUMENT_ME, idx_key_buffer, new_capacity, MYF(MY_WME));
+        uchar *new_buf;
+        if (idx_key_buffer == NULL)
+            new_buf = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+        else
+            new_buf =
+                (uchar *)my_realloc(PSI_INSTRUMENT_ME, idx_key_buffer, new_capacity, MYF(MY_WME));
         if (!new_buf) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
         idx_key_buffer = new_buf;
         idx_key_buffer_capacity = new_capacity;
@@ -1923,7 +2129,7 @@ int ha_tidesdb::insert_index_entry(uint idx, const uchar *buf, tidesdb_txn_t *tx
         pk_value = (uchar *)my_malloc(PSI_INSTRUMENT_ME, pk_len, MYF(MY_WME));
         if (!pk_value)
         {
-            /* We don't free idx_key - it's idx_key_buffer */
+            /* We don't free idx_key -- it's idx_key_buffer */
             DBUG_RETURN(HA_ERR_OUT_OF_MEM);
         }
         key_copy(pk_value, (uchar *)buf, pk, pk_len);
@@ -2042,6 +2248,7 @@ int ha_tidesdb::create_secondary_indexes(const char *table_name)
     cf_config.write_buffer_size = tidesdb_write_buffer_size;
     cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
     cf_config.bloom_fpr = tidesdb_bloom_fpr;
+    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
 
     if (tidesdb_enable_compression)
     {
@@ -2140,6 +2347,7 @@ int ha_tidesdb::create_fulltext_indexes(const char *table_name)
     cf_config.write_buffer_size = tidesdb_write_buffer_size;
     cf_config.enable_bloom_filter = 1;
     cf_config.bloom_fpr = 0.01;
+    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
 
     if (tidesdb_enable_compression)
     {
@@ -3452,6 +3660,7 @@ int ha_tidesdb::create_spatial_index(const char *table_name, uint key_nr)
     cf_config.write_buffer_size = tidesdb_write_buffer_size;
     cf_config.enable_bloom_filter = 1;
     cf_config.bloom_fpr = 0.01;
+    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
 
     int ret = tidesdb_create_column_family(tidesdb_instance, spatial_cf_name, &cf_config);
     if (ret != TDB_SUCCESS && ret != TDB_ERR_EXISTS)
@@ -3889,6 +4098,40 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
 
 /**
   @brief
+  Clone the handler for parallel operations.
+
+  This is used by:
+  -- DS-MRR (Disk-Sweep Multi-Range Read) which needs two handlers
+  -- Parallel query execution
+  -- Unique hash key lookups (WITHOUT OVERLAPS)
+
+  @param name      Table name
+  @param mem_root  Memory root for allocations
+
+  @return Cloned handler or NULL on failure
+
+  @note We use the base class implementation which handles all the
+        complexity of cloning properly. TidesDB handlers can be cloned
+        because they share the same TIDESDB_SHARE and column family handles.
+*/
+handler *ha_tidesdb::clone(const char *name, MEM_ROOT *mem_root)
+{
+    DBUG_ENTER("ha_tidesdb::clone");
+
+    /* Use base class clone implementation */
+    handler *new_handler = handler::clone(name, mem_root);
+
+    if (new_handler)
+    {
+        /* Set optimizer costs for the clone */
+        new_handler->set_optimizer_costs(ha_thd());
+    }
+
+    DBUG_RETURN(new_handler);
+}
+
+/**
+  @brief
   Close a table.
 */
 int ha_tidesdb::close(void)
@@ -3939,6 +4182,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
     cf_config.min_disk_space = tidesdb_min_disk_space;
     cf_config.l1_file_count_trigger = tidesdb_l1_file_count_trigger;
     cf_config.l0_queue_stall_threshold = tidesdb_l0_queue_stall_threshold;
+    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
 
     if (tidesdb_enable_compression)
     {
@@ -4337,6 +4581,47 @@ int ha_tidesdb::write_row(const uchar *buf)
             DBUG_RETURN(HA_ERR_GENERIC);
         }
     }
+    else if (bulk_insert_active && bulk_txn)
+    {
+        /*
+         * For bulk inserts with our own transaction (not THD-level),
+         * commit periodically to avoid transaction log overflow and
+         * reduce memory pressure from large memtables.
+         */
+        THD *thd = ha_thd();
+        tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+
+        if (bulk_txn != thd_txn)
+        {
+            bulk_insert_count++;
+
+            if (bulk_insert_count >= BULK_COMMIT_THRESHOLD)
+            {
+                /* Intermediate commit */
+                ret = tidesdb_txn_commit(bulk_txn);
+                tidesdb_txn_free(bulk_txn);
+                bulk_txn = NULL;
+
+                if (ret != TDB_SUCCESS)
+                {
+                    sql_print_error("TidesDB: Failed intermediate bulk commit: %d", ret);
+                    bulk_insert_active = false;
+                    DBUG_RETURN(HA_ERR_GENERIC);
+                }
+
+                /* Start new transaction for next batch */
+                ret = tidesdb_txn_begin(tidesdb_instance, &bulk_txn);
+                if (ret != TDB_SUCCESS)
+                {
+                    sql_print_error("TidesDB: Failed to begin new bulk transaction: %d", ret);
+                    bulk_insert_active = false;
+                    DBUG_RETURN(HA_ERR_GENERIC);
+                }
+
+                bulk_insert_count = 0;
+            }
+        }
+    }
 
     stats.records++;
 
@@ -4367,8 +4652,12 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     if (old_key_len > saved_key_buffer_capacity)
     {
         size_t new_capacity = old_key_len > 256 ? old_key_len * 2 : 256;
-        uchar *new_buf =
-            (uchar *)my_realloc(PSI_INSTRUMENT_ME, saved_key_buffer, new_capacity, MYF(MY_WME));
+        uchar *new_buf;
+        if (saved_key_buffer == NULL)
+            new_buf = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+        else
+            new_buf =
+                (uchar *)my_realloc(PSI_INSTRUMENT_ME, saved_key_buffer, new_capacity, MYF(MY_WME));
         if (!new_buf) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
         saved_key_buffer = new_buf;
         saved_key_buffer_capacity = new_capacity;
@@ -5028,8 +5317,12 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         if (key_len > index_key_buf_capacity)
         {
             uint new_capacity = key_len > 256 ? key_len * 2 : 256;
-            uchar *new_buf =
-                (uchar *)my_realloc(PSI_INSTRUMENT_ME, index_key_buf, new_capacity, MYF(MY_WME));
+            uchar *new_buf;
+            if (index_key_buf == NULL)
+                new_buf = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+            else
+                new_buf = (uchar *)my_realloc(PSI_INSTRUMENT_ME, index_key_buf, new_capacity,
+                                              MYF(MY_WME));
             if (new_buf)
             {
                 index_key_buf = new_buf;
@@ -5040,6 +5333,36 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         {
             memcpy(index_key_buf, key, key_len);
             index_key_len = key_len;
+        }
+
+        /*
+         * KEYREAD OPTIMIZATION (Covering Index)
+         * For index-only scans, use key_restore() to unpack the index key
+         * directly to the record buffer, avoiding the expensive PK lookup.
+         * Index key format: [index_columns][primary_key]
+         */
+        if (keyread_only)
+        {
+            KEY *key_info = &table->key_info[active_index];
+            uint idx_restore_len = key_info->key_length;
+
+            if (idx_restore_len <= idx_key_len)
+            {
+                memset(buf, 0, table->s->reclength);
+                key_restore(buf, idx_key, key_info, idx_restore_len);
+
+                /* Also restore the primary key portion */
+                if (table->s->primary_key != MAX_KEY)
+                {
+                    KEY *pk_info = &table->key_info[table->s->primary_key];
+                    uint pk_len = pk_info->key_length;
+                    if (idx_restore_len + pk_len <= idx_key_len)
+                    {
+                        key_restore(buf, idx_key + idx_restore_len, pk_info, pk_len);
+                    }
+                }
+                DBUG_RETURN(0);
+            }
         }
 
         /* We now fetch the actual row using the primary key */
@@ -5121,6 +5444,45 @@ int ha_tidesdb::index_next(uchar *buf)
         }
         memcpy(current_key, pk_value, pk_len);
         current_key_len = pk_len;
+
+        /*
+         * KEYREAD OPTIMIZATION (Covering Index)
+         * When keyread_only is set, the query only needs columns in the index.
+         * The index key was built using key_copy(), so we use key_restore() to
+         * unpack it back to the record buffer. This avoids the expensive PK lookup.
+         *
+         * Index key format: [index_columns][primary_key]
+         * We restore both the index columns and the appended primary key.
+         */
+        if (keyread_only)
+        {
+            KEY *key_info = &table->key_info[active_index];
+            uint idx_restore_len = key_info->key_length;
+
+            /* Ensure we don't read past the index key */
+            if (idx_restore_len <= idx_key_len)
+            {
+                /* Clear the record buffer first */
+                memset(buf, 0, table->s->reclength);
+
+                /* Restore the index columns */
+                key_restore(buf, idx_key, key_info, idx_restore_len);
+
+                /* Also restore the primary key portion (appended after index columns) */
+                if (table->s->primary_key != MAX_KEY)
+                {
+                    KEY *pk_info = &table->key_info[table->s->primary_key];
+                    uint pk_len = pk_info->key_length;
+                    if (idx_restore_len + pk_len <= idx_key_len)
+                    {
+                        key_restore(buf, idx_key + idx_restore_len, pk_info, pk_len);
+                    }
+                }
+
+                DBUG_RETURN(0);
+            }
+            /* Fall through to full row fetch if key format is unexpected */
+        }
 
         if (!current_txn)
         {
@@ -5243,6 +5605,35 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
         }
         memcpy(current_key, pk_value, pk_len);
         current_key_len = pk_len;
+
+        /*
+         * KEYREAD OPTIMIZATION (Covering Index)
+         * Use key_restore() to unpack index key directly to record buffer.
+         * Index key format: [index_columns][primary_key]
+         */
+        if (keyread_only)
+        {
+            KEY *key_info = &table->key_info[active_index];
+            uint idx_restore_len = key_info->key_length;
+
+            if (idx_restore_len <= idx_key_len)
+            {
+                memset(buf, 0, table->s->reclength);
+                key_restore(buf, idx_key, key_info, idx_restore_len);
+
+                /* Also restore the primary key portion */
+                if (table->s->primary_key != MAX_KEY)
+                {
+                    KEY *pk_info = &table->key_info[table->s->primary_key];
+                    uint pk_len = pk_info->key_length;
+                    if (idx_restore_len + pk_len <= idx_key_len)
+                    {
+                        key_restore(buf, idx_key + idx_restore_len, pk_info, pk_len);
+                    }
+                }
+                DBUG_RETURN(0);
+            }
+        }
 
         if (!current_txn)
         {
@@ -5701,6 +6092,7 @@ int ha_tidesdb::delete_all_rows()
     tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
     cf_config.write_buffer_size = tidesdb_write_buffer_size;
     cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
+    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
 
     if (tidesdb_enable_compression)
     {
@@ -5771,9 +6163,9 @@ int ha_tidesdb::delete_all_rows()
     share->auto_increment_value = 1;
     pthread_mutex_unlock(&share->auto_inc_mutex);
 
-    pthread_mutex_lock(&share->hidden_pk_mutex);
-    share->hidden_pk_value = 0;
-    pthread_mutex_unlock(&share->hidden_pk_mutex);
+    /* Use atomic store for lock-free reset of hidden PK counter */
+    my_atomic_store64_explicit((volatile int64 *)&share->hidden_pk_value, 0,
+                               MY_MEMORY_ORDER_RELEASE);
 
     DBUG_RETURN(0);
 }
@@ -5782,16 +6174,25 @@ int ha_tidesdb::delete_all_rows()
   @brief
   Estimate the cost of a full table scan.
 
-  LSM-tree scan cost model using TidesDB statistics:
-  -- total_data_size: actual bytes to read (I/O cost)
-  -- total_sstables: merge iterator overhead
-  -- hit_rate: cache effectiveness (reduces I/O)
+  TidesDB LSM-tree scan cost model based on architecture:
 
-  Cost formula:
-    cost = (data_blocks * merge_overhead * cache_miss_rate) + cpu_cost
+  Read path for full scan:
+  1. Active memtable (in-memory skip list)
+  2. Immutable memtables awaiting flush (in-memory)
+  3. SSTables level by level (L1, L2, ..., Ln)
 
-  The result should be comparable to read_time() so the optimizer
-  can correctly choose between table scan and index scan.
+  For each SSTable during scan:
+  -- Sequential block reads (64KB blocks)
+  -- Merge iterator maintains min-heap across all sources
+  -- Values > 512 bytes require vlog lookup (extra seek)
+
+  Cost components:
+  -- I/O: (total_blocks * cache_miss_rate) + vlog_seeks
+  -- CPU: merge_heap_overhead + deserialization
+
+  B+tree vs Block-based format:
+  -- B+tree: Doubly-linked leaf nodes enable O(1) next-leaf traversal
+  -- Block-based: Sequential block reads, no extra overhead for scans
 */
 IO_AND_CPU_COST ha_tidesdb::scan_time()
 {
@@ -5807,51 +6208,84 @@ IO_AND_CPU_COST ha_tidesdb::scan_time()
         if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
         {
             /*
-              I/O cost -- based on total data size
-              -- 64KB block size
-              -- Each block read has base cost of 1.0
+              I/O cost based on total data size
+              TidesDB uses fixed 64KB blocks for klog
             */
             double data_bytes = (double)tdb_stats->total_data_size;
-            double block_size = 65536.0;
+            double block_size = 65536.0; /* 64KB fixed block size */
             double num_blocks = data_bytes / block_size;
             if (num_blocks < 1.0) num_blocks = 1.0;
 
             /*
-              Merge overhead -- LSM-tree scans must merge across SSTables
-              -- Each SSTable in the scan path adds comparison overhead
-              -- Memtable is also part of the merge for L0->L1
+              Merge iterator overhead (min-heap across all sources)
+              Sources: 1 active memtable + immutable memtables + all SSTables
+              Heap operations: O(log S) per row where S = number of sources
             */
-            int total_sstables = 1; /* Start with 1 for memtable */
+            int total_sources = 1; /* Active memtable */
             for (int i = 0; i < tdb_stats->num_levels; i++)
             {
-                total_sstables += tdb_stats->level_num_sstables[i];
+                total_sources += tdb_stats->level_num_sstables[i];
             }
-            double merge_overhead = 1.0 + (log2((double)total_sstables) * 0.1);
+            /* Merge overhead scales with log(sources) for heap operations */
+            double merge_overhead = 1.0 + (log2((double)total_sources) * 0.05);
             if (merge_overhead < 1.0) merge_overhead = 1.0;
 
             /*
-              Cache factor -- hit_rate reduces I/O cost
-              -- 0% hit rate = full I/O cost
-              -- 100% hit rate = 10% of I/O cost (still need CPU for merge)
+              Cache effectiveness
+              TidesDB uses clock cache with zero-copy reads
+              High hit rate means blocks served from memory
             */
             double cache_factor = 1.0 - (tdb_stats->hit_rate * 0.9);
             if (cache_factor < 0.1) cache_factor = 0.1;
 
             /*
-              CPU cost -- processing each row has a base cost
-              -- Independent of I/O, represents deserialization + comparison
+              Vlog indirection cost for large values (> 512 bytes default)
+              Each large value requires additional seek to vlog file
+              Estimate: ~20% of values are large (heuristic)
             */
-            double cpu_cost = (double)tdb_stats->total_keys * 0.001;
+            double vlog_overhead = 1.0;
+            if (tdb_stats->avg_value_size > 512)
+            {
+                /* Most values are large, significant vlog overhead */
+                vlog_overhead = 1.3;
+            }
+            else if (tdb_stats->avg_value_size > 256)
+            {
+                /* Some values are large */
+                vlog_overhead = 1.1;
+            }
 
-            /* Total cost */
-            cost.io = num_blocks * merge_overhead * cache_factor;
+            /*
+              B+tree vs Block-based format for sequential scans
+              -- B+tree: Leaf nodes doubly-linked, O(1) traversal via next_offset
+              -- Block-based: Sequential reads, slightly more efficient for full scans
+              For full table scans, block-based is marginally better (no tree overhead)
+            */
+            double format_factor = 1.0;
+            if (tdb_stats->use_btree)
+            {
+                /* B+tree has slight overhead for leaf link traversal */
+                format_factor = 1.02;
+            }
+            /* Block-based is baseline (1.0) for sequential scans */
+
+            /*
+              CPU cost: deserialization + merge heap operations
+              -- Varint decoding for each entry
+              -- Prefix decompression for B+tree keys
+              -- Heap sift operations
+            */
+            double cpu_cost = (double)tdb_stats->total_keys * 0.001 * merge_overhead;
+
+            /* Total I/O cost */
+            cost.io = num_blocks * merge_overhead * cache_factor * vlog_overhead * format_factor;
             cost.cpu = cpu_cost;
 
             tidesdb_free_stats(tdb_stats);
         }
         else
         {
-            /* Fallback: estimate based on stats.records */
+            /* Fallback without stats */
             ha_rows rows = stats.records;
             if (rows == 0) rows = 100;
             cost.io = (double)rows / 100.0 + 1.0;
@@ -5859,7 +6293,6 @@ IO_AND_CPU_COST ha_tidesdb::scan_time()
         }
     }
 
-    /* Minimum cost of 1.0 for any scan */
     if (cost.io < 1.0) cost.io = 1.0;
 
     DBUG_RETURN(cost);
@@ -5869,14 +6302,27 @@ IO_AND_CPU_COST ha_tidesdb::scan_time()
   @brief
   Estimate the cost of reading rows via index.
 
-  LSM-tree index read cost model using TidesDB statistics:
-  -- read_amp -- average levels checked per point lookup (with bloom filters, ~1.0-1.5)
-  -- hit_rate -- cache effectiveness (reduces I/O cost)
-  -- avg_key_size + avg_value_size -- I/O per row
+  TidesDB point lookup cost model based on architecture:
 
-  Cost components:
-  1. Seek cost -- cost to position iterator at start of each range
-  2. Row fetch cost -- cost to read each row (index entry + data row lookup)
+  For each point lookup, search order:
+  1. Active memtable (skip list binary search)
+  2. Immutable memtables (skip list binary search each)
+  3. For each SSTable (L1, L2, ..., Ln):
+     a. Check min/max key bounds (O(1))
+     b. Check bloom filter if enabled (O(k) hash ops, 1% FPR default)
+     c. If bloom positive: block index binary search O(log B)
+     d. Read block and binary search within block
+     e. If vlog offset, read value from vlog (extra seek)
+
+  Bloom filter effectiveness (critical for LSM performance):
+  -- 1% FPR means 99% of absent-key lookups skip disk I/O
+  -- Expected reads for absent key: 1 + L*0.01 where L = num_levels
+  -- For present key: must read actual block (bloom doesn't help)
+
+  B+tree vs Block-based format:
+  -- B+tree: O(log N) tree traversal, binary search at each node
+  -- Block-based: O(log B) block index + O(log E) within 64KB block
+  -- B+tree excels at point lookups due to better cache locality
 */
 IO_AND_CPU_COST ha_tidesdb::read_time(uint index, uint ranges, ha_rows rows)
 {
@@ -5893,56 +6339,137 @@ IO_AND_CPU_COST ha_tidesdb::read_time(uint index, uint ranges, ha_rows rows)
         tidesdb_stats_t *tdb_stats = NULL;
         if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
         {
+            /*
+              Read amplification from TidesDB stats
+              With bloom filters (1% FPR): read_amp ≈ 1.0-1.5
+              Without bloom filters: read_amp ≈ num_levels
+            */
             double read_amp = tdb_stats->read_amp;
             if (read_amp < 1.0) read_amp = 1.0;
 
             /*
-              Seek cost per range:
-              -- Each seek requires checking bloom filters and indexes and potentially reading
-              blocks
-              -- With good bloom filters and indexes (read_amp ~1.0), seek is cheap
-              -- Without bloom filters and index (read_amp = num_levels), seek is expensive
+              Bloom filter benefit for point lookups
+              TidesDB checks bloom filter before any disk I/O
+              1% FPR eliminates 99% of unnecessary SSTable reads
             */
-            double seek_cost = 0.3 * read_amp;
+            double bloom_benefit = 1.0;
+            if (tdb_stats->config && tdb_stats->config->enable_bloom_filter)
+            {
+                /* Bloom filter reduces effective read_amp significantly */
+                double fpr = tdb_stats->config->bloom_fpr;
+                if (fpr <= 0) fpr = 0.01; /* Default 1% */
+                /* Expected SSTable reads = 1 + (L-1)*FPR for present keys */
+                bloom_benefit = 0.3 + (fpr * tdb_stats->num_levels);
+                if (bloom_benefit > 1.0) bloom_benefit = 1.0;
+            }
 
             /*
-              Row fetch cost:
-              -- For primary key index: just read the row data
-              -- For secondary index: read index entry + lookup primary key
-              -- Base cost: fraction of a block read per row
-              -- Amortized across block: multiple rows per block reduces per-row cost
+              B+tree vs Block-based format for point lookups
+
+              B+tree advantages:
+              -- O(log N) tree traversal with binary search at each node
+              -- Nodes cached independently (hot nodes stay in cache)
+              -- Key indirection table enables O(1) random access within node
+              -- Prefix compression reduces memory bandwidth
+
+              Block-based:
+              -- O(log B) block index lookup + O(log E) binary search in 64KB block
+              -- Must read entire 64KB block even for single key lookup
+              -- Block index uses 16-byte key prefixes (may need multiple blocks)
+            */
+            double format_factor = 1.0;
+            if (tdb_stats->use_btree)
+            {
+                /* B+tree is significantly faster for point lookups */
+                if (tdb_stats->btree_avg_height > 0)
+                {
+                    /* Cost based on actual tree height (typically 2-4 levels) */
+                    /* Each level = 1 node read, but nodes are often cached */
+                    format_factor = 0.2 + (tdb_stats->btree_avg_height * 0.15);
+                    if (format_factor > 0.8) format_factor = 0.8;
+                }
+                else
+                {
+                    /* Default B+tree benefit: ~50% faster than block-based */
+                    format_factor = 0.5;
+                }
+            }
+            else
+            {
+                /* Block-based format baseline */
+                /* Must read 64KB block for each lookup */
+                format_factor = 1.0;
+            }
+
+            /*
+              Seek cost per range
+              Includes: memtable search + bloom checks + block index + block read
+            */
+            double seek_cost = 0.2 * read_amp * bloom_benefit * format_factor;
+
+            /*
+              Row fetch cost per row
+              After initial seek, subsequent rows in same block are cheap
             */
             double avg_row_size = tdb_stats->avg_key_size + tdb_stats->avg_value_size;
             if (avg_row_size < 50) avg_row_size = 50;
 
-            /* Rows per block (64KB blocks) */
             double rows_per_block = 65536.0 / avg_row_size;
             if (rows_per_block < 1.0) rows_per_block = 1.0;
 
-            /* Cost per row: 1/rows_per_block of a block read */
-            /* Add read_amp factor for non-primary index lookups */
-            double row_fetch_cost = (1.0 / rows_per_block) * read_amp;
+            /* Amortized cost per row within a block */
+            double row_fetch_cost = (1.0 / rows_per_block) * format_factor;
 
-            /* Cache reduces I/O cost */
-            double cache_factor = 1.0 - (tdb_stats->hit_rate * 0.9); /* Up to 90% reduction */
-            if (cache_factor < 0.1) cache_factor = 0.1;              /* Minimum 10% cost */
+            /*
+              Vlog indirection for large values
+              Values > 512 bytes stored in vlog, require extra seek
+            */
+            double vlog_factor = 1.0;
+            if (tdb_stats->avg_value_size > 512)
+            {
+                vlog_factor = 1.4; /* Extra seek for each row */
+            }
+            else if (tdb_stats->avg_value_size > 256)
+            {
+                vlog_factor = 1.15; /* Some values in vlog */
+            }
 
-            /* Total cost -- range seeks + row reads */
-            cost.io = (ranges * seek_cost * cache_factor) + (rows * row_fetch_cost * cache_factor);
+            /*
+              Cache effectiveness
+              Clock cache with zero-copy reads
+              Hot blocks/nodes stay in memory
+            */
+            double cache_factor = 1.0 - (tdb_stats->hit_rate * 0.9);
+            if (cache_factor < 0.1) cache_factor = 0.1;
+
+            /*
+              Secondary index overhead
+              Secondary index lookup requires:
+              1. Index CF lookup to get PK
+              2. Main CF lookup using PK
+              This doubles the effective read cost
+            */
+            double secondary_idx_factor = 1.0;
+            if (index != table->s->primary_key)
+            {
+                secondary_idx_factor = 2.0;
+            }
+
+            /* Total cost */
+            cost.io = (ranges * seek_cost * cache_factor * secondary_idx_factor) +
+                      (rows * row_fetch_cost * cache_factor * vlog_factor * secondary_idx_factor);
             cost.cpu = (double)rows * 0.001;
 
             tidesdb_free_stats(tdb_stats);
         }
         else
         {
-            /* Fallback with simple estimate */
-            /* Assume moderate read_amp of 2.0 */
-            cost.io = (double)ranges * 0.6 + (double)rows * 0.02;
+            /* Fallback without stats */
+            cost.io = (double)ranges * 0.4 + (double)rows * 0.02;
             cost.cpu = 0.0;
         }
     }
 
-    /* Minimum cost to avoid optimizer choosing index for 0 rows */
     if (cost.io < 0.1) cost.io = 0.1;
 
     DBUG_RETURN(cost);
@@ -6916,6 +7443,7 @@ void ha_tidesdb::start_bulk_insert(ha_rows rows, uint flags)
     DBUG_PRINT("info", ("start_bulk_insert: rows %lu", (ulong)rows));
 
     bulk_insert_rows = rows;
+    bulk_insert_count = 0;
 
     skip_dup_check = true;
 
@@ -7185,6 +7713,7 @@ int ha_tidesdb::discard_or_import_tablespace(my_bool discard)
         cf_config.skip_list_max_level = tidesdb_skip_list_max_level;
         cf_config.enable_block_indexes = tidesdb_enable_block_indexes ? 1 : 0;
         cf_config.sync_mode = tidesdb_sync_mode;
+        cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
 
         if (tidesdb_enable_compression)
             cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
@@ -7761,6 +8290,7 @@ int ha_tidesdb::add_index_inplace(TABLE *altered_table, Alter_inplace_info *ha_a
     cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
     cf_config.bloom_fpr = tidesdb_bloom_fpr;
     cf_config.sync_mode = tidesdb_sync_mode;
+    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
 
     if (tidesdb_enable_compression)
     {
@@ -8081,6 +8611,123 @@ int ha_tidesdb::rebuild_secondary_index(KEY *key_info, const char *key_name, TAB
     DBUG_RETURN(0);
 }
 
+/****************************************************************************
+ * DS-MRR (Disk-Sweep Multi-Range Read) Implementation
+ *
+ * DS-MRR batches multiple key lookups, sorts them, and reads in disk order.
+ * This significantly reduces random I/O for:
+ * -- Range scans with multiple ranges
+ * -- Batched Key Access (BKA) joins
+ * -- Secondary index lookups that need PK fetch
+ *
+ * For TidesDB (LSMB+), MRR helps by:
+ * -- Sorting keys before lookup improves block cache hit rate
+ * -- Batching secondary index → PK lookups reduces transaction overhead
+ * -- Key-ordered access is more efficient for LSM merge iterators
+ ***************************************************************************/
+
+/**
+  Initialize MRR scan.
+
+  @param seq             Range sequence interface
+  @param seq_init_param  Sequence initialization parameter
+  @param n_ranges        Number of ranges
+  @param mode            MRR mode flags
+  @param buf             Buffer for MRR
+
+  @return 0 on success, error code otherwise
+*/
+int ha_tidesdb::multi_range_read_init(RANGE_SEQ_IF *seq, void *seq_init_param, uint n_ranges,
+                                      uint mode, HANDLER_BUFFER *buf)
+{
+    DBUG_ENTER("ha_tidesdb::multi_range_read_init");
+    DBUG_RETURN(m_ds_mrr.dsmrr_init(this, seq, seq_init_param, n_ranges, mode, buf));
+}
+
+/**
+  Get next record from MRR scan.
+
+  @param range_info  OUT Range identifier for the returned record
+
+  @return 0 on success, HA_ERR_END_OF_FILE at end, error code otherwise
+*/
+int ha_tidesdb::multi_range_read_next(range_id_t *range_info)
+{
+    DBUG_ENTER("ha_tidesdb::multi_range_read_next");
+    DBUG_RETURN(m_ds_mrr.dsmrr_next(range_info));
+}
+
+/**
+  Get MRR cost estimate for constant number of ranges.
+
+  @param keyno           Index number
+  @param seq             Range sequence interface
+  @param seq_init_param  Sequence initialization parameter
+  @param n_ranges        Number of ranges
+  @param bufsz           IN/OUT Buffer size
+  @param flags           IN/OUT MRR flags
+  @param limit           Maximum rows to return
+  @param cost            OUT Cost estimate
+
+  @return Estimated number of rows
+*/
+ha_rows ha_tidesdb::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq, void *seq_init_param,
+                                                uint n_ranges, uint *bufsz, uint *flags,
+                                                ha_rows limit, Cost_estimate *cost)
+{
+    DBUG_ENTER("ha_tidesdb::multi_range_read_info_const");
+
+    /* Initialize DS-MRR with this handler and table */
+    m_ds_mrr.init(this, table);
+
+    /*
+     * For TidesDB, we can benefit from DS-MRR for secondary index scans
+     * because it batches the PK lookups. However, for primary key scans
+     * on LSM-trees, the benefit is smaller since data is already sorted.
+     */
+    ha_rows rows =
+        m_ds_mrr.dsmrr_info_const(keyno, seq, seq_init_param, n_ranges, bufsz, flags, limit, cost);
+    DBUG_RETURN(rows);
+}
+
+/**
+  Get MRR cost estimate.
+
+  @param keyno      Index number
+  @param n_ranges   Number of ranges
+  @param keys       Number of keys
+  @param key_parts  Number of key parts
+  @param bufsz      IN/OUT Buffer size
+  @param flags      IN/OUT MRR flags
+  @param cost       OUT Cost estimate
+
+  @return Estimated number of rows
+*/
+ha_rows ha_tidesdb::multi_range_read_info(uint keyno, uint n_ranges, uint keys, uint key_parts,
+                                          uint *bufsz, uint *flags, Cost_estimate *cost)
+{
+    DBUG_ENTER("ha_tidesdb::multi_range_read_info");
+
+    m_ds_mrr.init(this, table);
+    ha_rows rows = m_ds_mrr.dsmrr_info(keyno, n_ranges, keys, key_parts, bufsz, flags, cost);
+    DBUG_RETURN(rows);
+}
+
+/**
+  Get MRR explanation info for EXPLAIN output.
+
+  @param mrr_mode  MRR mode flags
+  @param str       OUT Buffer for explanation string
+  @param size      Size of buffer
+
+  @return Number of characters written
+*/
+int ha_tidesdb::multi_range_read_explain_info(uint mrr_mode, char *str, size_t size)
+{
+    DBUG_ENTER("ha_tidesdb::multi_range_read_explain_info");
+    DBUG_RETURN(m_ds_mrr.dsmrr_explain_info(mrr_mode, str, size));
+}
+
 /*
   Plugin declaration
 */
@@ -8235,6 +8882,10 @@ static MYSQL_SYSVAR_ULONG(change_buffer_max_size, tidesdb_change_buffer_max_size
                           "Maximum pending entries in change buffer before flush", NULL, NULL, 1024,
                           1, 1000000, 0);
 
+static MYSQL_SYSVAR_BOOL(use_btree, tidesdb_use_btree, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+                         "Use B+tree format for column families (faster point lookups)", NULL, NULL,
+                         TRUE);
+
 static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(data_dir),
     MYSQL_SYSVAR(flush_threads),
@@ -8272,18 +8923,19 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(encryption_key_id),
     MYSQL_SYSVAR(enable_change_buffer),
     MYSQL_SYSVAR(change_buffer_max_size),
+    MYSQL_SYSVAR(use_btree),
     NULL};
 
 maria_declare_plugin(tidesdb){MYSQL_STORAGE_ENGINE_PLUGIN,
                               &tidesdb_storage_engine,
                               "TidesDB",
                               "TidesDB Authors",
-                              "TidesDB LSM-based storage engine with ACID transactions",
+                              "TidesDB LSMB+ storage engine with ACID transactions",
                               PLUGIN_LICENSE_GPL,
                               tidesdb_init_func,
                               tidesdb_done_func,
-                              0x0704,
+                              0x0110,
                               NULL,
                               tidesdb_system_variables,
-                              "7.4.4",
+                              "1.1.0",
                               MariaDB_PLUGIN_MATURITY_STABLE} maria_declare_plugin_end;

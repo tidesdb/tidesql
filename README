@@ -51,10 +51,19 @@ FEATURES
 Core:
 - ACID transactions with commit, rollback, savepoints
 - MVCC (Multi-Version Concurrency Control)
-- LSM-tree storage (write-optimized)
+- LSM-tree storage with optional B+tree format (write-optimized)
 - Compression (LZ4, ZSTD, Snappy)
 - Bloom filters for fast key lookups
 - Block cache for frequently accessed data
+- Lock-free atomic operations for scalability
+
+Optimizer Integration:
+- Index Condition Pushdown (ICP)
+- Multi-Range Read (DS-MRR) for batch key lookups
+- Rowid Filter Pushdown for semi-joins
+- Covering index scans (keyread optimization)
+- Handler cloning for parallel operations
+- LSM-tree specific cost model
 
 Advanced:
 - XA distributed transactions (two-phase commit)
@@ -68,6 +77,7 @@ Advanced:
 - Data-at-rest encryption
 - Online DDL for index operations
 - Change buffer for secondary indexes
+- Bulk insert optimization with intermediate commits
 
 
 CONFIGURATION
@@ -101,6 +111,7 @@ Isolation:
   default_isolation         read_uncommitted/read_committed/repeatable_read/snapshot/serializable (default: read_committed)
 
 LSM Tree:
+  use_btree                 Use B+tree format for column families (default: ON)
   level_size_ratio          Level size multiplier (default: 10)
   min_levels                Minimum LSM levels (default: 5)
   dividing_level_offset     Compaction dividing level offset (default: 2)
@@ -166,14 +177,20 @@ Available tests:
   backup            - Backup operations
   basic             - Basic CRUD operations
   bulk_insert       - Bulk insert performance
+  composite_keys    - Composite primary/secondary keys
   datatypes         - Data type handling
   ddl               - DDL operations (CREATE, DROP, RENAME)
+  edge_cases        - Edge case handling
   encryption        - Encryption configuration
   fk_cascade        - Foreign key CASCADE/SET NULL
   foreign_keys      - Foreign key definitions
   fulltext          - Full-text search
+  hidden_pk         - Hidden primary key (tables without PK)
+  icp_mrr           - Index Condition Pushdown and Multi-Range Read
   index_operations  - Index create/drop
   index_scan        - Index scan operations
+  inplace_alter     - In-place ALTER TABLE
+  large_data        - Large data handling
   maintenance       - OPTIMIZE, ANALYZE, CHECK
   online_ddl        - Online ALTER TABLE
   partitioning      - Table partitioning
@@ -181,6 +198,8 @@ Available tests:
   spatial           - Spatial data types
   spatial_geometry  - Geometry functions
   spatial_index     - Spatial indexing
+  table_operations  - Table operations
+  tablespace        - Tablespace operations
   transactions      - Transaction commit/rollback
   ttl               - Time-to-live expiration
   virtual_columns   - Generated columns

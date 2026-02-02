@@ -1,0 +1,104 @@
+--echo #
+--echo # Test Index Condition Pushdown (ICP) and Multi-Range Read (MRR)
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE tidesdb_check;
+
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  a INT,
+  b INT,
+  c VARCHAR(100),
+  INDEX idx_a (a),
+  INDEX idx_ab (a, b)
+) ENGINE=TIDESDB;
+
+--echo # Insert test data
+INSERT INTO t1 VALUES (1, 10, 100, 'row1');
+INSERT INTO t1 VALUES (2, 10, 200, 'row2');
+INSERT INTO t1 VALUES (3, 20, 100, 'row3');
+INSERT INTO t1 VALUES (4, 20, 200, 'row4');
+INSERT INTO t1 VALUES (5, 30, 100, 'row5');
+INSERT INTO t1 VALUES (6, 30, 200, 'row6');
+INSERT INTO t1 VALUES (7, 40, 100, 'row7');
+INSERT INTO t1 VALUES (8, 40, 200, 'row8');
+INSERT INTO t1 VALUES (9, 50, 100, 'row9');
+INSERT INTO t1 VALUES (10, 50, 200, 'row10');
+
+--echo #
+--echo # Test 1: Basic ICP - condition on indexed column
+--echo #
+EXPLAIN SELECT * FROM t1 WHERE a = 20 AND b > 150;
+SELECT * FROM t1 WHERE a = 20 AND b > 150;
+
+--echo #
+--echo # Test 2: ICP with composite index
+--echo #
+EXPLAIN SELECT * FROM t1 WHERE a BETWEEN 20 AND 40 AND b = 100;
+SELECT * FROM t1 WHERE a BETWEEN 20 AND 40 AND b = 100;
+
+--echo #
+--echo # Test 3: Covering index scan (keyread optimization)
+--echo #
+EXPLAIN SELECT a, b FROM t1 WHERE a > 30;
+SELECT a, b FROM t1 WHERE a > 30;
+
+--echo #
+--echo # Test 4: ICP with non-indexed condition
+--echo #
+EXPLAIN SELECT * FROM t1 WHERE a = 30 AND c LIKE 'row%';
+SELECT * FROM t1 WHERE a = 30 AND c LIKE 'row%';
+
+--echo #
+--echo # Test 5: Multi-Range Read with IN clause
+--echo #
+EXPLAIN SELECT * FROM t1 WHERE a IN (10, 30, 50);
+SELECT * FROM t1 WHERE a IN (10, 30, 50) ORDER BY id;
+
+--echo #
+--echo # Test 6: Range scan with ICP
+--echo #
+EXPLAIN SELECT * FROM t1 WHERE a >= 20 AND a <= 40 AND b < 150;
+SELECT * FROM t1 WHERE a >= 20 AND a <= 40 AND b < 150 ORDER BY id;
+
+--echo #
+--echo # Test 7: Verify ICP is being used (check handler stats)
+--echo #
+FLUSH STATUS;
+SELECT * FROM t1 WHERE a = 20 AND b > 150;
+--echo # Handler_read_key should show index usage
+SHOW STATUS LIKE 'Handler_read%';
+
+--echo #
+--echo # Test 8: Join with MRR (Batched Key Access)
+--echo #
+CREATE TABLE t2 (
+  id INT PRIMARY KEY,
+  t1_a INT,
+  INDEX idx_t1_a (t1_a)
+) ENGINE=TIDESDB;
+
+INSERT INTO t2 VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+
+--echo # This join can use BKA/MRR
+SET optimizer_switch='mrr=on,mrr_cost_based=off';
+EXPLAIN SELECT t1.*, t2.id as t2_id FROM t1, t2 WHERE t1.a = t2.t1_a;
+SELECT t1.id, t1.a, t2.id as t2_id FROM t1, t2 WHERE t1.a = t2.t1_a ORDER BY t1.id;
+SET optimizer_switch=DEFAULT;
+
+--echo # Cleanup
+DROP TABLE t2;
+DROP TABLE t1;
+
+--echo #
+--echo # ICP and MRR tests completed!
+--echo #
