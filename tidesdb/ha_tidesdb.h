@@ -18,9 +18,7 @@
 /** @file ha_tidesdb.h
 
     @brief
-  The ha_tidesdb engine is a storage engine backed by TidesDB, an LSM-based
-  embedded key-value store with multi-column families, atomic transactions,
-  5 isolation levels, and lockless operations.
+  The ha_tidesdb engine is a storage engine backed by TidesDB.
 
    @see
   /sql/handler.h and /storage/tidesdb/ha_tidesdb.cc
@@ -33,7 +31,12 @@
 #pragma interface /* gcc class implementation */
 #endif
 
-/* Include TidesDB header first, before MariaDB headers that have extern "C" blocks */
+/* Include MariaDB headers first to get proper type definitions */
+#include <ft_global.h>
+
+#include "handler.h"
+
+/* Include TidesDB header after MariaDB headers */
 #ifdef __cplusplus
 extern "C"
 {
@@ -42,10 +45,6 @@ extern "C"
 #ifdef __cplusplus
 }
 #endif
-
-#include <ft_global.h>
-
-#include "handler.h"
 
 /** @brief
   TIDESDB_SHARE is a structure that will be shared among all open handlers
@@ -177,6 +176,8 @@ class ha_tidesdb : public handler
     bool bulk_insert_active;
     tidesdb_txn_t *bulk_txn;
     ha_rows bulk_insert_rows;
+    ha_rows bulk_insert_count;                          /* Rows inserted in current batch */
+    static const ha_rows BULK_COMMIT_THRESHOLD = 10000; /* Commit every N rows */
 
     /* Skip redundant duplicate key check */
     bool skip_dup_check;
@@ -275,7 +276,7 @@ class ha_tidesdb : public handler
      */
     const char *table_type() const
     {
-        return "TidesDB";
+        return "TIDESDB";
     }
 
     /** @brief
@@ -283,7 +284,7 @@ class ha_tidesdb : public handler
      */
     const char *index_type(uint inx)
     {
-        return "LSM";
+        return "LSMB+";
     }
 
     /** @brief
@@ -319,10 +320,17 @@ class ha_tidesdb : public handler
 
     /** @brief
       Index flags indicating how the storage engine implements indexes.
+
+      HA_DO_INDEX_COND_PUSHDOWN enables Index Condition Pushdown (ICP) which
+      allows the storage engine to evaluate WHERE conditions during index scan,
+      filtering rows before fetching full row data.
+
+      HA_DO_RANGE_FILTER_PUSHDOWN enables rowid filter pushdown for semi-joins.
     */
     ulong index_flags(uint inx, uint part, bool all_parts) const
     {
-        return HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER | HA_READ_RANGE | HA_KEYREAD_ONLY;
+        return HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER | HA_READ_RANGE | HA_KEYREAD_ONLY |
+               HA_DO_INDEX_COND_PUSHDOWN | HA_DO_RANGE_FILTER_PUSHDOWN;
     }
 
     /** @brief
@@ -362,6 +370,9 @@ class ha_tidesdb : public handler
     int create(const char *name, TABLE *form, HA_CREATE_INFO *create_info);
     int delete_table(const char *name) override;
     int rename_table(const char *from, const char *to);
+
+    /* Handler cloning for parallel operations (DS-MRR, parallel scans) */
+    handler *clone(const char *name, MEM_ROOT *mem_root) override;
 
     /* Row operations */
     int write_row(const uchar *buf) override;
@@ -440,6 +451,17 @@ class ha_tidesdb : public handler
     /* Index Condition Pushdown */
     Item *idx_cond_push(uint keyno, Item *idx_cond) override;
 
+    /* Multi-Range Read (MRR) interface for batch key lookups */
+    int multi_range_read_init(RANGE_SEQ_IF *seq, void *seq_init_param, uint n_ranges, uint mode,
+                              HANDLER_BUFFER *buf) override;
+    int multi_range_read_next(range_id_t *range_info) override;
+    ha_rows multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq, void *seq_init_param,
+                                        uint n_ranges, uint *bufsz, uint *flags, ha_rows limit,
+                                        Cost_estimate *cost) override;
+    ha_rows multi_range_read_info(uint keyno, uint n_ranges, uint keys, uint key_parts, uint *bufsz,
+                                  uint *flags, Cost_estimate *cost) override;
+    int multi_range_read_explain_info(uint mrr_mode, char *str, size_t size) override;
+
     /* Online DDL support */
     enum_alter_inplace_result check_if_supported_inplace_alter(
         TABLE *altered_table, Alter_inplace_info *ha_alter_info) override;
@@ -452,6 +474,9 @@ class ha_tidesdb : public handler
                                     bool commit) override;
 
    private:
+    /* DS-MRR implementation object */
+    DsMrr_impl m_ds_mrr;
+
     /* Online DDL helper methods */
     int add_index_inplace(TABLE *altered_table, Alter_inplace_info *ha_alter_info);
     int drop_index_inplace(Alter_inplace_info *ha_alter_info);
