@@ -73,8 +73,9 @@ jobs:
         choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
         choco install -y strawberryperl
         choco install -y winflexbison3
-        vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows
+        vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows pthreads:x64-windows
         echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+        echo "TIDESDB_ROOT=C:/Program Files/tidesdb" >> $env:GITHUB_ENV
 
     - name: Get latest MariaDB release tag
       id: mariadb-release
@@ -184,10 +185,12 @@ jobs:
       if: runner.os == 'Windows'
       shell: cmd
       working-directory: mariadb-server
+      env:
+        TIDESDB_ROOT: C:/Program Files/tidesdb
       run: |
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DPLUGIN_TIDESDB=DYNAMIC -DPLUGIN_ROCKSDB=NO -DPLUGIN_MROONGA=NO -DPLUGIN_SPIDER=NO -DPLUGIN_COLUMNSTORE=NO -DWITH_UNIT_TESTS=OFF
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DPLUGIN_TIDESDB=DYNAMIC -DPLUGIN_ROCKSDB=NO -DPLUGIN_MROONGA=NO -DPLUGIN_SPIDER=NO -DPLUGIN_COLUMNSTORE=NO -DWITH_UNIT_TESTS=OFF -DCMAKE_PREFIX_PATH="C:/Program Files/tidesdb;%VCPKG_INSTALLATION_ROOT%/installed/x64-windows"
         cmake --build . --config RelWithDebInfo --parallel
 
     - name: Run TidesDB test suite (Unix)
