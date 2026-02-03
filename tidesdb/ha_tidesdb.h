@@ -31,10 +31,7 @@
 #pragma interface /* gcc class implementation */
 #endif
 
-/* handler.h includes ft_global.h and other required headers */
 #include "handler.h"
-
-/* Include TidesDB header after MariaDB headers */
 #ifdef __cplusplus
 extern "C"
 {
@@ -73,8 +70,8 @@ typedef struct st_tidesdb_fk
 /**
   Shared table metadata structure.
 
-  Note on locking: The mutex and THR_LOCK here are for MariaDB's internal
-  table management (open/close coordination), NOT for row-level locking.
+  Note on locking -- The mutex and THR_LOCK here are for MariaDB's internal
+  table management (open/close coordination), not for row-level locking.
   TidesDB uses MVCC and is fundamentally lock-free for data access.
 */
 typedef struct st_tidesdb_share
@@ -82,8 +79,8 @@ typedef struct st_tidesdb_share
     char *table_name;
     uint table_name_length;
     uint use_count;
-    pthread_mutex_t mutex; /* For use_count and metadata updates only */
-    THR_LOCK lock;         /* Required by MariaDB, not used for data locking */
+    pthread_mutex_t mutex;
+    THR_LOCK lock;
 
     /* TidesDB column family for this table (primary data) */
     tidesdb_column_family_t *cf;
@@ -155,9 +152,9 @@ class ha_tidesdb : public handler
     /**
       THR_LOCK_DATA is required by the MariaDB handler interface.
       However, TidesDB uses MVCC and is fundamentally lock-free:
-      - Reads never block (snapshot isolation)
-      - Writes use optimistic concurrency (conflict detection at commit)
-      - No row-level or table-level locking
+      -- Reads never block (snapshot isolation)
+      -- Writes use optimistic concurrency (conflict detection at commit)
+      -- No row-level or table-level locking
       This lock structure is only used for MariaDB's internal bookkeeping.
     */
     THR_LOCK_DATA lock;
@@ -183,7 +180,7 @@ class ha_tidesdb : public handler
     /* Current row position (for rnd_pos) -- pre-allocated buffer */
     uchar *current_key;
     size_t current_key_len;
-    size_t current_key_capacity; /* Pre-allocated capacity to avoid per-row malloc */
+    size_t current_key_capacity;
 
     /* Bulk insert state */
     bool bulk_insert_active;
@@ -233,6 +230,10 @@ class ha_tidesdb : public handler
     /* Buffer for saved old key in update_row */
     uchar *saved_key_buffer;
     size_t saved_key_buffer_capacity;
+
+    /* SCALABILITY FIX: Buffer pooling for insert_index_entry() PK value */
+    uchar *idx_pk_buffer;
+    size_t idx_pk_buffer_capacity;
 
     /* Helper methods */
     int pack_row(const uchar *buf, uchar **packed, size_t *packed_len);
@@ -391,12 +392,12 @@ class ha_tidesdb : public handler
     ha_rows records() override;
 
     /** @brief
-      Truncate table - faster than delete_all_rows.
+      Truncate table -- faster than delete_all_rows.
     */
     int truncate() override;
 
     /** @brief
-      Release row lock after read (MVCC - no-op for TidesDB).
+      Release row lock after read (MVCC -- no-op for TidesDB).
     */
     void unlock_row() override
     {
@@ -416,8 +417,8 @@ class ha_tidesdb : public handler
       Cost estimates for the optimizer.
 
       LSM-tree cost model considerations:
-      -- Point lookups: memtable check + bloom filter checks + level lookups
-      -- Range scans: merge across multiple levels (more expensive than B-tree)
+      -- Point lookups -- memtable check + bloom filter checks + level lookups
+      -- Range scans -- merge across multiple levels (more expensive than B-tree)
       -- Block cache hits are much faster than disk reads
     */
     virtual IO_AND_CPU_COST scan_time() override;
