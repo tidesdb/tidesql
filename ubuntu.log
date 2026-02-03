@@ -1,0 +1,486 @@
+2026-02-03T02:03:09.5207480Z Current runner version: '2.331.0'
+2026-02-03T02:03:09.5228500Z ##[group]Runner Image Provisioner
+2026-02-03T02:03:09.5229030Z Hosted Compute Agent
+2026-02-03T02:03:09.5229440Z Version: 20260123.484
+2026-02-03T02:03:09.5229980Z Commit: 6bd6555ca37d84114959e1c76d2c01448ff61c5d
+2026-02-03T02:03:09.5230570Z Build Date: 2026-01-23T19:41:17Z
+2026-02-03T02:03:09.5231120Z Worker ID: {56a74a4b-8bfa-419f-8c31-bd88c8c570b6}
+2026-02-03T02:03:09.5231730Z Azure Region: westus
+2026-02-03T02:03:09.5232160Z ##[endgroup]
+2026-02-03T02:03:09.5233290Z ##[group]Operating System
+2026-02-03T02:03:09.5233740Z macOS
+2026-02-03T02:03:09.5234060Z 15.7.3
+2026-02-03T02:03:09.5234510Z 24G419
+2026-02-03T02:03:09.5234930Z ##[endgroup]
+2026-02-03T02:03:09.5235360Z ##[group]Runner Image
+2026-02-03T02:03:09.5235790Z Image: macos-15-arm64
+2026-02-03T02:03:09.5236190Z Version: 20260127.0129.1
+2026-02-03T02:03:09.5237130Z Included Software: https://github.com/actions/runner-images/blob/macos-15-arm64/20260127.0129/images/macos/macos-15-arm64-Readme.md
+2026-02-03T02:03:09.5244480Z Image Release: https://github.com/actions/runner-images/releases/tag/macos-15-arm64%2F20260127.0129
+2026-02-03T02:03:09.5253260Z ##[endgroup]
+2026-02-03T02:03:09.5255130Z ##[group]GITHUB_TOKEN Permissions
+2026-02-03T02:03:09.5280040Z Contents: read
+2026-02-03T02:03:09.5281220Z Metadata: read
+2026-02-03T02:03:09.5281540Z Packages: read
+2026-02-03T02:03:09.5281950Z ##[endgroup]
+2026-02-03T02:03:09.5284300Z Secret source: Actions
+2026-02-03T02:03:09.5285010Z Prepare workflow directory
+2026-02-03T02:03:09.5679910Z Prepare all required actions
+2026-02-03T02:03:09.5721430Z Getting action download info
+2026-02-03T02:03:09.9670040Z Download action repository 'actions/checkout@v4' (SHA:34e114876b0b11c390a56381ad16ebd13914f8d5)
+2026-02-03T02:03:10.8041990Z Complete job name: test (macos-latest)
+2026-02-03T02:03:10.9317860Z ##[group]Run actions/checkout@v4
+2026-02-03T02:03:10.9319430Z with:
+2026-02-03T02:03:10.9319710Z   path: tidesql
+2026-02-03T02:03:10.9320120Z   repository: tidesdb/tidesql
+2026-02-03T02:03:10.9320860Z   token: ***
+2026-02-03T02:03:10.9321140Z   ssh-strict: true
+2026-02-03T02:03:10.9321420Z   ssh-user: git
+2026-02-03T02:03:10.9321700Z   persist-credentials: true
+2026-02-03T02:03:10.9322030Z   clean: true
+2026-02-03T02:03:10.9322320Z   sparse-checkout-cone-mode: true
+2026-02-03T02:03:10.9322670Z   fetch-depth: 1
+2026-02-03T02:03:10.9322970Z   fetch-tags: false
+2026-02-03T02:03:10.9323280Z   show-progress: true
+2026-02-03T02:03:10.9323570Z   lfs: false
+2026-02-03T02:03:10.9323850Z   submodules: false
+2026-02-03T02:03:10.9324240Z   set-safe-directory: true
+2026-02-03T02:03:10.9324760Z ##[endgroup]
+2026-02-03T02:03:11.5183490Z Syncing repository: tidesdb/tidesql
+2026-02-03T02:03:11.5186330Z ##[group]Getting Git version info
+2026-02-03T02:03:11.5187360Z Working directory is '/Users/runner/work/tidesql/tidesql/tidesql'
+2026-02-03T02:03:11.5189010Z [command]/opt/homebrew/bin/git version
+2026-02-03T02:03:11.5977310Z git version 2.52.0
+2026-02-03T02:03:11.6047910Z ##[endgroup]
+2026-02-03T02:03:11.6062210Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/fcca84d7-8637-48f0-aa3e-340cc3bc50f5/.gitconfig'
+2026-02-03T02:03:11.6078550Z Temporarily overriding HOME='/Users/runner/work/_temp/fcca84d7-8637-48f0-aa3e-340cc3bc50f5' before making global git config changes
+2026-02-03T02:03:11.6086540Z Adding repository directory to the temporary git global config as a safe directory
+2026-02-03T02:03:11.6161150Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/tidesql/tidesql/tidesql
+2026-02-03T02:03:11.6396980Z ##[group]Initializing the repository
+2026-02-03T02:03:11.6500940Z [command]/opt/homebrew/bin/git init /Users/runner/work/tidesql/tidesql/tidesql
+2026-02-03T02:03:11.6690270Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-02-03T02:03:11.6693770Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-02-03T02:03:11.6696030Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-02-03T02:03:11.6698360Z hint: call:
+2026-02-03T02:03:11.6700880Z hint:
+2026-02-03T02:03:11.6701810Z hint: 	git config --global init.defaultBranch <name>
+2026-02-03T02:03:11.6702960Z hint:
+2026-02-03T02:03:11.6706390Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-02-03T02:03:11.6771600Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-02-03T02:03:11.6786040Z hint:
+2026-02-03T02:03:11.6812610Z hint: 	git branch -m <name>
+2026-02-03T02:03:11.6836670Z hint:
+2026-02-03T02:03:11.6838060Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-02-03T02:03:11.6840730Z Initialized empty Git repository in /Users/runner/work/tidesql/tidesql/tidesql/.git/
+2026-02-03T02:03:11.6844260Z [command]/opt/homebrew/bin/git remote add origin https://github.com/tidesdb/tidesql
+2026-02-03T02:03:11.6918830Z ##[endgroup]
+2026-02-03T02:03:11.6921880Z ##[group]Disabling automatic garbage collection
+2026-02-03T02:03:11.6942490Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+2026-02-03T02:03:11.7193860Z ##[endgroup]
+2026-02-03T02:03:11.7195690Z ##[group]Setting up auth
+2026-02-03T02:03:11.7199190Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-02-03T02:03:11.7210170Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-02-03T02:03:11.9951290Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-02-03T02:03:12.0062370Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-02-03T02:03:12.1633140Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-02-03T02:03:12.1739240Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-02-03T02:03:12.3024290Z [command]/opt/homebrew/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-02-03T02:03:12.3148880Z ##[endgroup]
+2026-02-03T02:03:12.3149410Z ##[group]Fetching the repository
+2026-02-03T02:03:12.3194360Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +6c0959e04a0a37fb849dfa57a419d9680d80e70a:refs/remotes/pull/18/merge
+2026-02-03T02:03:12.7894190Z From https://github.com/tidesdb/tidesql
+2026-02-03T02:03:12.7895160Z  * [new ref]         6c0959e04a0a37fb849dfa57a419d9680d80e70a -> pull/18/merge
+2026-02-03T02:03:12.8153530Z ##[endgroup]
+2026-02-03T02:03:12.8154830Z ##[group]Determining the checkout info
+2026-02-03T02:03:12.8155530Z ##[endgroup]
+2026-02-03T02:03:12.8161730Z [command]/opt/homebrew/bin/git sparse-checkout disable
+2026-02-03T02:03:12.8269410Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+2026-02-03T02:03:12.8361110Z ##[group]Checking out the ref
+2026-02-03T02:03:12.8366430Z [command]/opt/homebrew/bin/git checkout --progress --force refs/remotes/pull/18/merge
+2026-02-03T02:03:12.8775460Z HEAD is now at 6c0959e Merge 6660e8f7c96c97d2bc6e2e5427f5dae90d9ec47a into 50d6defe93b7cac457e19b48fb041af7d2c92d93
+2026-02-03T02:03:12.9087730Z ##[endgroup]
+2026-02-03T02:03:12.9421630Z [command]/opt/homebrew/bin/git log -1 --format=%H
+2026-02-03T02:03:12.9523520Z 6c0959e04a0a37fb849dfa57a419d9680d80e70a
+2026-02-03T02:03:13.0299820Z ##[group]Run brew install \
+2026-02-03T02:03:13.0300540Z [36;1mbrew install \[0m
+2026-02-03T02:03:13.0300820Z [36;1m  cmake \[0m
+2026-02-03T02:03:13.0301070Z [36;1m  openssl@3 \[0m
+2026-02-03T02:03:13.0301400Z [36;1m  lz4 \[0m
+2026-02-03T02:03:13.0301630Z [36;1m  zstd \[0m
+2026-02-03T02:03:13.0301870Z [36;1m  snappy \[0m
+2026-02-03T02:03:13.0302700Z [36;1m  bison \[0m
+2026-02-03T02:03:13.0302940Z [36;1m  boost \[0m
+2026-02-03T02:03:13.0303170Z [36;1m  pcre2 \[0m
+2026-02-03T02:03:13.0303500Z [36;1m  libevent \[0m
+2026-02-03T02:03:13.0303760Z [36;1m  jemalloc \[0m
+2026-02-03T02:03:13.0304200Z [36;1m  gnutls[0m
+2026-02-03T02:03:13.0304530Z [36;1mecho "$(brew --prefix bison)/bin" >> $GITHUB_PATH[0m
+2026-02-03T02:03:13.0406120Z shell: /bin/bash -e {0}
+2026-02-03T02:03:13.0407140Z ##[endgroup]
+2026-02-03T02:03:19.3818990Z ##[warning]cmake 4.2.2 is already installed and up-to-date.
+To reinstall 4.2.2, run:
+  brew reinstall cmake
+
+2026-02-03T02:03:19.3864060Z ##[warning]openssl@3 3.6.0 is already installed and up-to-date.
+To reinstall 3.6.0, run:
+  brew reinstall openssl@3
+
+2026-02-03T02:03:19.3970240Z ##[warning]lz4 1.10.0 is already installed and up-to-date.
+To reinstall 1.10.0, run:
+  brew reinstall lz4
+
+2026-02-03T02:03:19.4074210Z ##[warning]zstd 1.5.7 is already installed and up-to-date.
+To reinstall 1.5.7, run:
+  brew reinstall zstd
+
+2026-02-03T02:03:19.4177970Z ##[warning]pcre2 10.47 is already installed and up-to-date.
+To reinstall 10.47, run:
+  brew reinstall pcre2
+
+2026-02-03T02:03:19.4284140Z ##[warning]libevent 2.1.12_1 is already installed and up-to-date.
+To reinstall 2.1.12_1, run:
+  brew reinstall libevent
+
+2026-02-03T02:03:19.4295870Z ##[warning]gnutls 3.8.11 is already installed and up-to-date.
+To reinstall 3.8.11, run:
+  brew reinstall gnutls
+
+2026-02-03T02:03:20.4596570Z [32m==>[0m [1mFetching downloads for: [32msnappy[39m, [32mbison[39m, [32mboost[39m and [32mjemalloc[39m[0m
+2026-02-03T02:03:20.9832660Z ✔︎ Bottle Manifest snappy (1.2.2)
+2026-02-03T02:03:20.9833610Z ✔︎ Bottle Manifest bison (3.8.2)
+2026-02-03T02:03:20.9834480Z ✔︎ Bottle Manifest boost (1.90.0)
+2026-02-03T02:03:21.7203160Z ✔︎ Bottle Manifest jemalloc (5.3.0)
+2026-02-03T02:03:21.7203870Z ✔︎ Bottle snappy (1.2.2)
+2026-02-03T02:03:21.9245030Z ✔︎ Bottle bison (3.8.2)
+2026-02-03T02:03:21.9247970Z ✔︎ Bottle jemalloc (5.3.0)
+2026-02-03T02:03:27.4865030Z ✔︎ Bottle boost (1.90.0)
+2026-02-03T02:03:27.5901950Z [34m==>[0m [1mPouring snappy--1.2.2.arm64_sequoia.bottle.tar.gz[0m
+2026-02-03T02:03:30.4185580Z 🍺  /opt/homebrew/Cellar/snappy/1.2.2: 19 files, 178.4KB
+2026-02-03T02:03:30.4213550Z [34m==>[0m [1mPouring bison--3.8.2.arm64_sequoia.bottle.tar.gz[0m
+2026-02-03T02:03:31.8199920Z [34m==>[0m [1mCaveats[0m
+2026-02-03T02:03:31.8201030Z bison is keg-only, which means it was not symlinked into /opt/homebrew,
+2026-02-03T02:03:31.8202700Z because macOS already provides this software and installing another version in
+2026-02-03T02:03:31.8204330Z parallel can cause all kinds of trouble.
+2026-02-03T02:03:31.8205050Z
+2026-02-03T02:03:31.8205640Z If you need to have bison first in your PATH, run:
+2026-02-03T02:03:31.8206890Z   echo 'export PATH="/opt/homebrew/opt/bison/bin:$PATH"' >> /Users/runner/.bash_profile
+2026-02-03T02:03:31.8207950Z
+2026-02-03T02:03:31.8208370Z For compilers to find bison you may need to set:
+2026-02-03T02:03:31.8209500Z   export LDFLAGS="-L/opt/homebrew/opt/bison/lib"
+2026-02-03T02:03:31.8211070Z [34m==>[0m [1mSummary[0m
+2026-02-03T02:03:31.8217360Z 🍺  /opt/homebrew/Cellar/bison/3.8.2: 100 files, 3.9MB
+2026-02-03T02:03:31.8463280Z [34m==>[0m [1mPouring boost--1.90.0.arm64_sequoia.bottle.tar.gz[0m
+2026-02-03T02:03:42.1343160Z 🍺  /opt/homebrew/Cellar/boost/1.90.0: 16,255 files, 362.4MB
+2026-02-03T02:03:42.1449730Z [34m==>[0m [1mPouring jemalloc--5.3.0.arm64_sequoia.bottle.1.tar.gz[0m
+2026-02-03T02:03:43.6989720Z 🍺  /opt/homebrew/Cellar/jemalloc/5.3.0: 17 files, 2.8MB
+2026-02-03T02:03:43.6993250Z [32m==>[0m [1mCaveats[0m
+2026-02-03T02:03:43.6997930Z [34m==>[0m [1mbison[0m
+2026-02-03T02:03:43.6999530Z bison is keg-only, which means it was not symlinked into /opt/homebrew,
+2026-02-03T02:03:43.7001420Z because macOS already provides this software and installing another version in
+2026-02-03T02:03:43.7004210Z parallel can cause all kinds of trouble.
+2026-02-03T02:03:43.7005010Z
+2026-02-03T02:03:43.7005680Z If you need to have bison first in your PATH, run:
+2026-02-03T02:03:43.7023050Z   echo 'export PATH="/opt/homebrew/opt/bison/bin:$PATH"' >> /Users/runner/.bash_profile
+2026-02-03T02:03:43.7023850Z
+2026-02-03T02:03:43.7024250Z For compilers to find bison you may need to set:
+2026-02-03T02:03:43.7025030Z   export LDFLAGS="-L/opt/homebrew/opt/bison/lib"
+2026-02-03T02:03:43.8637530Z ##[group]Run LATEST_TAG=$(curl -s https://api.github.com/repos/MariaDB/server/releases/latest | jq -r '.tag_name')
+2026-02-03T02:03:43.8638330Z [36;1mLATEST_TAG=$(curl -s https://api.github.com/repos/MariaDB/server/releases/latest | jq -r '.tag_name')[0m
+2026-02-03T02:03:43.8638970Z [36;1mecho "tag=${LATEST_TAG}" >> $GITHUB_OUTPUT[0m
+2026-02-03T02:03:43.8639300Z [36;1mecho "Latest MariaDB release: ${LATEST_TAG}"[0m
+2026-02-03T02:03:43.8723760Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-03T02:03:43.8724240Z ##[endgroup]
+2026-02-03T02:03:44.1353800Z Latest MariaDB release: mariadb-12.1.2
+2026-02-03T02:03:44.1455320Z ##[group]Run git clone --depth 1 --branch mariadb-12.1.2 https://github.com/MariaDB/server.git mariadb-server
+2026-02-03T02:03:44.1456070Z [36;1mgit clone --depth 1 --branch mariadb-12.1.2 https://github.com/MariaDB/server.git mariadb-server[0m
+2026-02-03T02:03:44.1456550Z [36;1mcd mariadb-server[0m
+2026-02-03T02:03:44.1456830Z [36;1mgit submodule update --init --recursive --depth 1[0m
+2026-02-03T02:03:44.1532870Z shell: /bin/bash --noprofile --norc -e -o pipefail {0}
+2026-02-03T02:03:44.1533300Z ##[endgroup]
+2026-02-03T02:03:44.2456590Z Cloning into 'mariadb-server'...
+2026-02-03T02:03:54.5773260Z warning: refs/tags/mariadb-12.1.2 b983afe10b159b01531ede521146495442252915 is not a commit!
+2026-02-03T02:03:55.6574220Z Updating files:  14% (3831/26040)
+2026-02-03T02:03:55.7381490Z Updating files:  15% (3906/26040)
+2026-02-03T02:03:55.8087270Z Updating files:  16% (4167/26040)
+2026-02-03T02:03:55.8810910Z Updating files:  17% (4427/26040)
+2026-02-03T02:03:55.9997140Z Updating files:  18% (4688/26040)
+2026-02-03T02:03:56.1121330Z Updating files:  19% (4948/26040)
+2026-02-03T02:03:56.1624860Z Updating files:  20% (5208/26040)
+2026-02-03T02:03:56.2073030Z Updating files:  21% (5469/26040)
+2026-02-03T02:03:56.2335260Z Updating files:  22% (5729/26040)
+2026-02-03T02:03:56.2950730Z Updating files:  23% (5990/26040)
+2026-02-03T02:03:56.3718440Z Updating files:  24% (6250/26040)
+2026-02-03T02:03:56.4378350Z Updating files:  25% (6510/26040)
+2026-02-03T02:03:56.5422670Z Updating files:  26% (6771/26040)
+2026-02-03T02:03:56.5969320Z Updating files:  27% (7031/26040)
+2026-02-03T02:03:56.6190070Z Updating files:  27% (7172/26040)
+2026-02-03T02:03:56.6724620Z Updating files:  28% (7292/26040)
+2026-02-03T02:03:56.8094000Z Updating files:  29% (7552/26040)
+2026-02-03T02:03:56.8634130Z Updating files:  30% (7812/26040)
+2026-02-03T02:03:56.9553300Z Updating files:  31% (8073/26040)
+2026-02-03T02:03:56.9964070Z Updating files:  32% (8333/26040)
+2026-02-03T02:03:57.0539120Z Updating files:  33% (8594/26040)
+2026-02-03T02:03:57.1008340Z Updating files:  34% (8854/26040)
+2026-02-03T02:03:57.1366670Z Updating files:  35% (9114/26040)
+2026-02-03T02:03:57.1763980Z Updating files:  36% (9375/26040)
+2026-02-03T02:03:57.2362560Z Updating files:  37% (9635/26040)
+2026-02-03T02:03:57.3022060Z Updating files:  38% (9896/26040)
+2026-02-03T02:03:57.3325550Z Updating files:  39% (10156/26040)
+2026-02-03T02:03:57.4064680Z Updating files:  40% (10416/26040)
+2026-02-03T02:03:57.4571200Z Updating files:  41% (10677/26040)
+2026-02-03T02:03:57.5831130Z Updating files:  42% (10937/26040)
+2026-02-03T02:03:57.6043610Z Updating files:  43% (11198/26040)
+2026-02-03T02:03:57.6285750Z Updating files:  43% (11277/26040)
+2026-02-03T02:03:57.7229470Z Updating files:  44% (11458/26040)
+2026-02-03T02:03:57.7629400Z Updating files:  45% (11718/26040)
+2026-02-03T02:03:57.8174340Z Updating files:  46% (11979/26040)
+2026-02-03T02:03:57.8930230Z Updating files:  47% (12239/26040)
+2026-02-03T02:03:57.9479540Z Updating files:  48% (12500/26040)
+2026-02-03T02:03:57.9895180Z Updating files:  49% (12760/26040)
+2026-02-03T02:03:58.0310910Z Updating files:  50% (13020/26040)
+2026-02-03T02:03:58.0649920Z Updating files:  51% (13281/26040)
+2026-02-03T02:03:58.1119570Z Updating files:  52% (13541/26040)
+2026-02-03T02:03:58.1720870Z Updating files:  53% (13802/26040)
+2026-02-03T02:03:58.2208860Z Updating files:  54% (14062/26040)
+2026-02-03T02:03:58.2641560Z Updating files:  55% (14322/26040)
+2026-02-03T02:03:58.2921190Z Updating files:  56% (14583/26040)
+2026-02-03T02:03:58.3317020Z Updating files:  57% (14843/26040)
+2026-02-03T02:03:58.3652390Z Updating files:  58% (15104/26040)
+2026-02-03T02:03:58.4060210Z Updating files:  59% (15364/26040)
+2026-02-03T02:03:58.4908600Z Updating files:  60% (15624/26040)
+2026-02-03T02:03:58.5196230Z Updating files:  61% (15885/26040)
+2026-02-03T02:03:58.5750910Z Updating files:  62% (16145/26040)
+2026-02-03T02:03:58.5979910Z Updating files:  63% (16406/26040)
+2026-02-03T02:03:58.6088260Z Updating files:  63% (16567/26040)
+2026-02-03T02:03:58.6547290Z Updating files:  64% (16666/26040)
+2026-02-03T02:03:58.7052060Z Updating files:  65% (16926/26040)
+2026-02-03T02:03:58.7445170Z Updating files:  66% (17187/26040)
+2026-02-03T02:03:58.7918940Z Updating files:  67% (17447/26040)
+2026-02-03T02:03:58.8405340Z Updating files:  68% (17708/26040)
+2026-02-03T02:03:58.8882870Z Updating files:  69% (17968/26040)
+2026-02-03T02:03:58.9363610Z Updating files:  70% (18228/26040)
+2026-02-03T02:03:58.9986110Z Updating files:  71% (18489/26040)
+2026-02-03T02:03:59.2143690Z Updating files:  72% (18749/26040)
+2026-02-03T02:03:59.3693110Z Updating files:  73% (19010/26040)
+2026-02-03T02:03:59.4764820Z Updating files:  74% (19270/26040)
+2026-02-03T02:03:59.5679570Z Updating files:  75% (19530/26040)
+2026-02-03T02:03:59.5967060Z Updating files:  76% (19791/26040)
+2026-02-03T02:03:59.6504730Z Updating files:  76% (19875/26040)
+2026-02-03T02:03:59.8239700Z Updating files:  77% (20051/26040)
+2026-02-03T02:03:59.8811450Z Updating files:  78% (20312/26040)
+2026-02-03T02:03:59.9295420Z Updating files:  79% (20572/26040)
+2026-02-03T02:03:59.9693640Z Updating files:  80% (20832/26040)
+2026-02-03T02:04:00.0270570Z Updating files:  81% (21093/26040)
+2026-02-03T02:04:00.0993580Z Updating files:  82% (21353/26040)
+2026-02-03T02:04:00.1604550Z Updating files:  83% (21614/26040)
+2026-02-03T02:04:00.2930670Z Updating files:  84% (21874/26040)
+2026-02-03T02:04:00.3661060Z Updating files:  85% (22134/26040)
+2026-02-03T02:04:00.4281460Z Updating files:  86% (22395/26040)
+2026-02-03T02:04:00.4882900Z Updating files:  87% (22655/26040)
+2026-02-03T02:04:00.5558290Z Updating files:  88% (22916/26040)
+2026-02-03T02:04:00.5956510Z Updating files:  89% (23176/26040)
+2026-02-03T02:04:00.6393670Z Updating files:  89% (23365/26040)
+2026-02-03T02:04:00.6704020Z Updating files:  90% (23436/26040)
+2026-02-03T02:04:00.7169440Z Updating files:  91% (23697/26040)
+2026-02-03T02:04:00.7914770Z Updating files:  92% (23957/26040)
+2026-02-03T02:04:00.8343300Z Updating files:  93% (24218/26040)
+2026-02-03T02:04:00.8958440Z Updating files:  94% (24478/26040)
+2026-02-03T02:04:00.9470460Z Updating files:  95% (24738/26040)
+2026-02-03T02:04:00.9979900Z Updating files:  96% (24999/26040)
+2026-02-03T02:04:01.0472990Z Updating files:  97% (25259/26040)
+2026-02-03T02:04:01.1808180Z Updating files:  98% (25520/26040)
+2026-02-03T02:04:01.2484740Z Updating files:  99% (25780/26040)
+2026-02-03T02:04:01.2486580Z Updating files: 100% (26040/26040)
+2026-02-03T02:04:01.2487470Z Updating files: 100% (26040/26040), done.
+2026-02-03T02:04:01.5188500Z Submodule 'extra/wolfssl/wolfssl' (https://github.com/wolfSSL/wolfssl.git) registered for path 'extra/wolfssl/wolfssl'
+2026-02-03T02:04:01.5196920Z Submodule 'libmariadb' (https://github.com/MariaDB/mariadb-connector-c.git) registered for path 'libmariadb'
+2026-02-03T02:04:01.5216380Z Submodule 'storage/columnstore/columnstore' (https://github.com/mariadb-corporation/mariadb-columnstore-engine.git) registered for path 'storage/columnstore/columnstore'
+2026-02-03T02:04:01.5232170Z Submodule 'storage/maria/libmarias3' (https://github.com/mariadb-corporation/libmarias3.git) registered for path 'storage/maria/libmarias3'
+2026-02-03T02:04:01.5249660Z Submodule 'storage/rocksdb/rocksdb' (https://github.com/facebook/rocksdb.git) registered for path 'storage/rocksdb/rocksdb'
+2026-02-03T02:04:01.5287140Z Submodule 'wsrep-lib' (https://github.com/codership/wsrep-lib.git) registered for path 'wsrep-lib'
+2026-02-03T02:04:01.5447030Z Cloning into '/Users/runner/work/tidesql/tidesql/mariadb-server/extra/wolfssl/wolfssl'...
+2026-02-03T02:04:05.6262210Z Cloning into '/Users/runner/work/tidesql/tidesql/mariadb-server/libmariadb'...
+2026-02-03T02:04:06.2860940Z Cloning into '/Users/runner/work/tidesql/tidesql/mariadb-server/storage/columnstore/columnstore'...
+2026-02-03T02:04:09.4070770Z Cloning into '/Users/runner/work/tidesql/tidesql/mariadb-server/storage/maria/libmarias3'...
+2026-02-03T02:04:10.0817260Z Cloning into '/Users/runner/work/tidesql/tidesql/mariadb-server/storage/rocksdb/rocksdb'...
+2026-02-03T02:04:12.1135360Z Cloning into '/Users/runner/work/tidesql/tidesql/mariadb-server/wsrep-lib'...
+2026-02-03T02:04:16.6312990Z From https://github.com/wolfSSL/wolfssl
+2026-02-03T02:04:16.6313610Z  * branch            b077c81eb635392e694ccedbab8b644297ec0285 -> FETCH_HEAD
+2026-02-03T02:04:17.4892870Z Submodule path 'extra/wolfssl/wolfssl': checked out 'b077c81eb635392e694ccedbab8b644297ec0285'
+2026-02-03T02:04:18.2405820Z From https://github.com/MariaDB/mariadb-connector-c
+2026-02-03T02:04:18.2406600Z  * branch            46880b003653a000e9588bd73c8b1dd65088c686 -> FETCH_HEAD
+2026-02-03T02:04:18.3148690Z Submodule path 'libmariadb': checked out '46880b003653a000e9588bd73c8b1dd65088c686'
+2026-02-03T02:04:18.3218710Z Submodule 'docs' (https://github.com/mariadb-corporation/mariadb-connector-c.wiki.git) registered for path 'libmariadb/docs'
+2026-02-03T02:04:18.3464470Z Cloning into '/Users/runner/work/tidesql/tidesql/mariadb-server/libmariadb/docs'...
+2026-02-03T02:04:19.6968620Z From https://github.com/mariadb-corporation/mariadb-connector-c.wiki
+2026-02-03T02:04:19.6970400Z  * branch            7e12bcea26c8a7fe5ee77f5e5341011bb9d7e084 -> FETCH_HEAD
+2026-02-03T02:04:19.7357560Z Submodule path 'libmariadb/docs': checked out '7e12bcea26c8a7fe5ee77f5e5341011bb9d7e084'
+2026-02-03T02:04:20.7303090Z From https://github.com/mariadb-corporation/mariadb-columnstore-engine
+2026-02-03T02:04:20.7303620Z  * branch            e3a2563b58898de8117199eddfd7845c5a24886d -> FETCH_HEAD
+2026-02-03T02:04:24.3633700Z Submodule path 'storage/columnstore/columnstore': checked out 'e3a2563b58898de8117199eddfd7845c5a24886d'
+2026-02-03T02:04:24.3906290Z Submodule 'storage-manager/libmarias3' (https://github.com/mariadb-corporation/libmarias3.git) registered for path 'storage/columnstore/columnstore/utils/libmarias3/libmarias3'
+2026-02-03T02:04:24.4037050Z Cloning into '/Users/runner/work/tidesql/tidesql/mariadb-server/storage/columnstore/columnstore/utils/libmarias3/libmarias3'...
+2026-02-03T02:04:25.2255100Z Submodule path 'storage/columnstore/columnstore/utils/libmarias3/libmarias3': checked out 'd9cb536a532ef6e71df66d99e95562e1169ec93f'
+2026-02-03T02:04:25.9277980Z From https://github.com/mariadb-corporation/libmarias3
+2026-02-03T02:04:25.9378420Z  * branch            0d5babbe46f17147ed51efd1f05a0001017a2aad -> FETCH_HEAD
+2026-02-03T02:04:26.0258830Z Submodule path 'storage/maria/libmarias3': checked out '0d5babbe46f17147ed51efd1f05a0001017a2aad'
+2026-02-03T02:04:28.3700920Z From https://github.com/facebook/rocksdb
+2026-02-03T02:04:28.3707340Z  * branch            79f08d7ffa6d34d9ca3357777bcb335884a56cfb -> FETCH_HEAD
+2026-02-03T02:04:29.1301010Z Submodule path 'storage/rocksdb/rocksdb': checked out '79f08d7ffa6d34d9ca3357777bcb335884a56cfb'
+2026-02-03T02:04:29.8585530Z From https://github.com/codership/wsrep-lib
+2026-02-03T02:04:29.8650810Z  * branch            14ce8cab76e9388f7266b91b163a62c654b1d329 -> FETCH_HEAD
+2026-02-03T02:04:29.9070820Z Submodule path 'wsrep-lib': checked out '14ce8cab76e9388f7266b91b163a62c654b1d329'
+2026-02-03T02:04:29.9191030Z Submodule 'wsrep-API/v26' (https://github.com/codership/wsrep-API.git) registered for path 'wsrep-lib/wsrep-API/v26'
+2026-02-03T02:04:29.9321370Z Cloning into '/Users/runner/work/tidesql/tidesql/mariadb-server/wsrep-lib/wsrep-API/v26'...
+2026-02-03T02:04:31.1366020Z From https://github.com/codership/wsrep-API
+2026-02-03T02:04:31.1366580Z  * branch            65608d3f503ba9f4c170fc4e01c539be9fafd46c -> FETCH_HEAD
+2026-02-03T02:04:31.1626120Z Submodule path 'wsrep-lib/wsrep-API/v26': checked out '65608d3f503ba9f4c170fc4e01c539be9fafd46c'
+2026-02-03T02:04:31.1888100Z ##[group]Run git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
+2026-02-03T02:04:31.1888660Z [36;1mgit clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib[0m
+2026-02-03T02:04:31.1889020Z [36;1mcd tidesdb-lib[0m
+2026-02-03T02:04:31.1889320Z [36;1mmkdir build && cd build[0m
+2026-02-03T02:04:31.1889610Z [36;1mcmake .. -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)[0m
+2026-02-03T02:04:31.1890040Z [36;1mmake -j$(sysctl -n hw.ncpu)[0m
+2026-02-03T02:04:31.1890330Z [36;1msudo make install[0m
+2026-02-03T02:04:31.2878140Z shell: /bin/bash -e {0}
+2026-02-03T02:04:31.2878890Z ##[endgroup]
+2026-02-03T02:04:31.4200400Z Cloning into 'tidesdb-lib'...
+2026-02-03T02:04:33.1731260Z -- The C compiler identification is AppleClang 17.0.0.17000013
+2026-02-03T02:04:35.0156260Z -- Detecting C compiler ABI info
+2026-02-03T02:04:35.8128540Z -- Detecting C compiler ABI info - done
+2026-02-03T02:04:35.8319710Z -- Check for working C compiler: /usr/bin/cc - skipped
+2026-02-03T02:04:35.8326030Z -- Detecting C compile features
+2026-02-03T02:04:35.8332030Z -- Detecting C compile features - done
+2026-02-03T02:04:35.8433660Z -- Detected Homebrew at /opt/homebrew
+2026-02-03T02:04:35.8561830Z -- Configuring done (3.8s)
+2026-02-03T02:04:35.9292480Z CMake Warning:
+2026-02-03T02:04:35.9293770Z   Manually-specified variables were not used by the project:
+2026-02-03T02:04:35.9294300Z
+2026-02-03T02:04:35.9294570Z     OPENSSL_ROOT_DIR
+2026-02-03T02:04:35.9295190Z
+2026-02-03T02:04:35.9295200Z
+2026-02-03T02:04:35.9295370Z -- Generating done (0.1s)
+2026-02-03T02:04:35.9301390Z -- Build files have been written to: /Users/runner/work/tidesql/tidesql/tidesdb-lib/build
+2026-02-03T02:04:36.0070760Z [  2%] Building C object CMakeFiles/tidesdb.dir/src/tidesdb.c.o
+2026-02-03T02:04:36.0096860Z [  5%] Building C object CMakeFiles/tidesdb.dir/src/block_manager.c.o
+2026-02-03T02:04:36.0117620Z [  8%] Building C object CMakeFiles/tidesdb.dir/src/skip_list.c.o
+2026-02-03T02:04:36.5137140Z [ 11%] Building C object CMakeFiles/tidesdb.dir/src/compress.c.o
+2026-02-03T02:04:36.5432310Z [ 14%] Building C object CMakeFiles/tidesdb.dir/src/bloom_filter.c.o
+2026-02-03T02:04:36.6630270Z [ 17%] Building C object CMakeFiles/tidesdb.dir/src/manifest.c.o
+2026-02-03T02:04:36.6846410Z [ 20%] Building C object CMakeFiles/tidesdb.dir/src/clock_cache.c.o
+2026-02-03T02:04:36.7881640Z [ 22%] Building C object CMakeFiles/tidesdb.dir/src/queue.c.o
+2026-02-03T02:04:36.8084160Z [ 25%] Building C object CMakeFiles/tidesdb.dir/src/buffer.c.o
+2026-02-03T02:04:36.8624770Z [ 28%] Building C object CMakeFiles/tidesdb.dir/src/btree.c.o
+2026-02-03T02:04:36.9043390Z [ 31%] Building C object CMakeFiles/tidesdb.dir/external/xxhash.c.o
+2026-02-03T02:04:36.9153700Z [ 34%] Building C object CMakeFiles/tidesdb.dir/external/ini.c.o
+2026-02-03T02:04:37.1119540Z [ 37%] Linking C shared library libtidesdb.dylib
+2026-02-03T02:04:37.2217720Z Copying tidesdb_version.h to build include directory
+2026-02-03T02:04:37.2412590Z [ 37%] Built target tidesdb
+2026-02-03T02:04:37.2712810Z [ 40%] Building C object CMakeFiles/skip_list_tests.dir/test/skip_list__tests.c.o
+2026-02-03T02:04:37.2720270Z [ 42%] Building C object CMakeFiles/compress_tests.dir/test/compress__tests.c.o
+2026-02-03T02:04:37.2736860Z [ 45%] Building C object CMakeFiles/block_manager_tests.dir/test/block_manager__tests.c.o
+2026-02-03T02:04:37.3793260Z [ 48%] Linking C executable compress_tests
+2026-02-03T02:04:37.3894700Z [ 51%] Linking C executable block_manager_tests
+2026-02-03T02:04:37.4221110Z [ 54%] Linking C executable skip_list_tests
+2026-02-03T02:04:37.4757670Z [ 54%] Built target compress_tests
+2026-02-03T02:04:37.5194450Z [ 54%] Built target block_manager_tests
+2026-02-03T02:04:37.5360050Z [ 57%] Building C object CMakeFiles/bloom_filter_tests.dir/test/bloom_filter__tests.c.o
+2026-02-03T02:04:37.5429820Z [ 57%] Built target skip_list_tests
+2026-02-03T02:04:37.5589640Z [ 60%] Building C object CMakeFiles/clock_cache_tests.dir/test/clock_cache__tests.c.o
+2026-02-03T02:04:37.5824400Z [ 62%] Building C object CMakeFiles/manifest_tests.dir/test/manifest__tests.c.o
+2026-02-03T02:04:37.6508330Z [ 65%] Linking C executable bloom_filter_tests
+2026-02-03T02:04:37.6781160Z [ 68%] Linking C executable clock_cache_tests
+2026-02-03T02:04:37.6945790Z [ 71%] Linking C executable manifest_tests
+2026-02-03T02:04:37.7616540Z [ 71%] Built target bloom_filter_tests
+2026-02-03T02:04:37.7834440Z [ 71%] Built target clock_cache_tests
+2026-02-03T02:04:37.7967210Z [ 71%] Built target manifest_tests
+2026-02-03T02:04:37.8181360Z [ 74%] Building C object CMakeFiles/queue_tests.dir/test/queue__tests.c.o
+2026-02-03T02:04:37.8288710Z [ 77%] Building C object CMakeFiles/buffer_tests.dir/test/buffer__tests.c.o
+2026-02-03T02:04:37.8513280Z [ 80%] Building C object CMakeFiles/btree_tests.dir/test/btree__tests.c.o
+2026-02-03T02:04:37.9389100Z [ 82%] Linking C executable buffer_tests
+2026-02-03T02:04:37.9449120Z [ 85%] Linking C executable queue_tests
+2026-02-03T02:04:37.9953430Z [ 88%] Linking C executable btree_tests
+2026-02-03T02:04:38.0306670Z [ 88%] Built target queue_tests
+2026-02-03T02:04:38.0361360Z [ 88%] Built target buffer_tests
+2026-02-03T02:04:38.0758680Z [ 91%] Building C object CMakeFiles/tidesdb_tests.dir/test/tidesdb__tests.c.o
+2026-02-03T02:04:38.0779300Z [ 94%] Building C object CMakeFiles/tidesdb_bench.dir/bench/tidesdb__bench.c.o
+2026-02-03T02:04:38.0780120Z [ 94%] Built target btree_tests
+2026-02-03T02:04:38.1609480Z [ 97%] Linking C executable tidesdb_bench
+2026-02-03T02:04:38.2540180Z [ 97%] Built target tidesdb_bench
+2026-02-03T02:04:38.4423460Z [100%] Linking C executable tidesdb_tests
+2026-02-03T02:04:38.5158790Z [100%] Built target tidesdb_tests
+2026-02-03T02:04:39.1982610Z [ 37%] Built target tidesdb
+2026-02-03T02:04:39.2349590Z [ 42%] Built target block_manager_tests
+2026-02-03T02:04:39.2779180Z [ 48%] Built target skip_list_tests
+2026-02-03T02:04:39.3101930Z [ 54%] Built target compress_tests
+2026-02-03T02:04:39.3403920Z [ 60%] Built target bloom_filter_tests
+2026-02-03T02:04:39.3747280Z [ 65%] Built target clock_cache_tests
+2026-02-03T02:04:39.4063060Z [ 71%] Built target manifest_tests
+2026-02-03T02:04:39.4386240Z [ 77%] Built target queue_tests
+2026-02-03T02:04:39.4692020Z [ 82%] Built target buffer_tests
+2026-02-03T02:04:39.4979340Z [ 88%] Built target btree_tests
+2026-02-03T02:04:39.5365240Z [ 94%] Built target tidesdb_tests
+2026-02-03T02:04:39.5721900Z [100%] Built target tidesdb_bench
+2026-02-03T02:04:39.5896390Z Install the project...
+2026-02-03T02:04:39.5959210Z -- Install configuration: ""
+2026-02-03T02:04:39.5967310Z -- Installing: /usr/local/lib/libtidesdb.dylib
+2026-02-03T02:04:40.1085340Z -- Installing: /usr/local/include/tidesdb
+2026-02-03T02:04:40.1094050Z -- Installing: /usr/local/include/tidesdb/tidesdb.h
+2026-02-03T02:04:40.1098320Z -- Installing: /usr/local/include/tidesdb/bloom_filter.h
+2026-02-03T02:04:40.1101410Z -- Installing: /usr/local/include/tidesdb/manifest.h
+2026-02-03T02:04:40.1104280Z -- Installing: /usr/local/include/tidesdb/db.h
+2026-02-03T02:04:40.1105230Z -- Installing: /usr/local/include/tidesdb/block_manager.h
+2026-02-03T02:04:40.1107210Z -- Installing: /usr/local/include/tidesdb/buffer.h
+2026-02-03T02:04:40.1109320Z -- Installing: /usr/local/include/tidesdb/btree.h
+2026-02-03T02:04:40.1109970Z -- Installing: /usr/local/include/tidesdb/compress.h
+2026-02-03T02:04:40.1111990Z -- Installing: /usr/local/include/tidesdb/skip_list.h
+2026-02-03T02:04:40.1112840Z -- Installing: /usr/local/include/tidesdb/compat.h
+2026-02-03T02:04:40.1116250Z -- Installing: /usr/local/include/tidesdb/queue.h
+2026-02-03T02:04:40.1128560Z -- Installing: /usr/local/include/tidesdb/clock_cache.h
+2026-02-03T02:04:40.1133670Z -- Installing: /usr/local/include/tidesdb/ini.h
+2026-02-03T02:04:40.1134980Z -- Installing: /usr/local/include/tidesdb/xxhash.h
+2026-02-03T02:04:40.1143200Z -- Installing: /usr/local/include/tidesdb/tidesdb_version.h
+2026-02-03T02:04:40.1150350Z -- Installing: /usr/local/lib/cmake/tidesdb/TidesDBConfig.cmake
+2026-02-03T02:04:40.1153620Z -- Installing: /usr/local/lib/cmake/tidesdb/TidesDBConfigVersion.cmake
+2026-02-03T02:04:40.1259440Z ##[group]Run cp -r tidesql/tidesdb mariadb-server/storage/
+2026-02-03T02:04:40.1259850Z [36;1mcp -r tidesql/tidesdb mariadb-server/storage/[0m
+2026-02-03T02:04:40.1260310Z [36;1mcp -r tidesql/mysql-test/suite/tidesdb mariadb-server/mysql-test/suite/[0m
+2026-02-03T02:04:40.1329710Z shell: /bin/bash -e {0}
+2026-02-03T02:04:40.1329960Z ##[endgroup]
+2026-02-03T02:04:40.2328150Z ##[group]Run cd mariadb-server
+2026-02-03T02:04:40.2328520Z [36;1mcd mariadb-server[0m
+2026-02-03T02:04:40.2328800Z [36;1mmkdir build && cd build[0m
+2026-02-03T02:04:40.2329020Z [36;1mcmake .. \[0m
+2026-02-03T02:04:40.2329230Z [36;1m  -DPLUGIN_TIDESDB=DYNAMIC \[0m
+2026-02-03T02:04:40.2329600Z [36;1m  -DCMAKE_BUILD_TYPE=RelWithDebInfo \[0m
+2026-02-03T02:04:40.2329940Z [36;1m  -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) \[0m
+2026-02-03T02:04:40.2330300Z [36;1m  -DWITH_SSL=$(brew --prefix openssl@3)[0m
+2026-02-03T02:04:40.2330600Z [36;1mmake -j$(sysctl -n hw.ncpu)[0m
+2026-02-03T02:04:40.2370730Z shell: /bin/bash -e {0}
+2026-02-03T02:04:40.2371050Z ##[endgroup]
+2026-02-03T02:04:40.2685800Z mkdir: build: File exists
+2026-02-03T02:04:40.3418190Z CMake Warning:
+2026-02-03T02:04:40.3418930Z   Ignoring extra path from command line:
+2026-02-03T02:04:40.3419370Z
+2026-02-03T02:04:40.3419500Z    ".."
+2026-02-03T02:04:40.3419700Z
+2026-02-03T02:04:40.3419700Z
+2026-02-03T02:04:40.3420550Z CMake Error: The source directory "/Users/runner/work/tidesql/tidesql" does not appear to contain CMakeLists.txt.
+2026-02-03T02:04:40.3421950Z Specify --help for usage, or press the help button on the CMake GUI.
+2026-02-03T02:04:40.3432810Z ##[error]Process completed with exit code 1.
+2026-02-03T02:04:40.3552930Z Post job cleanup.
+2026-02-03T02:04:40.6215590Z [command]/opt/homebrew/bin/git version
+2026-02-03T02:04:40.6326410Z git version 2.52.0
+2026-02-03T02:04:40.6375670Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/49b23c55-7447-4915-8ef2-12865670df32/.gitconfig'
+2026-02-03T02:04:40.6390590Z Temporarily overriding HOME='/Users/runner/work/_temp/49b23c55-7447-4915-8ef2-12865670df32' before making global git config changes
+2026-02-03T02:04:40.6391330Z Adding repository directory to the temporary git global config as a safe directory
+2026-02-03T02:04:40.6398990Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/tidesql/tidesql/tidesql
+2026-02-03T02:04:40.6487090Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-02-03T02:04:40.6647310Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-02-03T02:04:40.7885740Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-02-03T02:04:40.7998690Z http.https://github.com/.extraheader
+2026-02-03T02:04:40.8020990Z [command]/opt/homebrew/bin/git config --local --unset-all http.https://github.com/.extraheader
+2026-02-03T02:04:40.8128620Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-02-03T02:04:40.9309550Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-02-03T02:04:40.9380590Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-02-03T02:04:41.0758720Z Cleaning up orphan processes

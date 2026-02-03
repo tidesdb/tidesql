@@ -64,10 +64,13 @@ jobs:
 
     - name: Install dependencies (Windows)
       if: runner.os == 'Windows'
+      shell: pwsh
       run: |
         choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
         choco install -y strawberryperl
         choco install -y winflexbison3
+        vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows
+        echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
 
     - name: Get latest MariaDB release tag
       id: mariadb-release
@@ -113,7 +116,7 @@ jobs:
         cd tidesdb-lib
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake
         cmake --build . --config Release
         cmake --install . --config Release
 
@@ -132,17 +135,17 @@ jobs:
 
     - name: Build MariaDB with TidesDB plugin (Ubuntu)
       if: runner.os == 'Linux'
+      working-directory: mariadb-server
       run: |
-        cd mariadb-server
-        mkdir build && cd build
+        mkdir -p build && cd build
         cmake .. -DPLUGIN_TIDESDB=DYNAMIC -DCMAKE_BUILD_TYPE=RelWithDebInfo
         make -j$(nproc)
 
     - name: Build MariaDB with TidesDB plugin (macOS)
       if: runner.os == 'macOS'
+      working-directory: mariadb-server
       run: |
-        cd mariadb-server
-        mkdir build && cd build
+        mkdir -p build && cd build
         cmake .. \
           -DPLUGIN_TIDESDB=DYNAMIC \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
@@ -153,8 +156,8 @@ jobs:
     - name: Build MariaDB with TidesDB plugin (Windows)
       if: runner.os == 'Windows'
       shell: cmd
+      working-directory: mariadb-server
       run: |
-        cd mariadb-server
         mkdir build
         cd build
         cmake .. -G "Visual Studio 17 2022" -A x64 -DPLUGIN_TIDESDB=DYNAMIC
@@ -162,13 +165,13 @@ jobs:
 
     - name: Run TidesDB test suite (Unix)
       if: runner.os != 'Windows'
+      working-directory: mariadb-server/build
       run: |
-        cd mariadb-server/build
         ./mysql-test/mtr --suite=tidesdb --parallel=4 --force --retry=1
 
     - name: Run TidesDB test suite (Windows)
       if: runner.os == 'Windows'
       shell: cmd
+      working-directory: mariadb-server/build
       run: |
-        cd mariadb-server\build
         perl mysql-test\mysql-test-run.pl --suite=tidesdb --parallel=4 --force --retry=1
