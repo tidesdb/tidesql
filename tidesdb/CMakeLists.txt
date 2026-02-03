@@ -15,7 +15,7 @@
 
 SET(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DSAFEMALLOC -DSAFE_MUTEX")
 SET(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -DSAFEMALLOC -DSAFE_MUTEX")
-set(PROJECT_VERSION 1.1.0)
+set(PROJECT_VERSION 1.2.0)
 
 FIND_LIBRARY(TIDESDB_LIB 
   NAMES tidesdb
@@ -29,40 +29,25 @@ FIND_LIBRARY(TIDESDB_LIB
     /opt/local/lib
 )
 
-# Find compression libraries using find_package when available
-FIND_PACKAGE(PkgConfig QUIET)
-IF(PKG_CONFIG_FOUND)
-  PKG_CHECK_MODULES(ZSTD QUIET libzstd)
-  PKG_CHECK_MODULES(LZ4 QUIET liblz4)
-ENDIF()
+# Find compression libraries -- always use FIND_LIBRARY to get full paths.
+# We cannot use pkg-config because it returns library names like "zstd" which
+# conflict with MariaDB's own "zstd" MODULE target (provider_zstd plugin).
+FIND_LIBRARY(ZSTD_LIBRARY
+  NAMES zstd
+  HINTS ENV LIBRARY_PATH
+  PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu /opt/homebrew/lib
+)
 
-# Fallback to FIND_LIBRARY if pkg-config didn't find them
-IF(NOT ZSTD_FOUND)
-  FIND_LIBRARY(ZSTD_LIBRARIES
-    NAMES zstd
-    HINTS ENV LIBRARY_PATH
-    PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu
-  )
-  IF(ZSTD_LIBRARIES)
-    SET(ZSTD_FOUND TRUE)
-  ENDIF()
-ENDIF()
+FIND_LIBRARY(LZ4_LIBRARY
+  NAMES lz4
+  HINTS ENV LIBRARY_PATH
+  PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu /opt/homebrew/lib
+)
 
-IF(NOT LZ4_FOUND)
-  FIND_LIBRARY(LZ4_LIBRARIES
-    NAMES lz4
-    HINTS ENV LIBRARY_PATH
-    PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu
-  )
-  IF(LZ4_LIBRARIES)
-    SET(LZ4_FOUND TRUE)
-  ENDIF()
-ENDIF()
-
-FIND_LIBRARY(SNAPPY_LIBRARIES
+FIND_LIBRARY(SNAPPY_LIBRARY
   NAMES snappy
   HINTS ENV LIBRARY_PATH
-  PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu
+  PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu /opt/homebrew/lib
 )
 
 # Find include directories
@@ -83,12 +68,12 @@ IF(NOT TIDESDB_LIB)
   RETURN()
 ENDIF()
 
-IF(NOT ZSTD_FOUND AND NOT ZSTD_LIBRARIES)
+IF(NOT ZSTD_LIBRARY)
   MESSAGE(STATUS "TidesDB: zstd library not found - plugin will not be built. Install libzstd-dev.")
   RETURN()
 ENDIF()
 
-IF(NOT LZ4_FOUND AND NOT LZ4_LIBRARIES)
+IF(NOT LZ4_LIBRARY)
   MESSAGE(STATUS "TidesDB: lz4 library not found - plugin will not be built. Install liblz4-dev.")
   RETURN()
 ENDIF()
@@ -97,32 +82,12 @@ ENDIF()
 IF(TIDESDB_INCLUDE_DIR)
   INCLUDE_DIRECTORIES(${TIDESDB_INCLUDE_DIR})
 ENDIF()
-IF(ZSTD_INCLUDE_DIRS)
-  INCLUDE_DIRECTORIES(${ZSTD_INCLUDE_DIRS})
-ENDIF()
-IF(LZ4_INCLUDE_DIRS)
-  INCLUDE_DIRECTORIES(${LZ4_INCLUDE_DIRS})
-ENDIF()
 
-# Build list of libraries to link
-SET(TIDESDB_LIBS ${TIDESDB_LIB})
+# Build list of libraries to link - use full paths from FIND_LIBRARY
+SET(TIDESDB_LIBS ${TIDESDB_LIB} ${ZSTD_LIBRARY} ${LZ4_LIBRARY})
 
-IF(ZSTD_LIBRARIES)
-  LIST(APPEND TIDESDB_LIBS ${ZSTD_LIBRARIES})
-ELSE()
-  LIST(APPEND TIDESDB_LIBS zstd)
-ENDIF()
-
-IF(LZ4_LIBRARIES)
-  LIST(APPEND TIDESDB_LIBS ${LZ4_LIBRARIES})
-ELSE()
-  LIST(APPEND TIDESDB_LIBS lz4)
-ENDIF()
-
-IF(SNAPPY_LIBRARIES)
-  LIST(APPEND TIDESDB_LIBS ${SNAPPY_LIBRARIES})
-ELSE()
-  LIST(APPEND TIDESDB_LIBS snappy)
+IF(SNAPPY_LIBRARY)
+  LIST(APPEND TIDESDB_LIBS ${SNAPPY_LIBRARY})
 ENDIF()
 
 # Define the storage engine using MariaDB's MYSQL_ADD_PLUGIN macro

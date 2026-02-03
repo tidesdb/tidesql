@@ -31,9 +31,7 @@
 #pragma interface /* gcc class implementation */
 #endif
 
-/* Include MariaDB headers first to get proper type definitions */
-#include <ft_global.h>
-
+/* handler.h includes ft_global.h and other required headers */
 #include "handler.h"
 
 /* Include TidesDB header after MariaDB headers */
@@ -72,13 +70,20 @@ typedef struct st_tidesdb_fk
     int update_rule;             /* 0=RESTRICT, 1=CASCADE, 2=SET NULL, 3=NO ACTION */
 } TIDESDB_FK;
 
+/**
+  Shared table metadata structure.
+
+  Note on locking: The mutex and THR_LOCK here are for MariaDB's internal
+  table management (open/close coordination), NOT for row-level locking.
+  TidesDB uses MVCC and is fundamentally lock-free for data access.
+*/
 typedef struct st_tidesdb_share
 {
     char *table_name;
     uint table_name_length;
     uint use_count;
-    pthread_mutex_t mutex;
-    THR_LOCK lock;
+    pthread_mutex_t mutex; /* For use_count and metadata updates only */
+    THR_LOCK lock;         /* Required by MariaDB, not used for data locking */
 
     /* TidesDB column family for this table (primary data) */
     tidesdb_column_family_t *cf;
@@ -147,8 +152,16 @@ typedef struct st_tidesdb_share
 */
 class ha_tidesdb : public handler
 {
-    THR_LOCK_DATA lock;    ///< MySQL/MariaDB lock
-    TIDESDB_SHARE *share;  ///< Shared lock info and CF handle
+    /**
+      THR_LOCK_DATA is required by the MariaDB handler interface.
+      However, TidesDB uses MVCC and is fundamentally lock-free:
+      - Reads never block (snapshot isolation)
+      - Writes use optimistic concurrency (conflict detection at commit)
+      - No row-level or table-level locking
+      This lock structure is only used for MariaDB's internal bookkeeping.
+    */
+    THR_LOCK_DATA lock;
+    TIDESDB_SHARE *share;  ///< Shared table metadata and CF handle
 
     /* Current transaction for this handler */
     tidesdb_txn_t *current_txn;
@@ -189,6 +202,9 @@ class ha_tidesdb : public handler
     /* Index Condition Pushdown */
     Item *pushed_idx_cond;
     uint pushed_idx_cond_keyno;
+
+    /* Table Condition Pushdown (full WHERE clause) */
+    const COND *pushed_cond;
 
     /* Index-only scan mode */
     bool keyread_only;
@@ -309,13 +325,20 @@ class ha_tidesdb : public handler
                HA_CAN_VIRTUAL_COLUMNS | /* Supports virtual/generated columns */
                HA_CAN_GEOMETRY |        /* Supports spatial/geometry types */
                HA_PRIMARY_KEY_IN_READ_INDEX | HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
-               HA_STATS_RECORDS_IS_EXACT | /* We can provide exact row counts */
-               HA_CAN_SQL_HANDLER |        /* Supports HANDLER interface */
-               HA_CAN_EXPORT |             /* Supports transportable tablespaces */
-               HA_CAN_ONLINE_BACKUPS |     /* Supports online backup */
-               HA_CONCURRENT_OPTIMIZE |    /* OPTIMIZE doesn't block */
-               HA_CAN_RTREEKEYS |          /* Supports spatial indexes via Z-order */
-               HA_TABLE_SCAN_ON_INDEX;     /* Can scan table via index */
+               HA_STATS_RECORDS_IS_EXACT |       /* We can provide exact row counts */
+               HA_CAN_SQL_HANDLER |              /* Supports HANDLER interface */
+               HA_CAN_EXPORT |                   /* Supports transportable tablespaces */
+               HA_CAN_ONLINE_BACKUPS |           /* Supports online backup */
+               HA_CONCURRENT_OPTIMIZE |          /* OPTIMIZE doesn't block */
+               HA_CAN_RTREEKEYS |                /* Supports spatial indexes via Z-order */
+               HA_TABLE_SCAN_ON_INDEX |          /* Can scan table via index */
+               HA_CAN_REPAIR |                   /* Supports REPAIR TABLE (via compaction) */
+               HA_CRASH_SAFE |                   /* Crash-safe via WAL */
+               HA_ONLINE_ANALYZE |               /* No need to evict from cache after ANALYZE */
+               HA_CAN_TABLE_CONDITION_PUSHDOWN | /* Supports WHERE pushdown during scans */
+               HA_CAN_SKIP_LOCKED | /* MVCC: SELECT FOR UPDATE SKIP LOCKED (no blocking) */
+               HA_HAS_RECORDS |     /* records() returns exact count */
+               HA_CAN_FULLTEXT_EXT; /* Extended fulltext API (relevance, boolean mode) */
     }
 
     /** @brief
@@ -327,10 +350,10 @@ class ha_tidesdb : public handler
 
       HA_DO_RANGE_FILTER_PUSHDOWN enables rowid filter pushdown for semi-joins.
     */
-    ulong index_flags(uint inx, uint part, bool all_parts) const
+    ulong index_flags(uint inx, uint part, bool all_parts) const override;
+    bool pk_is_clustering_key(uint index) const
     {
-        return HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER | HA_READ_RANGE | HA_KEYREAD_ONLY |
-               HA_DO_INDEX_COND_PUSHDOWN | HA_DO_RANGE_FILTER_PUSHDOWN;
+        return true;
     }
 
     /** @brief
@@ -352,6 +375,42 @@ class ha_tidesdb : public handler
     {
         return 3072;
     }
+
+    /** @brief
+      Query cache type for this table.
+      Transactional tables should return HA_CACHE_TBL_TRANSACT.
+    */
+    uint8 table_cache_type() override
+    {
+        return HA_CACHE_TBL_TRANSACT;
+    }
+
+    /** @brief
+      Return exact row count. Called when HA_HAS_RECORDS is set.
+    */
+    ha_rows records() override;
+
+    /** @brief
+      Truncate table - faster than delete_all_rows.
+    */
+    int truncate() override;
+
+    /** @brief
+      Release row lock after read (MVCC - no-op for TidesDB).
+    */
+    void unlock_row() override
+    {
+    }
+
+    /** @brief
+      Statement-level transaction handling.
+    */
+    int start_stmt(THD *thd, thr_lock_type lock_type) override;
+
+    /** @brief
+      Custom error messages for TidesDB errors.
+    */
+    bool get_error_message(int error, String *buf) override;
 
     /** @brief
       Cost estimates for the optimizer.
@@ -418,6 +477,7 @@ class ha_tidesdb : public handler
     int check(THD *thd, HA_CHECK_OPT *check_opt);
     int repair(THD *thd, HA_CHECK_OPT *check_opt);
     int backup(THD *thd, HA_CHECK_OPT *check_opt);
+    int preload_keys(THD *thd, HA_CHECK_OPT *check_opt) override;
     bool check_and_repair(THD *thd);
     bool is_crashed() const;
 
@@ -450,6 +510,10 @@ class ha_tidesdb : public handler
 
     /* Index Condition Pushdown */
     Item *idx_cond_push(uint keyno, Item *idx_cond) override;
+
+    /* Table Condition Pushdown (full WHERE clause during table scans) */
+    const COND *cond_push(const COND *cond) override;
+    void cond_pop() override;
 
     /* Multi-Range Read (MRR) interface for batch key lookups */
     int multi_range_read_init(RANGE_SEQ_IF *seq, void *seq_init_param, uint n_ranges, uint mode,

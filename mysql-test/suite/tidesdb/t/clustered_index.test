@@ -1,0 +1,60 @@
+--echo #
+--echo # Test Clustered Index (HA_CLUSTERED_INDEX for primary key)
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE tidesdb_check;
+
+# Create test table
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  a INT,
+  b VARCHAR(100),
+  INDEX idx_a (a)
+) ENGINE=TidesDB;
+
+# Insert test data
+INSERT INTO t1 VALUES (1, 100, 'row1');
+INSERT INTO t1 VALUES (2, 200, 'row2');
+INSERT INTO t1 VALUES (3, 300, 'row3');
+INSERT INTO t1 VALUES (4, 400, 'row4');
+INSERT INTO t1 VALUES (5, 500, 'row5');
+
+--echo # Test 1: Primary key lookup (uses clustered index)
+EXPLAIN SELECT * FROM t1 WHERE id = 3;
+SELECT * FROM t1 WHERE id = 3;
+
+--echo # Test 2: Primary key range scan
+EXPLAIN SELECT * FROM t1 WHERE id BETWEEN 2 AND 4;
+SELECT * FROM t1 WHERE id BETWEEN 2 AND 4 ORDER BY id;
+
+--echo # Test 3: Secondary index lookup (not clustered)
+EXPLAIN SELECT * FROM t1 WHERE a = 300;
+SELECT * FROM t1 WHERE a = 300;
+
+--echo # Test 4: Covering index scan on secondary index
+EXPLAIN SELECT a FROM t1 WHERE a > 200;
+SELECT a FROM t1 WHERE a > 200 ORDER BY a;
+
+--echo # Test 5: Full table scan via clustered index
+EXPLAIN SELECT * FROM t1;
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 6: Verify pk_is_clustering_key behavior
+# Data should be stored with primary key - no secondary lookup needed
+SELECT * FROM t1 FORCE INDEX (PRIMARY) WHERE id >= 1 ORDER BY id;
+
+--echo # Cleanup
+DROP TABLE t1;
+
+--echo #
+--echo # Clustered index tests completed!
+--echo #
