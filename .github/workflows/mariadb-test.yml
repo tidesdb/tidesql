@@ -211,6 +211,9 @@ jobs:
         export PATH="${HOMEBREW_BASE_DIR}/opt/llvm/bin:$PATH"
         export CPPFLAGS="-I${HOMEBREW_BASE_DIR}/opt/llvm/include"
         export CPPFLAGS="$CPPFLAGS -I${HOMEBREW_BASE_DIR}/opt/libxml2/include -I${HOMEBREW_BASE_DIR}/opt/zlib/include"
+        # Disable warnings from system headers that LLVM clang treats as errors
+        export CFLAGS="-Wno-nullability-completeness -Wno-availability -Wno-elaborated-enum-base"
+        export CXXFLAGS="-Wno-nullability-completeness -Wno-availability -Wno-elaborated-enum-base"
         export LDFLAGS="-L${HOMEBREW_BASE_DIR}/opt/llvm/lib"
         export LDFLAGS="$LDFLAGS -L${HOMEBREW_BASE_DIR}/opt/llvm/lib/c++"
         export LDFLAGS="$LDFLAGS -Wl,-rpath,${HOMEBREW_BASE_DIR}/opt/llvm/lib/c++"
@@ -223,6 +226,8 @@ jobs:
         cmake .. \
           -DCMAKE_C_COMPILER=${CC} \
           -DCMAKE_CXX_COMPILER=${CXX} \
+          -DCMAKE_C_FLAGS="${CFLAGS}" \
+          -DCMAKE_CXX_FLAGS="${CXXFLAGS}" \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DMYSQL_MAINTAINER_MODE=OFF \
           -DPLUGIN_TIDESDB=DYNAMIC \
@@ -252,7 +257,7 @@ jobs:
       run: |
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DPLUGIN_TIDESDB=DYNAMIC -DPLUGIN_ROCKSDB=NO -DPLUGIN_MROONGA=NO -DPLUGIN_SPIDER=NO -DPLUGIN_COLUMNSTORE=NO -DWITH_UNIT_TESTS=OFF -DCMAKE_PREFIX_PATH="C:/Program Files/tidesdb;%VCPKG_INSTALLATION_ROOT%/installed/x64-windows"
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DPLUGIN_TIDESDB=DYNAMIC -DPLUGIN_ROCKSDB=NO -DPLUGIN_MROONGA=NO -DPLUGIN_SPIDER=NO -DPLUGIN_COLUMNSTORE=NO -DPLUGIN_CONNECT=NO -DWITH_UNIT_TESTS=OFF -DCMAKE_PREFIX_PATH="C:/Program Files/tidesdb;%VCPKG_INSTALLATION_ROOT%/installed/x64-windows" -DCMAKE_INCLUDE_PATH="C:/Program Files/tidesdb/include"
         cmake --build . --config RelWithDebInfo --parallel
 
     - name: Run TidesDB test suite (Linux)
