@@ -7,42 +7,192 @@ A pluggable write and space optimized storage engine for MariaDB/MySQL using Tid
 INSTALLATION
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-1. Clone MariaDB server:
+LINUX (Ubuntu/Debian)
+---------------------
 
-   git clone https://github.com/MariaDB/server.git mariadb-server
+1. Install dependencies:
+
+   sudo apt update
+   sudo apt install -y build-essential cmake ninja-build bison flex \
+     libzstd-dev liblz4-dev libsnappy-dev libncurses-dev libssl-dev \
+     libxml2-dev libevent-dev libcurl4-openssl-dev pkg-config
+
+2. Install TidesDB library:
+
+   git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
+   cd tidesdb-lib && mkdir build && cd build
+   cmake ..
+   make -j$(nproc)
+   sudo make install
+   sudo ldconfig
+
+3. Clone MariaDB and copy TidesDB storage engine:
+
+   git clone --depth 1 --branch mariadb-11.4 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
-   git checkout mariadb-12.1
    git submodule update --init --recursive
+   cp -r /path/to/tidesql/tidesdb storage/
+   cp -r /path/to/tidesql/mysql-test/suite/tidesdb mysql-test/suite/
 
-2. Copy storage engine:
+4. Build MariaDB:
 
-   cp -r /path/to/tidesql/storage/tidesdb mariadb-server/storage/
+   mkdir build && cd build
+   cmake .. \
+     -DPLUGIN_TIDESDB=DYNAMIC \
+     -DPLUGIN_ROCKSDB=NO \
+     -DPLUGIN_MROONGA=NO \
+     -DPLUGIN_SPIDER=NO \
+     -DPLUGIN_COLUMNSTORE=NO \
+     -DWITH_UNIT_TESTS=OFF
+   make -j$(nproc)
 
-3. Copy test suite:
+5. Run tests:
 
-   cp -r /path/to/tidesql/mysql-test/suite/tidesdb mariadb-server/mysql-test/suite/
+   ./mysql-test/mtr --suite=tidesdb --parallel=4 --force
 
-4. Install TidesDB library (if not already installed):
 
-   git clone https://github.com/tidesdb/tidesdb.git
-   cd tidesdb && mkdir build && cd build
-   cmake .. && make && sudo make install && sudo ldconfig
+MACOS
+-----
+
+1. Install dependencies:
+
+   brew install cmake ninja bison snappy lz4 zstd openssl@3
+
+2. Install TidesDB library:
+
+   # Ensure Xcode SDK is used (not CommandLineTools)
+   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+   export SDKROOT=$(xcrun --show-sdk-path)
+
+   git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
+   cd tidesdb-lib && mkdir build && cd build
+   cmake .. -DCMAKE_OSX_SYSROOT=${SDKROOT} -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
+   make -j$(sysctl -n hw.ncpu)
+   sudo make install
+
+3. Clone MariaDB and copy TidesDB storage engine:
+
+   git clone --depth 1 --branch mariadb-11.4 https://github.com/MariaDB/server.git mariadb-server
+   cd mariadb-server
+   git submodule update --init --recursive
+   cp -r /path/to/tidesql/tidesdb storage/
+   cp -r /path/to/tidesql/mysql-test/suite/tidesdb mysql-test/suite/
+
+4. Build MariaDB:
+
+   # Remove CommandLineTools SDK to prevent header conflicts
+   sudo rm -rf /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk
+
+   export SDKROOT=$(xcrun --show-sdk-path)
+   export CC=$(xcrun -find clang)
+   export CXX=$(xcrun -find clang++)
+
+   mkdir mariadb-build && cd mariadb-build
+   cmake .. \
+     -DCMAKE_C_COMPILER=${CC} \
+     -DCMAKE_CXX_COMPILER=${CXX} \
+     -DCMAKE_OSX_SYSROOT=${SDKROOT} \
+     -DCMAKE_C_FLAGS="-Wno-nullability-completeness" \
+     -DCMAKE_CXX_FLAGS="-Wno-nullability-completeness" \
+     -DPLUGIN_TIDESDB=DYNAMIC \
+     -DPLUGIN_ROCKSDB=NO \
+     -DPLUGIN_MROONGA=NO \
+     -DPLUGIN_CONNECT=NO \
+     -DPLUGIN_SPIDER=NO \
+     -DPLUGIN_COLUMNSTORE=NO \
+     -DWITH_UNIT_TESTS=OFF \
+     -DWITH_SSL=bundled \
+     -DWITH_PCRE=bundled \
+     -G Ninja
+   cmake --build . --parallel $(sysctl -n hw.ncpu)
+
+   Note: The CommandLineTools SDK removal is needed because CMake may find
+   headers in /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk which
+   causes C/C++ header path conflicts with libc++.
+
+5. Run tests:
+
+   ./mysql-test/mtr --suite=tidesdb --parallel=4 --force
+
+
+WINDOWS
+-------
+
+1. Install prerequisites:
+
+   - Visual Studio 2022 with C++ workload
+   - CMake (choco install cmake)
+   - Strawberry Perl (choco install strawberryperl)
+   - WinFlexBison (download from GitHub releases)
+
+2. Install vcpkg dependencies:
+
+   cd C:\vcpkg
+   git pull
+   .\vcpkg.exe install zstd:x64-windows lz4:x64-windows snappy:x64-windows pthreads:x64-windows
+
+3. Install TidesDB library:
+
+   git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
+   cd tidesdb-lib
+   mkdir build && cd build
+   cmake .. -G "Visual Studio 17 2022" -A x64 ^
+     -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake ^
+     -DCMAKE_INSTALL_PREFIX=C:/tidesdb
+   cmake --build . --config Release
+   cmake --install . --config Release
+
+4. Clone MariaDB and copy TidesDB storage engine:
+
+   git clone --depth 1 --branch mariadb-11.4 https://github.com/MariaDB/server.git mariadb-server
+   cd mariadb-server
+   git submodule update --init --recursive
+   xcopy /E /I path\to\tidesql\tidesdb storage\tidesdb
+   xcopy /E /I path\to\tidesql\mysql-test\suite\tidesdb mysql-test\suite\tidesdb
 
 5. Build MariaDB:
 
-   cd mariadb-server
    mkdir build && cd build
-   cmake .. -DPLUGIN_TIDESDB=DYNAMIC
-   make -j$(nproc)
+   cmake .. -G "Visual Studio 17 2022" -A x64 ^
+     -DPLUGIN_TIDESDB=DYNAMIC ^
+     -DPLUGIN_ROCKSDB=NO ^
+     -DPLUGIN_MROONGA=NO ^
+     -DPLUGIN_CONNECT=NO ^
+     -DPLUGIN_SPIDER=NO ^
+     -DPLUGIN_COLUMNSTORE=NO ^
+     -DWITH_UNIT_TESTS=OFF ^
+     -DCMAKE_PREFIX_PATH="C:/tidesdb;C:/vcpkg/installed/x64-windows"
+   cmake --build . --config RelWithDebInfo --parallel
+
+   Note: CONNECT plugin is disabled because it requires libxml2 headers
+   that may conflict with vcpkg installations.
 
 6. Run tests:
 
-   cd build
-   ./mysql-test/mtr --suite=tidesdb
+   cd mysql-test
+   perl mtr --suite=tidesdb --parallel=4 --force
 
-7. Enable plugin in MariaDB:
 
-   INSTALL PLUGIN tidesdb SONAME 'ha_tidesdb.so';
+ENABLE PLUGIN
+-------------
+
+After building, enable the plugin in MariaDB:
+
+   INSTALL PLUGIN tidesdb SONAME 'ha_tidesdb.so';   -- Linux/macOS
+   INSTALL PLUGIN tidesdb SONAME 'ha_tidesdb.dll';  -- Windows
+
+
+CI/CD NOTES
+-----------
+
+For GitHub Actions workflows, see .github/workflows/mariadb-test.yml for
+complete examples. Key findings:
+
+- Linux: Straightforward build with system packages
+- macOS: Must use Xcode SDK (not CommandLineTools) and suppress
+  nullability-completeness warnings from Apple system headers
+- Windows: Use vcpkg binary caching with VCPKG_DEFAULT_BINARY_CACHE
+  environment variable for faster CI builds
 
 
 FEATURES
