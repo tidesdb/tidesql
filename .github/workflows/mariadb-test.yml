@@ -145,11 +145,13 @@ jobs:
     - name: Install TidesDB library (macOS)
       if: runner.os == 'macOS'
       run: |
+        # Set SDKROOT to fix C++ header search path issues on macOS
+        export SDKROOT=$(xcrun --show-sdk-path)
+        
         git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
         cd tidesdb-lib
         mkdir build && cd build
-        # Use Apple's native clang (default) to avoid header path conflicts
-        cmake .. -DOPENSSL_ROOT_DIR=${HOMEBREW_BASE_DIR}/opt/openssl@3
+        cmake .. -DCMAKE_OSX_SYSROOT=${SDKROOT} -DOPENSSL_ROOT_DIR=${HOMEBREW_BASE_DIR}/opt/openssl@3
         make -j$(sysctl -n hw.ncpu)
         sudo make install
 
@@ -197,12 +199,13 @@ jobs:
       if: runner.os == 'macOS'
       working-directory: mariadb-server
       run: |
-        # Use Apple's native clang to avoid header path conflicts with Homebrew LLVM
-        # Apple clang is fully compatible with macOS SDK headers
+        # Set SDKROOT to fix C++ header search path issues on macOS
+        export SDKROOT=$(xcrun --show-sdk-path)
         
         # Use mariadb-build directory (macOS has case-insensitive filesystem, BUILD exists)
         mkdir -p mariadb-build && cd mariadb-build
         cmake .. \
+          -DCMAKE_OSX_SYSROOT=${SDKROOT} \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DMYSQL_MAINTAINER_MODE=OFF \
           -DPLUGIN_TIDESDB=DYNAMIC \
