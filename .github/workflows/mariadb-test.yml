@@ -16,7 +16,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     
     steps:
-    - name: Checkout TidesQL
+    - name: Checkout TideSQL
       uses: actions/checkout@v4
       with:
         path: tidesql
@@ -72,19 +72,31 @@ jobs:
         # Export Homebrew prefix for later steps
         echo "HOMEBREW_PREFIX=$(brew --prefix)" >> $GITHUB_ENV
 
+    - name: Cache vcpkg packages (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: |
+          ${{ env.VCPKG_INSTALLATION_ROOT }}/installed
+          ${{ env.VCPKG_INSTALLATION_ROOT }}/packages
+        key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/mariadb-test.yml') }}
+        restore-keys: |
+          vcpkg-windows-x64-
+
     - name: Install dependencies (Windows)
       if: runner.os == 'Windows'
       shell: pwsh
       run: |
         choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
         choco install -y strawberryperl
-        # Install GnuWin32 bison (provides bison.exe that CMake can find)
-        choco install -y gnuwin32-bison.install
-        vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows pthreads:x64-windows curl:x64-windows bzip2:x64-windows libxml2:x64-windows boost:x64-windows
+        choco install -y winflexbison3
+        vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows pthreads:x64-windows curl:x64-windows bzip2:x64-windows libxml2:x64-windows boost:x64-windows openssl:x64-windows liblzma:x64-windows
         echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
         echo "TIDESDB_ROOT=C:/Program Files/tidesdb" >> $env:GITHUB_ENV
-        # Add GnuWin32 bison to PATH
-        echo "C:\Program Files (x86)\GnuWin32\bin" >> $env:GITHUB_PATH
+        # winflexbison3 installs to C:\ProgramData\chocolatey\bin with win_bison.exe
+        # Create bison.exe copy so CMake FindBISON can find it
+        Copy-Item "C:\ProgramData\chocolatey\bin\win_bison.exe" "C:\ProgramData\chocolatey\bin\bison.exe"
+        Copy-Item "C:\ProgramData\chocolatey\bin\win_flex.exe" "C:\ProgramData\chocolatey\bin\flex.exe"
 
     - name: Get latest MariaDB release tag
       id: mariadb-release
@@ -174,6 +186,8 @@ jobs:
         cmake .. \
           -DCMAKE_C_COMPILER=${LLVM_PREFIX}/bin/clang \
           -DCMAKE_CXX_COMPILER=${LLVM_PREFIX}/bin/clang++ \
+          -DCMAKE_C_FLAGS="-Wno-cast-function-type-strict" \
+          -DCMAKE_CXX_FLAGS="-Wno-cast-function-type-strict" \
           -DCMAKE_EXE_LINKER_FLAGS="-L${LLVM_PREFIX}/lib/c++ -Wl,-rpath,${LLVM_PREFIX}/lib/c++ -L${LLVM_PREFIX}/lib -L${LLVM_PREFIX}/lib/unwind -lunwind" \
           -DCMAKE_SHARED_LINKER_FLAGS="-L${LLVM_PREFIX}/lib/c++ -Wl,-rpath,${LLVM_PREFIX}/lib/c++ -L${LLVM_PREFIX}/lib -L${LLVM_PREFIX}/lib/unwind -lunwind" \
           -DPLUGIN_TIDESDB=DYNAMIC \
@@ -199,7 +213,7 @@ jobs:
       run: |
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DPLUGIN_TIDESDB=DYNAMIC -DPLUGIN_ROCKSDB=NO -DPLUGIN_MROONGA=NO -DPLUGIN_SPIDER=NO -DPLUGIN_COLUMNSTORE=NO -DWITH_UNIT_TESTS=OFF -DCMAKE_PREFIX_PATH="C:/Program Files/tidesdb;%VCPKG_INSTALLATION_ROOT%/installed/x64-windows"
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DPLUGIN_TIDESDB=DYNAMIC -DPLUGIN_ROCKSDB=NO -DPLUGIN_MROONGA=NO -DPLUGIN_SPIDER=NO -DPLUGIN_COLUMNSTORE=NO -DWITH_UNIT_TESTS=OFF -DCMAKE_PREFIX_PATH="C:/Program Files/tidesdb;%VCPKG_INSTALLATION_ROOT%/installed/x64-windows" -DBISON_EXECUTABLE="C:/ProgramData/chocolatey/bin/bison.exe"
         cmake --build . --config RelWithDebInfo --parallel
 
     - name: Run TidesDB test suite (Unix)
