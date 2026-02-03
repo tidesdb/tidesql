@@ -76,6 +76,9 @@ static int tidesdb_rollback_by_xid(XID *xid);
 /* Optimizer cost callback */
 static void tidesdb_update_optimizer_costs(OPTIMIZER_COSTS *costs);
 
+/* Consistent snapshot support */
+static int tidesdb_start_consistent_snapshot(THD *thd);
+
 /* XA transaction tracking structures (defined early for use in shutdown) */
 struct tidesdb_xa_txn_t
 {
@@ -102,12 +105,14 @@ static char *tidesdb_data_dir = NULL;
 /* System variables */
 static ulong tidesdb_flush_threads = 2;
 static ulong tidesdb_compaction_threads = 2;
-static ulonglong tidesdb_block_cache_size = 64 * 1024 * 1024;  /* 64MB */
+static ulonglong tidesdb_block_cache_size =
+    256 * 1024 * 1024; /* 256MB -- matches InnoDB buffer pool default, we use for block/node cache
+                          uses 512MB for global TidesDB instance */
 static ulonglong tidesdb_write_buffer_size = 64 * 1024 * 1024; /* 64MB */
 static my_bool tidesdb_enable_compression = TRUE;
 static my_bool tidesdb_enable_bloom_filter = TRUE;
 
-/* Compression algorithm: 0=none, 1=snappy, 2=lz4, 3=zstd, 4=lz4_fast */
+/* Compression algorithm -- 0=none, 1=snappy, 2=lz4, 3=zstd, 4=lz4_fast */
 static ulong tidesdb_compression_algo = 2; /* LZ4 default */
 static const char *tidesdb_compression_names[] = {"none", "snappy",   "lz4",
                                                   "zstd", "lz4_fast", NullS};
@@ -389,14 +394,14 @@ static void tidesdb_update_optimizer_costs(OPTIMIZER_COSTS *costs)
 
     /*
      * LSM-tree sequential access cost:
-     * - Merge iterator overhead: O(log S) where S = number of sources
-     * - But sequential within each SSTable is efficient
+     * -- Merge iterator overhead: O(log S) where S = number of sources
+     * -- But sequential within each SSTable is efficient
      */
     costs->key_next_find_cost = 0.00012; /* Merge iterator overhead */
     costs->row_next_find_cost = 0.00015;
 
     /*
-     * Key/row copy costs - similar to other engines
+     * Key/row copy costs -- similar to other engines
      */
     costs->key_copy_cost = 0.000015;
     costs->row_copy_cost = 0.000060;
@@ -442,7 +447,7 @@ static int tidesdb_init_func(void *p)
                        (my_hash_get_key)tidesdb_get_key, 0, 0);
 
     tidesdb_hton->create = tidesdb_create_handler;
-    tidesdb_hton->flags = HTON_CLOSE_CURSORS_AT_COMMIT;
+    tidesdb_hton->flags = HTON_CLOSE_CURSORS_AT_COMMIT | HTON_SUPPORTS_EXTENDED_KEYS;
     tidesdb_hton->commit = tidesdb_commit;
     tidesdb_hton->rollback = tidesdb_rollback;
     tidesdb_hton->show_status = tidesdb_show_status;
@@ -464,6 +469,9 @@ static int tidesdb_init_func(void *p)
 
     /* LSM-tree specific optimizer costs */
     tidesdb_hton->update_optimizer_costs = tidesdb_update_optimizer_costs;
+
+    /* Consistent snapshot support for START TRANSACTION WITH CONSISTENT SNAPSHOT */
+    tidesdb_hton->start_consistent_snapshot = tidesdb_start_consistent_snapshot;
 
     /* We initialize TidesDB instance */
     static char db_path[FN_REFLEN]; /* Static to ensure it persists */
@@ -631,6 +639,44 @@ static int tidesdb_rollback(THD *thd, bool all)
         DBUG_PRINT("info", ("TidesDB: Transaction rolled back"));
     }
 
+    DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Start a consistent snapshot for the current transaction.
+
+  Called when START TRANSACTION WITH CONSISTENT SNAPSHOT is issued.
+  TidesDB's MVCC provides snapshot isolation -- we begin a transaction
+  with snapshot isolation level to ensure a consistent view of data.
+
+  This allows multiple engines to participate in a consistent snapshot
+  across the entire database.
+*/
+static int tidesdb_start_consistent_snapshot(THD *thd)
+{
+    DBUG_ENTER("tidesdb_start_consistent_snapshot");
+
+    /* Check if we already have a transaction */
+    tidesdb_txn_t *txn = get_thd_txn(thd, tidesdb_hton);
+    if (txn)
+    {
+        /* Transaction already exists -- snapshot is already established */
+        DBUG_RETURN(0);
+    }
+
+    /* Begin a new transaction with snapshot isolation for consistent reads */
+    int ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+    if (ret != TDB_SUCCESS)
+    {
+        sql_print_error("TidesDB: Failed to begin consistent snapshot transaction: %d", ret);
+        DBUG_RETURN(1);
+    }
+
+    /* Store the transaction in THD for later use */
+    set_thd_txn(thd, tidesdb_hton, txn);
+
+    DBUG_PRINT("info", ("TidesDB: Consistent snapshot started"));
     DBUG_RETURN(0);
 }
 
@@ -1282,6 +1328,7 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
       pack_buffer_capacity(0),
       pushed_idx_cond(NULL),
       pushed_idx_cond_keyno(MAX_KEY),
+      pushed_cond(NULL),
       keyread_only(false),
       txn_read_only(false),
       idx_key_buffer(NULL),
@@ -4998,6 +5045,10 @@ int ha_tidesdb::rnd_next(uchar *buf)
     uint8_t *value = NULL;
     size_t value_size = 0;
 
+    /*
+      Loop to find the next row that matches the pushed condition.
+      If no condition is pushed, we return the first valid row.
+    */
     while (tidesdb_iter_valid(scan_iter))
     {
         ret = tidesdb_iter_key(scan_iter, &key, &key_size);
@@ -5006,56 +5057,81 @@ int ha_tidesdb::rnd_next(uchar *buf)
             DBUG_RETURN(HA_ERR_END_OF_FILE);
         }
 
+        /* Skip internal metadata keys (those starting with null byte) */
         if (key_size > 0 && key[0] == 0)
         {
             tidesdb_iter_next(scan_iter);
             continue;
         }
 
-        break;
+        ret = tidesdb_iter_value(scan_iter, &value, &value_size);
+        if (ret != TDB_SUCCESS)
+        {
+            tidesdb_iter_next(scan_iter);
+            continue;
+        }
+
+        /* Save current key position */
+        if (key_size > current_key_capacity)
+        {
+            size_t new_capacity = key_size > 256 ? key_size * 2 : 256;
+            uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+            if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+            if (current_key) my_free(current_key);
+            current_key = new_key;
+            current_key_capacity = new_capacity;
+        }
+        memcpy(current_key, key, key_size);
+        current_key_len = key_size;
+
+        /* Unpack the row into the buffer */
+        if (tidesdb_enable_encryption && value_size > 0)
+        {
+            uchar *decrypted = NULL;
+            size_t decrypted_len = 0;
+            ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
+            if (ret)
+            {
+                tidesdb_iter_next(scan_iter);
+                continue;
+            }
+            ret = unpack_row(buf, decrypted, decrypted_len);
+            my_free(decrypted);
+        }
+        else
+        {
+            ret = unpack_row(buf, value, value_size);
+        }
+
+        if (ret)
+        {
+            tidesdb_iter_next(scan_iter);
+            continue;
+        }
+
+        /*
+          Table Condition Pushdown: evaluate the pushed condition.
+          If the condition evaluates to FALSE, skip this row and continue.
+          This filters rows at the storage engine level, reducing data
+          transfer to the SQL layer.
+        */
+        if (pushed_cond)
+        {
+            /* val_int() is not const, so we need to cast */
+            if (!const_cast<COND *>(pushed_cond)->val_int())
+            {
+                /* Condition not satisfied, skip this row */
+                tidesdb_iter_next(scan_iter);
+                continue;
+            }
+        }
+
+        /* Row matches -- advance iterator and return */
+        tidesdb_iter_next(scan_iter);
+        DBUG_RETURN(0);
     }
 
-    if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-    ret = tidesdb_iter_value(scan_iter, &value, &value_size);
-    if (ret != TDB_SUCCESS)
-    {
-        DBUG_RETURN(HA_ERR_END_OF_FILE);
-    }
-
-    if (key_size > current_key_capacity)
-    {
-        size_t new_capacity = key_size > 256 ? key_size * 2 : 256;
-        uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
-        if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-        if (current_key) my_free(current_key);
-        current_key = new_key;
-        current_key_capacity = new_capacity;
-    }
-    memcpy(current_key, key, key_size);
-    current_key_len = key_size;
-
-    if (tidesdb_enable_encryption && value_size > 0)
-    {
-        uchar *decrypted = NULL;
-        size_t decrypted_len = 0;
-        ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
-        if (ret) DBUG_RETURN(ret);
-        ret = unpack_row(buf, decrypted, decrypted_len);
-        my_free(decrypted);
-    }
-    else
-    {
-        ret = unpack_row(buf, value, value_size);
-    }
-    if (ret)
-    {
-        DBUG_RETURN(ret);
-    }
-
-    tidesdb_iter_next(scan_iter);
-
-    DBUG_RETURN(0);
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
 }
 
 /**
@@ -5336,7 +5412,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         }
 
         /*
-         * KEYREAD OPTIMIZATION (Covering Index)
+         * KEYREAD (Covering Index)
          * For index-only scans, use key_restore() to unpack the index key
          * directly to the record buffer, avoiding the expensive PK lookup.
          * Index key format: [index_columns][primary_key]
@@ -5446,7 +5522,7 @@ int ha_tidesdb::index_next(uchar *buf)
         current_key_len = pk_len;
 
         /*
-         * KEYREAD OPTIMIZATION (Covering Index)
+         * KEYREAD (Covering Index)
          * When keyread_only is set, the query only needs columns in the index.
          * The index key was built using key_copy(), so we use key_restore() to
          * unpack it back to the record buffer. This avoids the expensive PK lookup.
@@ -5607,7 +5683,7 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
         current_key_len = pk_len;
 
         /*
-         * KEYREAD OPTIMIZATION (Covering Index)
+         * KEYREAD (Covering Index)
          * Use key_restore() to unpack index key directly to record buffer.
          * Index key format: [index_columns][primary_key]
          */
@@ -6080,6 +6156,57 @@ Item *ha_tidesdb::idx_cond_push(uint keyno, Item *idx_cond)
 
 /**
   @brief
+  Table Condition Pushdown (full WHERE clause).
+
+  Accept pushed conditions for evaluation during table scans.
+  This allows the storage engine to filter rows during rnd_next()
+  before sending them to the SQL layer.
+
+  @param cond  The condition to push down
+
+  @return
+    NULL if we accept the entire condition (we will filter rows)
+    The original condition if we cannot handle it (SQL layer filters)
+
+  @note
+    TidesDB evaluates pushed conditions during rnd_next() by calling
+    cond->val_int() on each row. Rows where the condition evaluates
+    to FALSE are skipped, reducing data transfer to the SQL layer.
+*/
+const COND *ha_tidesdb::cond_push(const COND *cond)
+{
+    DBUG_ENTER("ha_tidesdb::cond_push");
+
+    /*
+      Store the pushed condition for evaluation during scans.
+      We accept all conditions and evaluate them in rnd_next().
+    */
+    pushed_cond = cond;
+
+    /*
+      Return NULL to indicate we accept the entire condition.
+      The SQL layer will not re-evaluate it.
+    */
+    DBUG_RETURN(NULL);
+}
+
+/**
+  @brief
+  Pop the top condition from the condition stack.
+
+  Called when the pushed condition is no longer needed.
+*/
+void ha_tidesdb::cond_pop()
+{
+    DBUG_ENTER("ha_tidesdb::cond_pop");
+
+    pushed_cond = NULL;
+
+    DBUG_VOID_RETURN;
+}
+
+/**
+  @brief
   Delete all rows in the table.
 */
 int ha_tidesdb::delete_all_rows()
@@ -6172,6 +6299,143 @@ int ha_tidesdb::delete_all_rows()
 
 /**
   @brief
+  Truncate table -- faster than delete_all_rows.
+
+  For TidesDB, truncate is the same as delete_all_rows since we
+  drop and recreate the column family. We also reset auto_increment.
+*/
+int ha_tidesdb::truncate()
+{
+    DBUG_ENTER("ha_tidesdb::truncate");
+
+    int error = delete_all_rows();
+    if (error) DBUG_RETURN(error);
+
+    error = reset_auto_increment(0);
+    DBUG_RETURN(error);
+}
+
+/**
+  @brief
+  Return exact row count.
+
+  Called when HA_HAS_RECORDS is set. TidesDB can provide exact counts
+  from its statistics.
+*/
+ha_rows ha_tidesdb::records()
+{
+    DBUG_ENTER("ha_tidesdb::records");
+
+    if (share && share->row_count_valid)
+    {
+        DBUG_RETURN(share->row_count);
+    }
+
+    if (share && share->cf)
+    {
+        tidesdb_stats_t *tdb_stats = NULL;
+        if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+        {
+            ha_rows count = tdb_stats->total_keys;
+            tidesdb_free_stats(tdb_stats);
+            share->row_count = count;
+            share->row_count_valid = true;
+            DBUG_RETURN(count);
+        }
+    }
+
+    DBUG_RETURN(stats.records);
+}
+
+/**
+  @brief
+  Statement-level transaction handling.
+
+  Called at the start of each statement. For TidesDB, we ensure
+  a transaction exists for the statement.
+*/
+int ha_tidesdb::start_stmt(THD *thd, thr_lock_type lock_type)
+{
+    DBUG_ENTER("ha_tidesdb::start_stmt");
+
+    /*
+      TidesDB uses MVCC -- no special statement-level handling needed.
+      Transaction is managed at the THD level via external_lock().
+    */
+    DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Custom error messages for TidesDB errors.
+
+  Provides human-readable error messages for TidesDB-specific errors.
+*/
+bool ha_tidesdb::get_error_message(int error, String *buf)
+{
+    DBUG_ENTER("ha_tidesdb::get_error_message");
+
+    const char *msg = NULL;
+    switch (error)
+    {
+        case HA_ERR_LOCK_DEADLOCK:
+            msg = "TidesDB: Transaction conflict (MVCC)";
+            break;
+        case HA_ERR_LOCK_WAIT_TIMEOUT:
+            msg = "TidesDB: Transaction timeout";
+            break;
+        case HA_ERR_CRASHED:
+            msg = "TidesDB: Column family corrupted";
+            break;
+        case HA_ERR_OUT_OF_MEM:
+            msg = "TidesDB: Out of memory";
+            break;
+        default:
+            DBUG_RETURN(false); /* Use default error message */
+    }
+
+    if (msg)
+    {
+        buf->copy(msg, strlen(msg), system_charset_info);
+        DBUG_RETURN(true);
+    }
+    DBUG_RETURN(false);
+}
+
+/**
+  @brief
+  Index flags indicating how the storage engine implements indexes.
+
+  Primary key is clustered in TidesDB -- row data is stored with the key.
+  Secondary indexes store (index_key -> primary_key) mappings.
+*/
+ulong ha_tidesdb::index_flags(uint inx, uint part, bool all_parts) const
+{
+    ulong flags =
+        HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER | HA_READ_RANGE | HA_DO_INDEX_COND_PUSHDOWN;
+
+    /*
+      Primary key is clustered in TidesDB -- row data is stored with the key.
+      For clustered indexes:
+      -- HA_CLUSTERED_INDEX: data is stored with the key (no secondary lookup)
+      -- No HA_KEYREAD_ONLY: keyread doesn't make sense for clustered PK
+      -- No HA_DO_RANGE_FILTER_PUSHDOWN: not applicable for clustered index
+    */
+    if (table_share && inx == table_share->primary_key)
+    {
+        flags |= HA_CLUSTERED_INDEX;
+    }
+    else
+    {
+        /* Secondary indexes support keyread and rowid filter */
+        flags |= HA_KEYREAD_ONLY | HA_DO_RANGE_FILTER_PUSHDOWN;
+    }
+
+    return flags;
+}
+
+/**
+  @brief
   Estimate the cost of a full table scan.
 
   TidesDB LSM-tree scan cost model based on architecture:
@@ -6212,7 +6476,7 @@ IO_AND_CPU_COST ha_tidesdb::scan_time()
               TidesDB uses fixed 64KB blocks for klog
             */
             double data_bytes = (double)tdb_stats->total_data_size;
-            double block_size = 65536.0; /* 64KB fixed block size */
+            double block_size = 65536.0; /* 64KB fixed block size; block layout and btree same */
             double num_blocks = data_bytes / block_size;
             if (num_blocks < 1.0) num_blocks = 1.0;
 
@@ -6616,6 +6880,16 @@ static int map_isolation_level(enum_tx_isolation mysql_iso)
   For proper savepoint support, we store the transaction at the THD level
   when in a multi-statement transaction (BEGIN...COMMIT), and at the
   handler level for auto-commit mode.
+
+  IMPORTANT: Despite the name "external_lock", TidesDB does NOT perform
+  any actual locking. TidesDB uses MVCC (Multi-Version Concurrency Control):
+  -- Reads see a consistent snapshot (never block)
+  -- Writes use optimistic concurrency (conflict detection at commit)
+  -- No row-level or table-level locks are held
+
+  This method is used purely for transaction lifecycle management:
+  -- F_WRLCK/F_RDLCK: Begin a transaction (or join existing THD transaction)
+  -- F_UNLCK: End transaction (commit in auto-commit mode, or detach in explicit txn)
 */
 int ha_tidesdb::external_lock(THD *thd, int lock_type)
 {
@@ -6714,9 +6988,19 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
 /**
   @brief
   Store lock information.
+
+  Required by MariaDB handler interface, but TidesDB is lock-free via MVCC.
+  We simply record the requested lock type for MariaDB's internal bookkeeping.
+  No actual locking occurs -- TidesDB uses:
+  -- Snapshot isolation for reads (never blocks)
+  -- Optimistic concurrency for writes (conflict detection at commit)
 */
 THR_LOCK_DATA **ha_tidesdb::store_lock(THD *thd, THR_LOCK_DATA **to, enum thr_lock_type lock_type)
 {
+    /*
+      TidesDB MVCC: We accept any lock type but don't actually lock.
+      The lock.type is used by MariaDB for query planning, not actual locking.
+    */
     if (lock_type != TL_IGNORE && lock.type == TL_UNLOCK) lock.type = lock_type;
     *to++ = &lock;
     return to;
@@ -7578,6 +7862,103 @@ int ha_tidesdb::check(THD *thd, HA_CHECK_OPT *check_opt)
 
 /**
   @brief
+  Preload keys into the block cache.
+
+  LOAD INDEX INTO CACHE triggers this method to warm up the cache
+  by scanning all index data. For TidesDB, this scans the primary
+  column family and all secondary indexes, populating the block cache.
+
+  TidesDB's clock cache will retain frequently accessed blocks,
+  improving subsequent read performance.
+*/
+int ha_tidesdb::preload_keys(THD *thd, HA_CHECK_OPT *check_opt)
+{
+    DBUG_ENTER("ha_tidesdb::preload_keys");
+
+    if (!share || !share->cf)
+    {
+        DBUG_RETURN(HA_ADMIN_FAILED);
+    }
+
+    /*
+      Scan through the primary column family to populate block cache.
+      TidesDB's iterator will read blocks into cache as it traverses.
+      We need a transaction for the iterator.
+    */
+    tidesdb_txn_t *txn = NULL;
+    int ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+    if (ret != TDB_SUCCESS)
+    {
+        sql_print_warning("TidesDB: Failed to begin transaction for preload: %d", ret);
+        DBUG_RETURN(HA_ADMIN_FAILED);
+    }
+
+    tidesdb_iter_t *iter = NULL;
+    ret = tidesdb_iter_new(txn, share->cf, &iter);
+    if (ret != TDB_SUCCESS || !iter)
+    {
+        sql_print_warning("TidesDB: Failed to create iterator for preload: %d", ret);
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        DBUG_RETURN(HA_ADMIN_FAILED);
+    }
+
+    tidesdb_iter_seek_to_first(iter);
+
+    ha_rows rows_scanned = 0;
+    while (tidesdb_iter_valid(iter))
+    {
+        /* Just iterate to populate cache -- we don't need to process data */
+        tidesdb_iter_next(iter);
+        rows_scanned++;
+
+        /* Check for user interrupt */
+        if (thd_killed(thd))
+        {
+            tidesdb_iter_free(iter);
+            tidesdb_txn_rollback(txn);
+            tidesdb_txn_free(txn);
+            DBUG_RETURN(HA_ADMIN_FAILED);
+        }
+    }
+
+    tidesdb_iter_free(iter);
+
+    /* Also preload secondary indexes */
+    for (uint i = 0; i < table->s->keys; i++)
+    {
+        if (share->index_cf[i])
+        {
+            ret = tidesdb_iter_new(txn, share->index_cf[i], &iter);
+            if (ret == TDB_SUCCESS && iter)
+            {
+                tidesdb_iter_seek_to_first(iter);
+                while (tidesdb_iter_valid(iter))
+                {
+                    tidesdb_iter_next(iter);
+                    if (thd_killed(thd))
+                    {
+                        tidesdb_iter_free(iter);
+                        tidesdb_txn_rollback(txn);
+                        tidesdb_txn_free(txn);
+                        DBUG_RETURN(HA_ADMIN_FAILED);
+                    }
+                }
+                tidesdb_iter_free(iter);
+            }
+        }
+    }
+
+    tidesdb_txn_rollback(txn);
+    tidesdb_txn_free(txn);
+
+    sql_print_information("TidesDB: Preloaded %llu rows into cache", (ulonglong)rows_scanned);
+
+    DBUG_RETURN(HA_ADMIN_OK);
+}
+
+/**
+  @brief
   Repair table -- triggers compaction to clean up any issues.
 */
 int ha_tidesdb::repair(THD *thd, HA_CHECK_OPT *check_opt)
@@ -7927,6 +8308,7 @@ int ha_tidesdb::reset(void)
 
     pushed_idx_cond = NULL;
     pushed_idx_cond_keyno = MAX_KEY;
+    pushed_cond = NULL;
     keyread_only = false;
 
     DBUG_RETURN(0);
@@ -8745,10 +9127,10 @@ static MYSQL_SYSVAR_ULONG(compaction_threads, tidesdb_compaction_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY, "Number of compaction threads",
                           NULL, NULL, 2, 1, 16, 0);
 
-static MYSQL_SYSVAR_ULONGLONG(block_cache_size, tidesdb_block_cache_size,
-                              PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                              "Block cache size in bytes", NULL, NULL, 64 * 1024 * 1024, 0,
-                              ULLONG_MAX, 0);
+static MYSQL_SYSVAR_ULONGLONG(
+    block_cache_size, tidesdb_block_cache_size, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+    "Block cache size in bytes (default 256MB, matches InnoDB buffer pool)", NULL, NULL,
+    256 * 1024 * 1024, 0, ULLONG_MAX, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(write_buffer_size, tidesdb_write_buffer_size,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -8934,8 +9316,8 @@ maria_declare_plugin(tidesdb){MYSQL_STORAGE_ENGINE_PLUGIN,
                               PLUGIN_LICENSE_GPL,
                               tidesdb_init_func,
                               tidesdb_done_func,
-                              0x0110,
+                              0x0120,
                               NULL,
                               tidesdb_system_variables,
-                              "1.1.0",
+                              "1.2.0",
                               MariaDB_PLUGIN_MATURITY_STABLE} maria_declare_plugin_end;

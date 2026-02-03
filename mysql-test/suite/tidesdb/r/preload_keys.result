@@ -1,0 +1,48 @@
+#
+# Test LOAD INDEX INTO CACHE (preload_keys)
+#
+DROP TABLE tidesdb_check;
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+a INT,
+b VARCHAR(100),
+INDEX idx_a (a),
+INDEX idx_ab (a, b)
+) ENGINE=TidesDB;
+Warnings:
+Note	1071	Specified key was too long; max key length is 255 bytes
+INSERT INTO t1 VALUES (1, 10, 'row1');
+INSERT INTO t1 VALUES (2, 20, 'row2');
+INSERT INTO t1 VALUES (3, 30, 'row3');
+INSERT INTO t1 VALUES (4, 40, 'row4');
+INSERT INTO t1 VALUES (5, 50, 'row5');
+# Test 1: Load all indexes into cache
+LOAD INDEX INTO CACHE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	preload_keys	status	OK
+# Test 2: Verify data is still accessible after preload
+SELECT * FROM t1 ORDER BY id;
+id	a	b
+1	10	row1
+2	20	row2
+3	30	row3
+4	40	row4
+5	50	row5
+# Test 3: Preload after some operations
+DELETE FROM t1 WHERE id = 3;
+INSERT INTO t1 VALUES (6, 60, 'row6');
+LOAD INDEX INTO CACHE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	preload_keys	status	OK
+SELECT * FROM t1 ORDER BY id;
+id	a	b
+1	10	row1
+2	20	row2
+4	40	row4
+5	50	row5
+6	60	row6
+# Cleanup
+DROP TABLE t1;
+#
+# Preload keys tests completed!
+#

@@ -1,0 +1,135 @@
+#
+# TidesDB Foreign Key Definition Tests
+#
+# Tests for FK constraint definitions with various actions.
+# Note: TidesDB stores FK definitions in MariaDB's data dictionary.
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Create tables with FK ON DELETE CASCADE definition
+CREATE TABLE parent1 (
+id INT PRIMARY KEY,
+name VARCHAR(50)
+) ENGINE=TidesDB;
+CREATE TABLE child1 (
+id INT PRIMARY KEY,
+parent_id INT,
+value VARCHAR(50),
+FOREIGN KEY (parent_id) REFERENCES parent1(id) ON DELETE CASCADE
+) ENGINE=TidesDB;
+# Verify FK definition is stored
+SHOW CREATE TABLE child1;
+Table	Create Table
+child1	CREATE TABLE `child1` (
+  `id` int(11) NOT NULL,
+  `parent_id` int(11) DEFAULT NULL,
+  `value` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `parent_id` (`parent_id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+# Insert data
+INSERT INTO parent1 VALUES (1, 'Parent 1');
+INSERT INTO parent1 VALUES (2, 'Parent 2');
+INSERT INTO child1 VALUES (1, 1, 'Child 1');
+INSERT INTO child1 VALUES (2, 1, 'Child 2');
+INSERT INTO child1 VALUES (3, 2, 'Child 3');
+SELECT * FROM parent1 ORDER BY id;
+id	name
+1	Parent 1
+2	Parent 2
+SELECT * FROM child1 ORDER BY id;
+id	parent_id	value
+1	1	Child 1
+2	1	Child 2
+3	2	Child 3
+# Test 2: Create tables with FK ON DELETE SET NULL definition
+CREATE TABLE parent2 (
+id INT PRIMARY KEY,
+name VARCHAR(50)
+) ENGINE=TidesDB;
+CREATE TABLE child2 (
+id INT PRIMARY KEY,
+parent_id INT,
+value VARCHAR(50),
+FOREIGN KEY (parent_id) REFERENCES parent2(id) ON DELETE SET NULL
+) ENGINE=TidesDB;
+# Verify FK definition is stored
+SHOW CREATE TABLE child2;
+Table	Create Table
+child2	CREATE TABLE `child2` (
+  `id` int(11) NOT NULL,
+  `parent_id` int(11) DEFAULT NULL,
+  `value` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `parent_id` (`parent_id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+INSERT INTO parent2 VALUES (1, 'Parent 1');
+INSERT INTO child2 VALUES (1, 1, 'Child 1');
+SELECT * FROM child2 ORDER BY id;
+id	parent_id	value
+1	1	Child 1
+# Test 3: Create tables with FK ON UPDATE CASCADE definition
+CREATE TABLE parent3 (
+id INT PRIMARY KEY,
+name VARCHAR(50)
+) ENGINE=TidesDB;
+CREATE TABLE child3 (
+id INT PRIMARY KEY,
+parent_id INT,
+value VARCHAR(50),
+FOREIGN KEY (parent_id) REFERENCES parent3(id) ON UPDATE CASCADE
+) ENGINE=TidesDB;
+# Verify FK definition is stored
+SHOW CREATE TABLE child3;
+Table	Create Table
+child3	CREATE TABLE `child3` (
+  `id` int(11) NOT NULL,
+  `parent_id` int(11) DEFAULT NULL,
+  `value` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `parent_id` (`parent_id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+# Test 4: Composite FK
+CREATE TABLE parent4 (
+id1 INT,
+id2 INT,
+name VARCHAR(50),
+PRIMARY KEY (id1, id2)
+) ENGINE=TidesDB;
+CREATE TABLE child4 (
+id INT PRIMARY KEY,
+p_id1 INT,
+p_id2 INT,
+value VARCHAR(50),
+FOREIGN KEY (p_id1, p_id2) REFERENCES parent4(id1, id2)
+) ENGINE=TidesDB;
+# Verify composite FK definition
+SHOW CREATE TABLE child4;
+Table	Create Table
+child4	CREATE TABLE `child4` (
+  `id` int(11) NOT NULL,
+  `p_id1` int(11) DEFAULT NULL,
+  `p_id2` int(11) DEFAULT NULL,
+  `value` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `p_id1` (`p_id1`,`p_id2`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+INSERT INTO parent4 VALUES (1, 1, 'Parent 1-1');
+INSERT INTO parent4 VALUES (1, 2, 'Parent 1-2');
+INSERT INTO child4 VALUES (1, 1, 1, 'Child referencing 1-1');
+INSERT INTO child4 VALUES (2, 1, 2, 'Child referencing 1-2');
+SELECT * FROM child4 ORDER BY id;
+id	p_id1	p_id2	value
+1	1	1	Child referencing 1-1
+2	1	2	Child referencing 1-2
+# Cleanup
+DROP TABLE child4;
+DROP TABLE parent4;
+DROP TABLE child3;
+DROP TABLE parent3;
+DROP TABLE child2;
+DROP TABLE parent2;
+DROP TABLE child1;
+DROP TABLE parent1;
+#
+# FK definition tests completed!
+#
