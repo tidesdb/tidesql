@@ -85,7 +85,7 @@ jobs:
         path: |
           C:/vcpkg/installed
           C:/vcpkg/packages
-        key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/mariadb-test.yml') }}
+        key: vcpkg-windows-x64-zlib-lz4-snappy-zstd-v1
         restore-keys: |
           vcpkg-windows-x64-
 

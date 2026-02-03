@@ -73,25 +73,21 @@ FIND_LIBRARY(SNAPPY_LIBRARY
 )
 
 ############# Find include directories #############
+# Look for tidesdb/db.h to get the parent include directory
+# The code uses #include <tidesdb/db.h> so we need the parent of the tidesdb folder
 FIND_PATH(TIDESDB_INCLUDE_DIR
-  NAMES tidesdb.h
+  NAMES tidesdb/db.h
   HINTS
     ENV TIDESDB_ROOT
     ENV CPATH
   PATHS
     /usr/local/include
-    /usr/local/include/tidesdb
     /usr/include
-    /usr/include/tidesdb
     /opt/local/include
-    /opt/local/include/tidesdb
     /opt/homebrew/include
-    /opt/homebrew/include/tidesdb
+    "C:/tidesdb/include"
     "C:/Program Files/tidesdb/include"
-    "C:/Program Files/tidesdb/include/tidesdb"
     "C:/Program Files (x86)/tidesdb/include"
-    "C:/Program Files (x86)/tidesdb/include/tidesdb"
-  PATH_SUFFIXES tidesdb
 )
 
 ############# Validate required dependencies #############
