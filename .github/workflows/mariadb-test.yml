@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-13, windows-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     
     steps:
     - name: Checkout TidesQL
@@ -49,6 +49,7 @@ jobs:
       if: runner.os == 'macOS'
       run: |
         brew install \
+          llvm \
           cmake \
           openssl@3 \
           lz4 \
@@ -59,8 +60,11 @@ jobs:
           pcre2 \
           libevent \
           jemalloc \
-          gnutls
+          gnutls \
+          libxml2 \
+          zlib
         echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
+        echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
 
     - name: Install dependencies (Windows)
       if: runner.os == 'Windows'
@@ -100,6 +104,9 @@ jobs:
 
     - name: Install TidesDB library (macOS)
       if: runner.os == 'macOS'
+      env:
+        CC: /opt/homebrew/opt/llvm/bin/clang
+        CXX: /opt/homebrew/opt/llvm/bin/clang++
       run: |
         git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
         cd tidesdb-lib
@@ -151,9 +158,16 @@ jobs:
     - name: Build MariaDB with TidesDB plugin (macOS)
       if: runner.os == 'macOS'
       working-directory: mariadb-server
+      env:
+        CC: /opt/homebrew/opt/llvm/bin/clang
+        CXX: /opt/homebrew/opt/llvm/bin/clang++
+        LDFLAGS: "-L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++ -L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/unwind -lunwind"
+        CPPFLAGS: "-I/opt/homebrew/opt/llvm/include"
       run: |
         mkdir -p build && cd build
         cmake .. \
+          -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
+          -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
           -DPLUGIN_TIDESDB=DYNAMIC \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) \
