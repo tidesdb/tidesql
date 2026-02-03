@@ -29,7 +29,7 @@ FIND_LIBRARY(TIDESDB_LIB
     /opt/local/lib
 )
 
-# Find compression libraries - always use FIND_LIBRARY to get full paths.
+# Find compression libraries -- always use FIND_LIBRARY to get full paths.
 # We cannot use pkg-config because it returns library names like "zstd" which
 # conflict with MariaDB's own "zstd" MODULE target (provider_zstd plugin).
 FIND_LIBRARY(ZSTD_LIBRARY
