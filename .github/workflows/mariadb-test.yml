@@ -48,7 +48,7 @@ jobs:
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
-        # Install dependencies per MariaDB official docs
+        # Install dependencies per MariaDB official docs + TidesDB requirements
         brew install \
           bison \
           byacc \
@@ -64,7 +64,9 @@ jobs:
           zstd \
           llvm \
           ninja \
-          ncurses
+          ncurses \
+          snappy \
+          lz4
         
         # Set up Homebrew base directory (differs between Intel and Apple Silicon)
         if [ $(uname -m) = "x86_64" ]; then
@@ -98,20 +100,20 @@ jobs:
         choco install -y strawberryperl
         choco install -y diffutils
         
-        # Install GnuWin32 Bison per MariaDB official docs
-        # Must be installed to path WITHOUT spaces (not C:\Program Files)
-        $bisonZip = "$env:TEMP\bison.zip"
-        $gnuwin32Dir = "C:\GnuWin32"
-        Invoke-WebRequest -Uri "https://sourceforge.net/projects/gnuwin32/files/bison/2.4.1/bison-2.4.1-bin.zip/download" -OutFile $bisonZip -UserAgent "Mozilla/5.0"
-        Expand-Archive -Path $bisonZip -DestinationPath $gnuwin32Dir -Force
+        # Install WinFlexBison from GitHub releases (SourceForge is blocked by Cloudflare)
+        # Download and extract to C:\GnuWin32 (path without spaces as required by MariaDB)
+        $wfbZip = "$env:TEMP\winflexbison.zip"
+        $wfbDir = "C:\GnuWin32"
+        New-Item -ItemType Directory -Force -Path $wfbDir | Out-Null
+        Invoke-WebRequest -Uri "https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip" -OutFile $wfbZip
+        Expand-Archive -Path $wfbZip -DestinationPath $wfbDir -Force
         
-        # Bison requires dependencies (libiconv, libintl)
-        $bisonDepsZip = "$env:TEMP\bison-deps.zip"
-        Invoke-WebRequest -Uri "https://sourceforge.net/projects/gnuwin32/files/bison/2.4.1/bison-2.4.1-dep.zip/download" -OutFile $bisonDepsZip -UserAgent "Mozilla/5.0"
-        Expand-Archive -Path $bisonDepsZip -DestinationPath $gnuwin32Dir -Force
+        # Create bison.exe and flex.exe copies (CMake FindBISON looks for 'bison', not 'win_bison')
+        Copy-Item "$wfbDir\win_bison.exe" "$wfbDir\bison.exe"
+        Copy-Item "$wfbDir\win_flex.exe" "$wfbDir\flex.exe"
         
-        # Add GnuWin32 to PATH
-        echo "C:\GnuWin32\bin" >> $env:GITHUB_PATH
+        # Add to PATH
+        echo "C:\GnuWin32" >> $env:GITHUB_PATH
         
         vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows pthreads:x64-windows curl:x64-windows bzip2:x64-windows libxml2:x64-windows boost:x64-windows openssl:x64-windows liblzma:x64-windows
         echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
