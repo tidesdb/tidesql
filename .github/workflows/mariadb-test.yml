@@ -62,9 +62,15 @@ jobs:
           jemalloc \
           gnutls \
           libxml2 \
-          zlib
+          zlib \
+          ncurses \
+          curl \
+          xz \
+          lzo
         echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
         echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+        # Export Homebrew prefix for later steps
+        echo "HOMEBREW_PREFIX=$(brew --prefix)" >> $GITHUB_ENV
 
     - name: Install dependencies (Windows)
       if: runner.os == 'Windows'
@@ -72,10 +78,13 @@ jobs:
       run: |
         choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
         choco install -y strawberryperl
-        choco install -y winflexbison3
-        vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows pthreads:x64-windows
+        # Install GnuWin32 bison (provides bison.exe that CMake can find)
+        choco install -y gnuwin32-bison.install
+        vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows pthreads:x64-windows curl:x64-windows bzip2:x64-windows libxml2:x64-windows boost:x64-windows
         echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
         echo "TIDESDB_ROOT=C:/Program Files/tidesdb" >> $env:GITHUB_ENV
+        # Add GnuWin32 bison to PATH
+        echo "C:\Program Files (x86)\GnuWin32\bin" >> $env:GITHUB_PATH
 
     - name: Get latest MariaDB release tag
       id: mariadb-release
@@ -105,14 +114,14 @@ jobs:
 
     - name: Install TidesDB library (macOS)
       if: runner.os == 'macOS'
-      env:
-        CC: /opt/homebrew/opt/llvm/bin/clang
-        CXX: /opt/homebrew/opt/llvm/bin/clang++
       run: |
         git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
         cd tidesdb-lib
         mkdir build && cd build
-        cmake .. -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
+        cmake .. \
+          -DCMAKE_C_COMPILER=$(brew --prefix llvm)/bin/clang \
+          -DCMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++ \
+          -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
         make -j$(sysctl -n hw.ncpu)
         sudo make install
 
@@ -159,20 +168,20 @@ jobs:
     - name: Build MariaDB with TidesDB plugin (macOS)
       if: runner.os == 'macOS'
       working-directory: mariadb-server
-      env:
-        CC: /opt/homebrew/opt/llvm/bin/clang
-        CXX: /opt/homebrew/opt/llvm/bin/clang++
-        LDFLAGS: "-L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++ -L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/unwind -lunwind"
-        CPPFLAGS: "-I/opt/homebrew/opt/llvm/include"
       run: |
+        LLVM_PREFIX=$(brew --prefix llvm)
         mkdir -p build && cd build
         cmake .. \
-          -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
-          -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
+          -DCMAKE_C_COMPILER=${LLVM_PREFIX}/bin/clang \
+          -DCMAKE_CXX_COMPILER=${LLVM_PREFIX}/bin/clang++ \
+          -DCMAKE_EXE_LINKER_FLAGS="-L${LLVM_PREFIX}/lib/c++ -Wl,-rpath,${LLVM_PREFIX}/lib/c++ -L${LLVM_PREFIX}/lib -L${LLVM_PREFIX}/lib/unwind -lunwind" \
+          -DCMAKE_SHARED_LINKER_FLAGS="-L${LLVM_PREFIX}/lib/c++ -Wl,-rpath,${LLVM_PREFIX}/lib/c++ -L${LLVM_PREFIX}/lib -L${LLVM_PREFIX}/lib/unwind -lunwind" \
           -DPLUGIN_TIDESDB=DYNAMIC \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) \
           -DWITH_SSL=$(brew --prefix openssl@3) \
+          -DCURSES_LIBRARY=$(brew --prefix ncurses)/lib/libncurses.dylib \
+          -DCURSES_INCLUDE_PATH=$(brew --prefix ncurses)/include \
           -DPLUGIN_ROCKSDB=NO \
           -DPLUGIN_MROONGA=NO \
           -DPLUGIN_SPIDER=NO \
