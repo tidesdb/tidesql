@@ -107,22 +107,18 @@ ENDIF()
 # Build list of libraries to link
 SET(TIDESDB_LIBS ${TIDESDB_LIB})
 
+# We must use full library paths, not just names like "zstd", because
+# MariaDB defines its own "zstd" target (provider_zstd MODULE) which conflicts.
 IF(ZSTD_LIBRARIES)
   LIST(APPEND TIDESDB_LIBS ${ZSTD_LIBRARIES})
-ELSE()
-  LIST(APPEND TIDESDB_LIBS zstd)
 ENDIF()
 
 IF(LZ4_LIBRARIES)
   LIST(APPEND TIDESDB_LIBS ${LZ4_LIBRARIES})
-ELSE()
-  LIST(APPEND TIDESDB_LIBS lz4)
 ENDIF()
 
 IF(SNAPPY_LIBRARIES)
   LIST(APPEND TIDESDB_LIBS ${SNAPPY_LIBRARIES})
-ELSE()
-  LIST(APPEND TIDESDB_LIBS snappy)
 ENDIF()
 
 # Define the storage engine using MariaDB's MYSQL_ADD_PLUGIN macro
