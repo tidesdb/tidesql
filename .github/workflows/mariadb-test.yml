@@ -145,7 +145,8 @@ jobs:
     - name: Install TidesDB library (macOS)
       if: runner.os == 'macOS'
       run: |
-        # Set SDKROOT to fix C++ header search path issues on macOS
+        # Ensure xcode-select points to Xcode, not CommandLineTools
+        sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
         export SDKROOT=$(xcrun --show-sdk-path)
         
         git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
@@ -201,13 +202,22 @@ jobs:
       if: runner.os == 'macOS'
       working-directory: mariadb-server
       run: |
-        # Set SDKROOT to fix C++ header search path issues on macOS
+        # Use Xcode's SDK and compilers to avoid header path conflicts
         export SDKROOT=$(xcrun --show-sdk-path)
+        export CC=$(xcrun -find clang)
+        export CXX=$(xcrun -find clang++)
+        
+        # Ensure xcode-select points to Xcode, not CommandLineTools
+        sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
         
         # Use mariadb-build directory (macOS has case-insensitive filesystem, BUILD exists)
         mkdir -p mariadb-build && cd mariadb-build
         cmake .. \
+          -DCMAKE_C_COMPILER=${CC} \
+          -DCMAKE_CXX_COMPILER=${CXX} \
           -DCMAKE_OSX_SYSROOT=${SDKROOT} \
+          -DCMAKE_FIND_ROOT_PATH=${SDKROOT} \
+          -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
           -DCMAKE_C_FLAGS="-Wno-nullability-completeness" \
           -DCMAKE_CXX_FLAGS="-Wno-nullability-completeness" \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
