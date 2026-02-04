@@ -254,6 +254,7 @@ jobs:
         
         mkdir -p mariadb-build && cd mariadb-build
         cmake .. \
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
           -DCMAKE_C_COMPILER=${CC} \
           -DCMAKE_CXX_COMPILER=${CXX} \
           -DCMAKE_OSX_SYSROOT=${SDKROOT} \
