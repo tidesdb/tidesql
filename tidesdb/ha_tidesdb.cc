@@ -34,10 +34,10 @@
 #endif
 
 #define MYSQL_SERVER 1
+#include <my_global.h>
 #include "ha_tidesdb.h"
 
 #include <inttypes.h>
-#include <my_global.h>
 #include <mysql/plugin.h>
 #include <mysql/service_encryption.h>
 #include <tidesdb/tidesdb_version.h>
