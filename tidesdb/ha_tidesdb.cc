@@ -95,7 +95,7 @@ static my_bool tidesdb_xa_mutex_initialized = FALSE;
 /* Global TidesDB instance -- one database for all tables */
 static tidesdb_t *tidesdb_instance = NULL;
 
-static pthread_rwlock_t tidesdb_rwlock;
+static mysql_rwlock_t tidesdb_rwlock;
 
 /* Handlerton for TidesDB */
 handlerton *tidesdb_hton;
@@ -230,23 +230,23 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
     uint length = (uint)strlen(table_name);
     char *tmp_name;
 
-    pthread_rwlock_rdlock(&tidesdb_rwlock);
+    mysql_rwlock_rdlock(&tidesdb_rwlock);
     share = (TIDESDB_SHARE *)my_hash_search(&tidesdb_open_tables, (uchar *)table_name, length);
     if (share)
     {
         my_atomic_add32_explicit((volatile int32 *)&share->use_count, 1, MY_MEMORY_ORDER_RELAXED);
-        pthread_rwlock_unlock(&tidesdb_rwlock);
+        mysql_rwlock_unlock(&tidesdb_rwlock);
         return share;
     }
-    pthread_rwlock_unlock(&tidesdb_rwlock);
+    mysql_rwlock_unlock(&tidesdb_rwlock);
 
-    pthread_rwlock_wrlock(&tidesdb_rwlock);
+    mysql_rwlock_wrlock(&tidesdb_rwlock);
 
     share = (TIDESDB_SHARE *)my_hash_search(&tidesdb_open_tables, (uchar *)table_name, length);
     if (share)
     {
         my_atomic_add32_explicit((volatile int32 *)&share->use_count, 1, MY_MEMORY_ORDER_RELAXED);
-        pthread_rwlock_unlock(&tidesdb_rwlock);
+        mysql_rwlock_unlock(&tidesdb_rwlock);
         return share;
     }
 
@@ -254,7 +254,7 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
               (TIDESDB_SHARE *)my_multi_malloc(PSI_INSTRUMENT_ME, MYF(MY_WME | MY_ZEROFILL), &share,
                                                sizeof(*share), &tmp_name, length + 1, NullS)))
     {
-        pthread_rwlock_unlock(&tidesdb_rwlock);
+        mysql_rwlock_unlock(&tidesdb_rwlock);
         return NULL;
     }
 
@@ -281,7 +281,7 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
     share->change_buffer.enabled = tidesdb_enable_change_buffer;
     share->change_buffer.pending_count = 0;
 
-    pthread_rwlock_unlock(&tidesdb_rwlock);
+    mysql_rwlock_unlock(&tidesdb_rwlock);
     return share;
 
 error:
@@ -290,7 +290,7 @@ error:
     pthread_mutex_destroy(&share->hidden_pk_mutex);
     pthread_mutex_destroy(&share->change_buffer.mutex);
     my_free(share);
-    pthread_rwlock_unlock(&tidesdb_rwlock);
+    mysql_rwlock_unlock(&tidesdb_rwlock);
     return NULL;
 }
 
@@ -306,7 +306,7 @@ static int free_share(TIDESDB_SHARE *share)
         1;
     if (new_count > 0) return 0;
 
-    pthread_rwlock_wrlock(&tidesdb_rwlock);
+    mysql_rwlock_wrlock(&tidesdb_rwlock);
 
     /* Another thread might have incremented use_count */
     if (my_atomic_load32_explicit((volatile int32 *)&share->use_count, MY_MEMORY_ORDER_ACQUIRE) ==
@@ -321,7 +321,7 @@ static int free_share(TIDESDB_SHARE *share)
         my_free(share);
     }
 
-    pthread_rwlock_unlock(&tidesdb_rwlock);
+    mysql_rwlock_unlock(&tidesdb_rwlock);
     return 0;
 }
 
@@ -479,7 +479,7 @@ static int tidesdb_init_func(void *p)
 
     tidesdb_hton = (handlerton *)p;
 
-    (void)pthread_rwlock_init(&tidesdb_rwlock, NULL);
+    mysql_rwlock_init(0, &tidesdb_rwlock);
     (void)my_hash_init(PSI_INSTRUMENT_ME, &tidesdb_open_tables, system_charset_info,
                        TIDESDB_OPEN_TABLES_HASH_SIZE, 0, 0, (my_hash_get_key)tidesdb_get_key, 0, 0);
 
@@ -560,7 +560,7 @@ static int tidesdb_done_func(void *p)
     if (tidesdb_open_tables.records) error = 1;
 
     my_hash_free(&tidesdb_open_tables);
-    pthread_rwlock_destroy(&tidesdb_rwlock);
+    mysql_rwlock_destroy(&tidesdb_rwlock);
 
     /* We clean up any remaining prepared XA transactions */
     if (tidesdb_xa_mutex_initialized)
