@@ -69,6 +69,15 @@ extern "C"
 /* Max supported key length */
 #define TIDESDB_MAX_KEY_LENGTH 3072
 
+/* Platform-specific path separator */
+#ifdef _WIN32
+#define TIDESDB_PATH_SEP     '\\'
+#define TIDESDB_PATH_SEP_STR "\\"
+#else
+#define TIDESDB_PATH_SEP     '/'
+#define TIDESDB_PATH_SEP_STR "/"
+#endif
+
 /* Buffer sizes */
 #define TIDESDB_CF_NAME_BUF_SIZE         256
 #define TIDESDB_CF_DROPPING_SUFFIX       "__dropping_%lu"

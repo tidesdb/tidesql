@@ -23,7 +23,7 @@
 
   @details
   Each MySQL/MariaDB table maps to a TidesDB column family.
-  Rows are stored as: primary_key -> serialized_row_data
+  Rows are stored as -- primary_key -> serialized_row_data
 
   For tables without explicit primary keys, we generate a hidden
   auto-increment key.
@@ -34,10 +34,10 @@
 #endif
 
 #define MYSQL_SERVER 1
-#include <my_global.h>
 #include "ha_tidesdb.h"
 
 #include <inttypes.h>
+#include <my_global.h>
 #include <mysql/plugin.h>
 #include <mysql/service_encryption.h>
 #include <tidesdb/tidesdb_version.h>
@@ -49,6 +49,13 @@
 static ulong tidesdb_ft_min_word_len = TIDESDB_DEFAULT_FT_MIN_WORD_LEN;
 static ulong tidesdb_ft_max_word_len = TIDESDB_DEFAULT_FT_MAX_WORD_LEN;
 static ulong tidesdb_ft_max_query_words = TIDESDB_DEFAULT_FT_MAX_QUERY_WORDS;
+
+/* Portable case-insensitive string comparison */
+#ifdef _WIN32
+#define tidesdb_strcasecmp _stricmp
+#else
+#define tidesdb_strcasecmp strcasecmp
+#endif
 
 /* XA error codes (from X/Open XA specification) */
 #ifndef XA_OK
@@ -147,7 +154,7 @@ static my_bool tidesdb_enable_change_buffer = TRUE;
 static ulong tidesdb_change_buffer_max_size =
     TIDESDB_DEFAULT_CHANGE_BUFFER_SIZE; /* Max pending entries before flush */
 
-/* Default isolation level: 0=read_uncommitted, 1=read_committed, 2=repeatable_read, 3=snapshot,
+/* Default isolation level -- 0=read_uncommitted, 1=read_committed, 2=repeatable_read, 3=snapshot,
  * 4=serializable */
 static ulong tidesdb_default_isolation = TIDESDB_DEFAULT_ISOLATION; /* read_committed default */
 static const char *tidesdb_isolation_names[] = {
@@ -329,6 +336,8 @@ static int free_share(TIDESDB_SHARE *share)
   @brief
   Extract the column family name from a full table path.
   Converts "database/table" to "database_table" for CF name.
+  Sanitizes the result to remove any path separators that could cause
+  issues on Windows or other platforms.
 */
 static void get_cf_name(const char *table_path, char *cf_name, size_t cf_name_len)
 {
@@ -336,7 +345,7 @@ static void get_cf_name(const char *table_path, char *cf_name, size_t cf_name_le
     const char *tbl_start = NULL;
 
     /* Find the database and table parts */
-    /* Path format: -- /path/to/datadir/database/table */
+    /* Path format -- /path/to/datadir/database/table or C:\path\database\table */
     const char *p = table_path + strlen(table_path);
     int slashes = 0;
 
@@ -374,6 +383,16 @@ static void get_cf_name(const char *table_path, char *cf_name, size_t cf_name_le
     {
         strncpy(cf_name, table_path, cf_name_len - 1);
         cf_name[cf_name_len - 1] = '\0';
+    }
+
+    /*
+      Sanitize CF name -- we replace any remaining path separators with underscores.
+      This prevents issues on Windows where backslashes in CF names could be
+      interpreted as directory separators when TidesDB constructs paths.
+    */
+    for (char *c = cf_name; *c; c++)
+    {
+        if (*c == '/' || *c == '\\') *c = '_';
     }
 }
 
@@ -431,7 +450,7 @@ static void tidesdb_update_optimizer_costs(OPTIMIZER_COSTS *costs)
 
     /*
      * LSM-tree sequential access cost:
-     * -- Merge iterator overhead: O(log S) where S = number of sources
+     * -- Merge iterator overhead -- O(log S) where S = number of sources
      * -- But sequential within each SSTable is efficient
      */
     costs->key_next_find_cost = TIDESDB_KEY_NEXT_FIND_COST; /* Merge iterator overhead */
@@ -523,7 +542,7 @@ static int tidesdb_init_func(void *p)
     else
     {
         /* Default to MySQL/MariaDB data directory + tidesdb */
-        snprintf(db_path, sizeof(db_path), "%s/tidesdb", mysql_data_home);
+        snprintf(db_path, sizeof(db_path), "%s" TIDESDB_PATH_SEP_STR "tidesdb", mysql_data_home);
     }
     db_path[sizeof(db_path) - 1] = '\0';
 
@@ -1847,8 +1866,8 @@ int ha_tidesdb::build_primary_key(const uchar *buf, uchar **key, size_t *key_len
   to TidesDB metadata for crash recovery.
 
   The hidden PK is stored as a special metadata key in the column family:
-  Key: "__hidden_pk_max__"
-  Value: big-endian counter
+  Key   -- "__hidden_pk_max__"
+  Value -- big-endian counter
 */
 int ha_tidesdb::build_hidden_pk(uchar **key, size_t *key_len)
 {
@@ -2113,7 +2132,7 @@ void ha_tidesdb::load_hidden_pk_value()
   @brief
   Build a secondary index key from the row buffer.
 
-  The index key format is: index_columns + primary_key
+  The index key format is -- index_columns + primary_key
   This ensures uniqueness even for non-unique indexes.
 
 */
@@ -2744,8 +2763,8 @@ int ha_tidesdb::delete_ft_words(uint ft_idx, const uchar *buf, tidesdb_txn_t *tx
   Parse foreign key definitions and load referencing table info.
 
   FK metadata is stored in a special "_fk_metadata" column family:
-  -- Key -- "child:<db>.<table>" -> Value: serialized FK info (parent table, columns)
-  -- Key -- "parent:<db>.<table>" -> Value: list of child tables that reference it
+  -- Key -- "child:<db>.<table>" -> Value  -- serialized FK info (parent table, columns)
+  -- Key -- "parent:<db>.<table>" -> Value -- list of child tables that reference it
 
   This allows efficient lookup of both:
   1. Which parent tables this table references (for INSERT/UPDATE checks)
@@ -4131,7 +4150,8 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
     {
         Field *field = table->field[i];
         const char *field_name = field->field_name.str;
-        if (strcasecmp(field_name, "TTL") == 0 || strcasecmp(field_name, "_ttl") == 0)
+        if (tidesdb_strcasecmp(field_name, "TTL") == 0 ||
+            tidesdb_strcasecmp(field_name, "_ttl") == 0)
         {
             /* We found TTL column -- must be an integer type */
             if (field->type() == MYSQL_TYPE_LONG || field->type() == MYSQL_TYPE_LONGLONG ||
@@ -4729,9 +4749,21 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     uchar *value;
     size_t value_len;
 
-    /* We build keys for old and new rows */
-    ret = build_primary_key(old_data, &old_key, &old_key_len);
-    if (ret) DBUG_RETURN(ret);
+    /* We build keys for old and new rows.
+       For tables with hidden PK, we must use current_key (set during scan)
+       since build_primary_key would generate a NEW key instead of returning
+       the existing row's key. */
+    if (table->s->primary_key == MAX_KEY && current_key && current_key_len > 0)
+    {
+        /* Hidden PK table -- we use the key from the current scan position */
+        old_key = current_key;
+        old_key_len = current_key_len;
+    }
+    else
+    {
+        ret = build_primary_key(old_data, &old_key, &old_key_len);
+        if (ret) DBUG_RETURN(ret);
+    }
 
     /* We save old key using pooled buffer since build_primary_key reuses pk_buffer */
     if (old_key_len > saved_key_buffer_capacity)
@@ -4751,10 +4783,22 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     }
     memcpy(saved_key_buffer, old_key, old_key_len);
 
-    ret = build_primary_key(new_data, &new_key, &new_key_len);
-    if (ret)
+    /* For hidden PK tables, the new row keeps the same key as the old row
+       (there's no PK column that could change). For tables with explicit PK,
+       we extract the key from the new row data. */
+    if (table->s->primary_key == MAX_KEY)
     {
-        DBUG_RETURN(ret);
+        /* Hidden PK -- key stays the same */
+        new_key = saved_key_buffer;
+        new_key_len = old_key_len;
+    }
+    else
+    {
+        ret = build_primary_key(new_data, &new_key, &new_key_len);
+        if (ret)
+        {
+            DBUG_RETURN(ret);
+        }
     }
 
     ret = pack_row(new_data, &value, &value_len);
@@ -5544,7 +5588,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
   @brief
   Read next row in index order.
 
-  For secondary indexes: uses index_iter to find next entry
+  For secondary indexes -- uses index_iter to find next entry
   For primary key -- uses scan_iter
 */
 int ha_tidesdb::index_next(uchar *buf)
@@ -5700,8 +5744,8 @@ int ha_tidesdb::index_next(uchar *buf)
   @brief
   Read next row with the same key prefix.
 
-  For secondary indexes: uses index_iter to find next matching entry
-  For primary key: uses scan_iter
+  For secondary indexes -- uses index_iter to find next matching entry
+  For primary key       -- uses scan_iter
 */
 int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
 {
@@ -6729,11 +6773,11 @@ IO_AND_CPU_COST ha_tidesdb::scan_time()
 
   Bloom filter effectiveness (critical for LSM performance):
   -- 1% FPR means 99% of absent-key lookups skip disk I/O
-  -- Expected reads for absent key: 1 + L*0.01 where L = num_levels
+  -- Expected reads for absent key -- 1 + L*0.01 where L = num_levels
   -- For present key -- must read actual block (bloom doesn't help)
 
   B+tree vs Block-based format:
-  -- B+tree: O(log N) tree traversal, binary search at each node
+  -- B+tree -- O(log N) tree traversal, binary search at each node
   -- Block-based -- O(log B) block index + O(log E) within 64KB block
   -- B+tree excels at point lookups due to better cache locality
 */
@@ -7044,8 +7088,8 @@ static int map_isolation_level(enum_tx_isolation mysql_iso)
   -- No row-level or table-level locks are held
 
   This method is used purely for transaction lifecycle management:
-  -- F_WRLCK/F_RDLCK: Begin a transaction (or join existing THD transaction)
-  -- F_UNLCK: End transaction (commit in auto-commit mode, or detach in explicit txn)
+  -- F_WRLCK/F_RDLCK -- Begin a transaction (or join existing THD transaction)
+  -- F_UNLCK         -- End transaction (commit in auto-commit mode, or detach in explicit txn)
 */
 int ha_tidesdb::external_lock(THD *thd, int lock_type)
 {
@@ -7665,8 +7709,8 @@ static void ft_free_results(char **pks, size_t *lens, uint count)
   Initialize full-text search.
 
   Supports multi-word search:
-  -- Natural language mode: words are OR'd together
-  -- Boolean mode (FT_BOOL flag): words are AND'd together
+  -- Natural language mode       -- words are OR'd together
+  -- Boolean mode (FT_BOOL flag) -- words are AND'd together
   -- Respects ft_min_word_len and ft_max_word_len
 */
 FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
@@ -8409,11 +8453,33 @@ int ha_tidesdb::backup(THD *thd, HA_CHECK_OPT *check_opt)
     /* We generate backup directory name with timestamp */
     char backup_dir[TIDESDB_IDX_CF_NAME_BUF_SIZE];
     time_t now = time(NULL);
-    struct tm *tm_info = localtime(&now);
+    struct tm tm_buf;
+    struct tm *tm_info;
+#ifdef _WIN32
+    /* Windows uses localtime_s with reversed parameter order */
+    localtime_s(&tm_buf, &now);
+    tm_info = &tm_buf;
+#else
+    /* POSIX uses localtime_r (thread-safe) */
+    tm_info = localtime_r(&now, &tm_buf);
+#endif
     char timestamp[TIDESDB_TIMESTAMP_BUF_SIZE];
     strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", tm_info);
 
+    /*
+      Use platform-appropriate temp directory:
+      -- Windows    -- uses TEMP/TMP environment variable or current directory
+      -- Unix/Linux -- uses /tmp
+    */
+#ifdef _WIN32
+    const char *tmp_dir = getenv("TEMP");
+    if (!tmp_dir) tmp_dir = getenv("TMP");
+    if (!tmp_dir) tmp_dir = ".";
+    snprintf(backup_dir, sizeof(backup_dir), "%s" TIDESDB_PATH_SEP_STR "tidesdb_backup_%s", tmp_dir,
+             timestamp);
+#else
     snprintf(backup_dir, sizeof(backup_dir), "/tmp/tidesdb_backup_%s", timestamp);
+#endif
 
     sql_print_information("TidesDB: Starting backup to '%s' using tidesdb_backup API", backup_dir);
 
@@ -8776,10 +8842,10 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
         }
     }
 
-    /* ADD COLUMN: No action needed -- TidesDB uses schema-on-read */
+    /* ADD COLUMN  -- No action needed -- TidesDB uses schema-on-read */
     /* New columns will be NULL/default for existing rows */
 
-    /* DROP COLUMN: No action needed -- just stop reading the column */
+    /* DROP COLUMN -- No action needed -- just stop reading the column */
     /* Old data remains but is ignored */
 
     DBUG_RETURN(false);
