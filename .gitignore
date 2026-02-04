@@ -1,4 +1,7 @@
 *.d
+*.Plo
+*.Po
+.deps/
 *.slo
 *.lo
 *.o
