@@ -307,7 +307,7 @@ error:
 */
 static int free_share(TIDESDB_SHARE *share)
 {
-    /* Atomic decrement -- if result > 0, no lock needed */
+    /* Atomic decrement -- if result > 0, no lock needed! */
     int32 new_count =
         my_atomic_add32_explicit((volatile int32 *)&share->use_count, -1, MY_MEMORY_ORDER_ACQ_REL) -
         1;
@@ -344,7 +344,7 @@ static void get_cf_name(const char *table_path, char *cf_name, size_t cf_name_le
     const char *db_start = table_path;
     const char *tbl_start = NULL;
 
-    /* Find the database and table parts */
+    /* We find the database and table parts */
     /* Path format -- /path/to/datadir/database/table or C:\path\database\table */
     const char *p = table_path + strlen(table_path);
     int slashes = 0;
@@ -396,7 +396,7 @@ static void get_cf_name(const char *table_path, char *cf_name, size_t cf_name_le
     }
 }
 
-/* Savepoint data structure -- must be defined before init function */
+/* Savepoint data structure -- we must be defined before init function */
 struct tidesdb_savepoint_t
 {
     char name[TIDESDB_SAVEPOINT_NAME_LEN]; /* Savepoint name derived from pointer address */
@@ -413,24 +413,24 @@ static int tidesdb_savepoint_release(THD *thd, void *savepoint);
   Update optimizer costs for TidesDB (LSM-tree specific).
 
   LSM-tree characteristics that affect costs:
-  -- Point lookups -- Check memtable + bloom filters + multiple SSTable levels
-  -- Range scans -- Merge iterator across levels (more expensive than B-tree)
-  -- Writes -- Fast (append to memtable), but read amplification
-  -- Block cache -- Hot data is cached, reducing disk reads
+  -- Point lookups    -- Check memtable + bloom filters + multiple SSTable levels
+  -- Range scans      -- Merge iterator across levels (more expensive than B-tree)
+  -- Writes           -- Fast (append to memtable), but read amplification
+  -- Block cache      -- Hot data is cached, reducing disk reads
 
   Cost adjustments vs default B-tree assumptions:
-  -- key_lookup_cost -- Higher due to multi-level search (but bloom filters help)
-  -- row_lookup_cost -- Similar to key lookup (data is with keys in LSM)
-  -- key_next_find_cost -- Higher due to merge iterator overhead
-  -- disk_read_ratio -- Lower if bloom filters enabled (fewer false reads)
+  -- key_lookup_cost      -- Higher due to multi-level search (but bloom filters help)
+  -- row_lookup_cost      -- Similar to key lookup (data is with keys in LSM)
+  -- key_next_find_cost   -- Higher due to merge iterator overhead
+  -- disk_read_ratio      -- Lower if bloom filters enabled (fewer false reads)
 */
 static void tidesdb_update_optimizer_costs(OPTIMIZER_COSTS *costs)
 {
     /*
      * LSM-tree point lookup cost:
-     * -- Memtable check -- O(log N) in skip list
+     * -- Memtable check      -- O(log N) in skip list
      * -- Bloom filter checks -- O(1) per SSTable, ~1% false positive
-     * -- Level lookups -- O(log N) per level, but bloom filters eliminate most
+     * -- Level lookups       -- O(log N) per level, but bloom filters eliminate most
      *
      * With bloom filters enabled (default), point lookups are efficient.
      * Without bloom filters, cost increases significantly.
@@ -646,23 +646,6 @@ static tidesdb_txn_t *get_thd_txn(THD *thd, handlerton *hton)
 static void set_thd_txn(THD *thd, handlerton *hton, tidesdb_txn_t *txn)
 {
     thd_set_ha_data(thd, hton, txn);
-}
-
-/**
-  @brief
-  Ensure we have a valid transaction for the current THD.
-
-  Similar to InnoDB's check_trx_exists(), this function ensures that
-  the handler has access to the correct transaction. For multi-statement
-  transactions, this returns the THD-level transaction. For auto-commit
-  mode, this returns NULL (caller should create a handler-level transaction).
-
-  @param thd   The current thread handle
-  @return      The THD-level transaction, or NULL if not in a transaction
-*/
-static tidesdb_txn_t *check_tidesdb_trx(THD *thd)
-{
-    return get_thd_txn(thd, tidesdb_hton);
 }
 
 /**
@@ -2072,6 +2055,73 @@ void ha_tidesdb::load_auto_increment_value()
 
 /**
   @brief
+  Persist table statistics to TidesDB metadata.
+
+  Stores row count, data file length, and mean record length as a metadata
+  key in the primary column family. This allows statistics to survive server
+  restarts without requiring a full table scan or ANALYZE TABLE.
+
+  Format: [8-byte row_count][8-byte data_file_length][4-byte mean_rec_length]
+*/
+void ha_tidesdb::persist_table_stats()
+{
+    if (!share || !share->cf || !tidesdb_instance) return;
+
+    static const char *meta_key = TIDESDB_STATS_META_KEY;
+    size_t meta_key_len = TIDESDB_STATS_META_KEY_LEN;
+
+    uchar value_buf[20]; /* 8 + 8 + 4 = 20 bytes */
+    int8store(value_buf, (ulonglong)stats.records);
+    int8store(value_buf + 8, (ulonglong)stats.data_file_length);
+    int4store(value_buf + 16, (uint32)stats.mean_rec_length);
+
+    tidesdb_txn_t *txn = NULL;
+    if (tidesdb_txn_begin(tidesdb_instance, &txn) == TDB_SUCCESS)
+    {
+        tidesdb_txn_put(txn, share->cf, (uint8_t *)meta_key, meta_key_len, value_buf, 20, -1);
+        tidesdb_txn_commit(txn);
+        tidesdb_txn_free(txn);
+    }
+}
+
+/**
+  @brief
+  Load persisted table statistics from TidesDB metadata on table open.
+
+  If stats were previously persisted (by ANALYZE TABLE), load them into
+  the share's row_count cache so info() can use them as a fallback when
+  live stats are unavailable.
+*/
+void ha_tidesdb::load_table_stats()
+{
+    if (!share || !share->cf || !tidesdb_instance) return;
+
+    static const char *meta_key = TIDESDB_STATS_META_KEY;
+    size_t meta_key_len = TIDESDB_STATS_META_KEY_LEN;
+
+    tidesdb_txn_t *txn = NULL;
+    if (tidesdb_txn_begin(tidesdb_instance, &txn) == TDB_SUCCESS)
+    {
+        uint8_t *value = NULL;
+        size_t value_len = 0;
+
+        if (tidesdb_txn_get(txn, share->cf, (uint8_t *)meta_key, meta_key_len, &value,
+                            &value_len) == TDB_SUCCESS &&
+            value && value_len >= 20)
+        {
+            share->row_count = (ha_rows)uint8korr(value);
+            share->row_count_valid = true;
+            /* data_file_length and mean_rec_length are loaded on demand in info() */
+            free(value);
+        }
+
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+    }
+}
+
+/**
+  @brief
   Load the hidden PK max value from TidesDB metadata on table open.
   If not found, scans the table to find the maximum existing key.
 */
@@ -2930,7 +2980,6 @@ int ha_tidesdb::parse_foreign_keys()
             /* We check if extended format follows (starts with non-zero byte for num_cols) */
             if (ptr<end && * ptr> 0 && *ptr <= TIDESDB_FK_MAX_COLS)
             {
-                /* Extended format:-- read column metadata */
                 uint8_t num_cols = *ptr++;
                 share->referencing_fk_col_count[ref_idx] = num_cols;
 
@@ -3081,9 +3130,9 @@ int ha_tidesdb::check_foreign_key_constraints_insert(const uchar *buf, tidesdb_t
   Check FK constraints for DELETE operations.
 
   Handles FK referential actions based on the delete_rule:
-  -- RESTRICT/NO ACTION (0, 3) -- Return error if child rows exist
-  -- CASCADE (1) -- Delete child rows
-  -- SET NULL (2) -- Set FK columns to NULL in child rows
+  -- RESTRICT/NO ACTION (0, 3)  -- Return error if child rows exist
+  -- CASCADE (1)                -- Delete child rows
+  -- SET NULL (2)               -- Set FK columns to NULL in child rows
 
   Uses a secondary index on the FK columns in child tables for efficient lookup.
 */
@@ -4207,6 +4256,9 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
     {
         load_hidden_pk_value();
     }
+
+    /* Load persisted table statistics if available */
+    load_table_stats();
 
     open_secondary_indexes(name);
 
@@ -6729,6 +6781,74 @@ Item *ha_tidesdb::idx_cond_push(uint keyno, Item *idx_cond)
 
 /**
   @brief
+  Accept a rowid filter for semi-join optimization.
+
+  The rowid filter allows the optimizer to skip rows during index scans
+  that don't match a pre-built filter from another table in a semi-join.
+  The base handler class manages the filter lifecycle; we just accept it.
+
+  @param rowid_filter  The filter to push down
+
+  @return false if accepted (always)
+*/
+bool ha_tidesdb::rowid_filter_push(Rowid_filter *rowid_filter)
+{
+    DBUG_ENTER("ha_tidesdb::rowid_filter_push");
+    DBUG_ASSERT(rowid_filter != NULL);
+    pushed_rowid_filter = rowid_filter;
+    DBUG_RETURN(false);
+}
+
+/**
+  @brief
+  Check if ALTER TABLE data is compatible with the current table.
+
+  Returns COMPATIBLE_DATA_YES if the ALTER only changes metadata
+  (e.g., comments, default values) and doesn't require a table rebuild.
+  This avoids unnecessary COPY operations for trivial ALTERs.
+
+  @param info           HA_CREATE_INFO describing the new table
+  @param table_changes  IS_EQUAL_YES if columns are unchanged
+
+  @return COMPATIBLE_DATA_YES or COMPATIBLE_DATA_NO
+*/
+bool ha_tidesdb::check_if_incompatible_data(HA_CREATE_INFO *info, uint table_changes)
+{
+    DBUG_ENTER("ha_tidesdb::check_if_incompatible_data");
+
+    /* If column definitions changed, we need a rebuild */
+    if (table_changes != IS_EQUAL_YES)
+    {
+        DBUG_RETURN(COMPATIBLE_DATA_NO);
+    }
+
+    /* If AUTO_INCREMENT value is being explicitly set, need rebuild */
+    if ((info->used_fields & HA_CREATE_USED_AUTO) && info->auto_increment_value != 0)
+    {
+        DBUG_RETURN(COMPATIBLE_DATA_NO);
+    }
+
+    /* If row format changed, need rebuild */
+    if ((info->used_fields & HA_CREATE_USED_ROW_FORMAT))
+    {
+        DBUG_RETURN(COMPATIBLE_DATA_NO);
+    }
+
+    /* If KEY_BLOCK_SIZE changed, need rebuild */
+    if (info->used_fields & HA_CREATE_USED_KEY_BLOCK_SIZE)
+    {
+        DBUG_RETURN(COMPATIBLE_DATA_NO);
+    }
+
+    /*
+      Otherwise the data is compatible -- only metadata changed
+      (e.g., table comment, default values, engine options).
+    */
+    DBUG_RETURN(COMPATIBLE_DATA_YES);
+}
+
+/**
+  @brief
   Table Condition Pushdown (full WHERE clause).
 
   Accept pushed conditions for evaluation during table scans.
@@ -7730,6 +7850,9 @@ int ha_tidesdb::analyze(THD *thd, HA_CHECK_OPT *check_opt)
         DBUG_RETURN(HA_ADMIN_FAILED);
     }
 
+    /* First call info() to get fresh statistics from TidesDB */
+    info(HA_STATUS_VARIABLE | HA_STATUS_CONST);
+
     tidesdb_stats_t *tdb_stats = NULL;
     int ret = tidesdb_get_stats(share->cf, &tdb_stats);
     if (ret == TDB_SUCCESS && tdb_stats)
@@ -7744,6 +7867,13 @@ int ha_tidesdb::analyze(THD *thd, HA_CHECK_OPT *check_opt)
 
         tidesdb_free_stats(tdb_stats);
     }
+
+    /* Update the share's row count cache */
+    share->row_count = stats.records;
+    share->row_count_valid = true;
+
+    /* Persist statistics to metadata so they survive restarts */
+    persist_table_stats();
 
     DBUG_RETURN(HA_ADMIN_OK);
 }
@@ -9042,6 +9172,150 @@ int ha_tidesdb::get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_lis
 {
     DBUG_ENTER("ha_tidesdb::get_foreign_key_list");
 
+    if (!share || !table_share) DBUG_RETURN(0);
+
+    /*
+      Populate the list with FK constraints where this table is the child
+      (i.e., this table has FOREIGN KEY columns referencing another table).
+    */
+    for (uint i = 0; i < share->num_fk; i++)
+    {
+        FOREIGN_KEY_INFO *fk_info = (FOREIGN_KEY_INFO *)thd->alloc(sizeof(FOREIGN_KEY_INFO));
+        if (!fk_info) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+
+        /* We use value initialization instead of memset for C++ struct */
+        *fk_info = FOREIGN_KEY_INFO();
+
+        /* FK constraint name */
+        fk_info->foreign_id =
+            thd_make_lex_string(thd, NULL, share->fk[i].fk_name, strlen(share->fk[i].fk_name), 1);
+
+        /* Child table (this table) */
+        fk_info->foreign_db =
+            thd_make_lex_string(thd, NULL, table_share->db.str, table_share->db.length, 1);
+        fk_info->foreign_table = thd_make_lex_string(thd, NULL, table_share->table_name.str,
+                                                     table_share->table_name.length, 1);
+
+        /* Parent table (referenced table) */
+        fk_info->referenced_db =
+            thd_make_lex_string(thd, NULL, share->fk[i].ref_db, strlen(share->fk[i].ref_db), 1);
+        fk_info->referenced_table = thd_make_lex_string(thd, NULL, share->fk[i].ref_table,
+                                                        strlen(share->fk[i].ref_table), 1);
+
+        /* Referential actions */
+        switch (share->fk[i].delete_rule)
+        {
+            case TIDESDB_FK_RULE_CASCADE:
+                fk_info->delete_method = FK_OPTION_CASCADE;
+                break;
+            case TIDESDB_FK_RULE_SET_NULL:
+                fk_info->delete_method = FK_OPTION_SET_NULL;
+                break;
+            case TIDESDB_FK_RULE_RESTRICT:
+            default:
+                fk_info->delete_method = FK_OPTION_RESTRICT;
+                break;
+        }
+
+        switch (share->fk[i].update_rule)
+        {
+            case TIDESDB_FK_RULE_CASCADE:
+                fk_info->update_method = FK_OPTION_CASCADE;
+                break;
+            case TIDESDB_FK_RULE_SET_NULL:
+                fk_info->update_method = FK_OPTION_SET_NULL;
+                break;
+            case TIDESDB_FK_RULE_RESTRICT:
+            default:
+                fk_info->update_method = FK_OPTION_RESTRICT;
+                break;
+        }
+
+        f_key_list->push_back(fk_info, thd->mem_root);
+    }
+
+    DBUG_RETURN(0);
+}
+
+/**
+  @brief
+  Get list of foreign keys where this table is the parent (referenced table).
+
+  This is used during ALTER TABLE to properly handle self-referencing FKs
+  and to check for FK constraints that would be affected by the ALTER.
+
+  @param thd        Thread handle
+  @param f_key_list Output list of FOREIGN_KEY_INFO structures
+
+  @return 0 on success
+*/
+int ha_tidesdb::get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list)
+{
+    DBUG_ENTER("ha_tidesdb::get_parent_foreign_key_list");
+
+    if (!share) DBUG_RETURN(0);
+
+    /*
+      We Pppulate the list with FK constraints where this table is the parent
+      (i.e., other tables have FOREIGN KEY columns referencing this table).
+      This information is stored in share->referencing_tables[].
+    */
+    for (uint i = 0; i < share->num_referencing; i++)
+    {
+        FOREIGN_KEY_INFO *fk_info = (FOREIGN_KEY_INFO *)thd->alloc(sizeof(FOREIGN_KEY_INFO));
+        if (!fk_info) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+
+        /* We use value initialization instead of memset for C++ struct */
+        *fk_info = FOREIGN_KEY_INFO();
+
+        /*
+          We parse the referencing table name (stored as "db.table" format).
+          We need to split it into db and table components.
+        */
+        const char *ref_table_full = share->referencing_tables[i];
+        const char *dot = strchr(ref_table_full, '.');
+        if (dot)
+        {
+            size_t db_len = dot - ref_table_full;
+            fk_info->foreign_db = thd_make_lex_string(thd, NULL, ref_table_full, db_len, 1);
+            fk_info->foreign_table = thd_make_lex_string(thd, NULL, dot + 1, strlen(dot + 1), 1);
+        }
+        else
+        {
+            /* No dot found, assume current database */
+            fk_info->foreign_db =
+                thd_make_lex_string(thd, NULL, table_share->db.str, table_share->db.length, 1);
+            fk_info->foreign_table =
+                thd_make_lex_string(thd, NULL, ref_table_full, strlen(ref_table_full), 1);
+        }
+
+        /* This table is the parent (referenced table) */
+        fk_info->referenced_db =
+            thd_make_lex_string(thd, NULL, table_share->db.str, table_share->db.length, 1);
+        fk_info->referenced_table = thd_make_lex_string(thd, NULL, table_share->table_name.str,
+                                                        table_share->table_name.length, 1);
+
+        /* Referential action from the child's perspective */
+        switch (share->referencing_fk_rules[i])
+        {
+            case TIDESDB_FK_RULE_CASCADE:
+                fk_info->delete_method = FK_OPTION_CASCADE;
+                break;
+            case TIDESDB_FK_RULE_SET_NULL:
+                fk_info->delete_method = FK_OPTION_SET_NULL;
+                break;
+            case TIDESDB_FK_RULE_RESTRICT:
+            default:
+                fk_info->delete_method = FK_OPTION_RESTRICT;
+                break;
+        }
+
+        /* Default update method to RESTRICT if not tracked separately */
+        fk_info->update_method = FK_OPTION_RESTRICT;
+
+        f_key_list->push_back(fk_info, thd->mem_root);
+    }
+
     DBUG_RETURN(0);
 }
 
@@ -9049,14 +9323,16 @@ int ha_tidesdb::get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_lis
   @brief
   Check if this table is referenced by foreign keys from other tables.
 
-  Returns the number of foreign keys that reference this table.
+  Returns true if there are foreign keys that reference this table.
   This is used to prevent dropping tables that are referenced.
 */
 bool ha_tidesdb::referenced_by_foreign_key() const noexcept
 {
     DBUG_ENTER("ha_tidesdb::referenced_by_foreign_key");
 
-    DBUG_RETURN(0);
+    if (!share) DBUG_RETURN(false);
+
+    DBUG_RETURN(share->num_referencing > 0);
 }
 
 /**
@@ -9294,10 +9570,10 @@ bool ha_tidesdb::prepare_inplace_alter_table(TABLE *altered_table,
   Execute the in-place ALTER TABLE operation.
 
   This is where the actual work happens. For TidesDB:
-  -- ADD INDEX -- Create new column family and populate it
-  -- DROP INDEX -- Mark column family for deletion
-  -- ADD COLUMN -- No action needed (schema-on-read)
-  -- DROP COLUMN -- No action needed (just stop reading)
+  -- ADD INDEX      -- Create new column family and populate it
+  -- DROP INDEX     -- Mark column family for deletion
+  -- ADD COLUMN     -- No action needed (schema-on-read)
+  -- DROP COLUMN    -- No action needed (just stop reading)
 */
 bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *ha_alter_info)
 {
@@ -9328,7 +9604,7 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
     /* ADD COLUMN  -- No action needed -- TidesDB uses schema-on-read */
     /* New columns will be NULL/default for existing rows */
 
-    /* DROP COLUMN -- No action needed -- just stop reading the column */
+    /* DROP COLUMN -- No action needed -- we just stop reading the column */
     /* Old data remains but is ignored */
 
     DBUG_RETURN(false);
@@ -9373,7 +9649,7 @@ bool ha_tidesdb::commit_inplace_alter_table(TABLE *altered_table, Alter_inplace_
         DBUG_RETURN(false);
     }
 
-    /* Commit -- indexes are already created, update share and log success */
+    /* Commit -- indexes are already created, we update share and log success */
     alter_table_operations flags = ha_alter_info->handler_flags;
 
     if (flags & (ALTER_ADD_INDEX | ALTER_ADD_UNIQUE_INDEX | ALTER_ADD_NON_UNIQUE_NON_PRIM_INDEX))
@@ -9869,7 +10145,6 @@ ha_rows ha_tidesdb::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq, v
 {
     DBUG_ENTER("ha_tidesdb::multi_range_read_info_const");
 
-    /* We initialize DS-MRR with this handler and table */
     m_ds_mrr.init(this, table);
 
     /*

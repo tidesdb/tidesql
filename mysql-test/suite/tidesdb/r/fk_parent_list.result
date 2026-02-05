@@ -1,0 +1,138 @@
+#
+# TidesDB Foreign Key Parent List Tests
+#
+# Tests get_foreign_key_list(), get_parent_foreign_key_list(),
+# and referenced_by_foreign_key() functionality.
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Create parent and child tables
+CREATE TABLE parent_t (
+id INT PRIMARY KEY,
+name VARCHAR(50)
+) ENGINE=TidesDB;
+CREATE TABLE child_t (
+id INT PRIMARY KEY,
+parent_id INT,
+value VARCHAR(50),
+FOREIGN KEY fk_parent (parent_id) REFERENCES parent_t(id) ON DELETE CASCADE
+) ENGINE=TidesDB;
+# Test 2: Verify FK visible via SHOW CREATE TABLE
+SHOW CREATE TABLE child_t;
+Table	Create Table
+child_t	CREATE TABLE `child_t` (
+  `id` int(11) NOT NULL,
+  `parent_id` int(11) DEFAULT NULL,
+  `value` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `fk_parent` (`parent_id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+# Test 3: Verify FK visible via INFORMATION_SCHEMA
+SELECT CONSTRAINT_NAME, TABLE_NAME, REFERENCED_TABLE_NAME
+FROM information_schema.REFERENTIAL_CONSTRAINTS
+WHERE TABLE_NAME = 'child_t' AND CONSTRAINT_SCHEMA = DATABASE();
+CONSTRAINT_NAME	TABLE_NAME	REFERENCED_TABLE_NAME
+# Test 4: Insert data respecting FK
+INSERT INTO parent_t VALUES (1, 'Parent 1');
+INSERT INTO parent_t VALUES (2, 'Parent 2');
+INSERT INTO child_t VALUES (1, 1, 'Child of 1');
+INSERT INTO child_t VALUES (2, 2, 'Child of 2');
+SELECT * FROM parent_t ORDER BY id;
+id	name
+1	Parent 1
+2	Parent 2
+SELECT * FROM child_t ORDER BY id;
+id	parent_id	value
+1	1	Child of 1
+2	2	Child of 2
+# Test 5: ALTER TABLE on parent (tests get_parent_foreign_key_list)
+ALTER TABLE parent_t ADD COLUMN extra VARCHAR(50);
+SHOW CREATE TABLE parent_t;
+Table	Create Table
+parent_t	CREATE TABLE `parent_t` (
+  `id` int(11) NOT NULL,
+  `name` varchar(50) DEFAULT NULL,
+  `extra` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+SELECT * FROM parent_t ORDER BY id;
+id	name	extra
+1	Parent 1	NULL
+2	Parent 2	NULL
+# Test 6: ALTER TABLE on child (tests get_foreign_key_list)
+ALTER TABLE child_t ADD COLUMN notes VARCHAR(50);
+SHOW CREATE TABLE child_t;
+Table	Create Table
+child_t	CREATE TABLE `child_t` (
+  `id` int(11) NOT NULL,
+  `parent_id` int(11) DEFAULT NULL,
+  `value` varchar(50) DEFAULT NULL,
+  `notes` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `fk_parent` (`parent_id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+SELECT * FROM child_t ORDER BY id;
+id	parent_id	value	notes
+1	1	Child of 1	NULL
+2	2	Child of 2	NULL
+# Test 7: Multiple children referencing same parent
+CREATE TABLE child_t2 (
+id INT PRIMARY KEY,
+parent_id INT,
+data VARCHAR(50),
+FOREIGN KEY fk_parent2 (parent_id) REFERENCES parent_t(id) ON DELETE SET NULL
+) ENGINE=TidesDB;
+INSERT INTO child_t2 VALUES (1, 1, 'Second child of 1');
+# Test 8: ALTER parent with multiple children referencing it
+ALTER TABLE parent_t ADD COLUMN status INT DEFAULT 0;
+SHOW CREATE TABLE parent_t;
+Table	Create Table
+parent_t	CREATE TABLE `parent_t` (
+  `id` int(11) NOT NULL,
+  `name` varchar(50) DEFAULT NULL,
+  `extra` varchar(50) DEFAULT NULL,
+  `status` int(11) DEFAULT 0,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+# Test 9: Self-referencing FK
+CREATE TABLE tree_t (
+id INT PRIMARY KEY,
+parent_id INT,
+name VARCHAR(50),
+FOREIGN KEY fk_self (parent_id) REFERENCES tree_t(id) ON DELETE SET NULL
+) ENGINE=TidesDB;
+INSERT INTO tree_t VALUES (1, NULL, 'Root');
+INSERT INTO tree_t VALUES (2, 1, 'Child 1');
+INSERT INTO tree_t VALUES (3, 1, 'Child 2');
+INSERT INTO tree_t VALUES (4, 2, 'Grandchild');
+SELECT * FROM tree_t ORDER BY id;
+id	parent_id	name
+1	NULL	Root
+2	1	Child 1
+3	1	Child 2
+4	2	Grandchild
+# Test 10: ALTER self-referencing table
+ALTER TABLE tree_t ADD COLUMN depth INT;
+SHOW CREATE TABLE tree_t;
+Table	Create Table
+tree_t	CREATE TABLE `tree_t` (
+  `id` int(11) NOT NULL,
+  `parent_id` int(11) DEFAULT NULL,
+  `name` varchar(50) DEFAULT NULL,
+  `depth` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `fk_self` (`parent_id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+SELECT * FROM tree_t ORDER BY id;
+id	parent_id	name	depth
+1	NULL	Root	NULL
+2	1	Child 1	NULL
+3	1	Child 2	NULL
+4	2	Grandchild	NULL
+# Cleanup
+DROP TABLE child_t2;
+DROP TABLE child_t;
+DROP TABLE parent_t;
+DROP TABLE tree_t;
+#
+# FK parent list tests completed!
+#

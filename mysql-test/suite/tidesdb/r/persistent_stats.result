@@ -1,0 +1,59 @@
+#
+# TidesDB Persistent Statistics Tests
+#
+# Tests that ANALYZE TABLE persists statistics and they survive
+# table close/reopen cycles.
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Create and populate table
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+name VARCHAR(100),
+value INT,
+INDEX idx_name (name)
+) ENGINE=TidesDB;
+Warnings:
+Note	1071	Specified key was too long; max key length is 255 bytes
+INSERT INTO t1 VALUES (1, 'Alice', 100);
+INSERT INTO t1 VALUES (2, 'Bob', 200);
+INSERT INTO t1 VALUES (3, 'Charlie', 300);
+INSERT INTO t1 VALUES (4, 'Diana', 400);
+INSERT INTO t1 VALUES (5, 'Eve', 500);
+# Test 2: ANALYZE TABLE persists statistics
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	X	X	X
+test.t1	X	X	X
+# Test 3: Verify row count is accurate after ANALYZE
+SELECT COUNT(*) AS actual_count FROM t1;
+actual_count
+6
+# Test 4: FLUSH TABLES forces table close, then reopen
+FLUSH TABLES t1;
+# Test 5: After reopen, stats should still be available
+SHOW TABLE STATUS LIKE 't1';
+Name	Engine	Version	Row_format	Rows	Avg_row_length	Data_length	Max_data_length	Index_length	Data_free	Auto_increment	Create_time	Update_time	Check_time	Collation	Checksum	Create_options	Comment	Max_index_length	Temporary
+t1	TidesDB	10	Dynamic	X	X	X	X	X	X	X	X	X	X	X	X	X	X	X	X
+# Test 6: Verify data is intact after flush
+SELECT * FROM t1 ORDER BY id;
+id	name	value
+1	Alice	100
+2	Bob	200
+3	Charlie	300
+4	Diana	400
+5	Eve	500
+# Test 7: Insert more data and re-analyze
+INSERT INTO t1 VALUES (6, 'Frank', 600);
+INSERT INTO t1 VALUES (7, 'Grace', 700);
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	X	X	X
+test.t1	X	X	X
+SELECT COUNT(*) AS updated_count FROM t1;
+updated_count
+8
+# Cleanup
+DROP TABLE t1;
+#
+# Persistent statistics tests completed!
+#

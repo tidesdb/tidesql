@@ -105,7 +105,34 @@ INSERT INTO child4 VALUES (2, 1, 2, 'Child referencing 1-2');
 
 SELECT * FROM child4 ORDER BY id;
 
+--echo # Test 5: Self-referencing FK (employee -> manager)
+CREATE TABLE employees (
+  id INT PRIMARY KEY,
+  name VARCHAR(50),
+  manager_id INT,
+  FOREIGN KEY (manager_id) REFERENCES employees(id) ON DELETE SET NULL
+) ENGINE=TidesDB;
+
+--echo # Verify self-referencing FK definition
+SHOW CREATE TABLE employees;
+
+--echo # Insert hierarchical data
+INSERT INTO employees VALUES (1, 'CEO', NULL);
+INSERT INTO employees VALUES (2, 'VP', 1);
+INSERT INTO employees VALUES (3, 'Manager', 2);
+INSERT INTO employees VALUES (4, 'Employee', 3);
+
+SELECT * FROM employees ORDER BY id;
+
+--echo # Test 6: ALTER TABLE on table with self-referencing FK
+--echo # This tests get_parent_foreign_key_list() functionality
+ALTER TABLE employees ADD COLUMN department VARCHAR(50);
+SHOW CREATE TABLE employees;
+
+SELECT * FROM employees ORDER BY id;
+
 --echo # Cleanup
+DROP TABLE employees;
 DROP TABLE child4;
 DROP TABLE parent4;
 DROP TABLE child3;

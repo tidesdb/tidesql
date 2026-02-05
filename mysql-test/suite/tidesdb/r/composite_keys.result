@@ -1,0 +1,112 @@
+#
+# TidesDB Composite Key Tests
+#
+# Tests for multi-column primary keys and indexes
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Composite PRIMARY KEY
+CREATE TABLE t1 (
+a INT,
+b INT,
+c VARCHAR(100),
+PRIMARY KEY (a, b)
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 1, 'one-one');
+INSERT INTO t1 VALUES (1, 2, 'one-two');
+INSERT INTO t1 VALUES (2, 1, 'two-one');
+INSERT INTO t1 VALUES (2, 2, 'two-two');
+SELECT * FROM t1 ORDER BY a, b;
+a	b	c
+1	1	one-one
+1	2	one-two
+2	1	two-one
+2	2	two-two
+# Test 2: Lookup by full composite key
+SELECT * FROM t1 WHERE a = 1 AND b = 2;
+a	b	c
+1	2	one-two
+# Test 3: Lookup by partial key (prefix)
+SELECT * FROM t1 WHERE a = 1 ORDER BY b;
+a	b	c
+1	1	one-one
+1	2	one-two
+# Test 4: Duplicate composite key error
+INSERT INTO t1 VALUES (1, 1, 'duplicate');
+ERROR 23000: Can't write; duplicate key in table 't1'
+# Test 5: UPDATE with composite key
+UPDATE t1 SET c = 'updated' WHERE a = 1 AND b = 1;
+SELECT * FROM t1 ORDER BY a, b;
+a	b	c
+1	1	updated
+1	2	one-two
+2	1	two-one
+2	2	two-two
+# Test 6: DELETE with composite key
+DELETE FROM t1 WHERE a = 2 AND b = 1;
+SELECT * FROM t1 ORDER BY a, b;
+a	b	c
+1	1	updated
+1	2	one-two
+2	2	two-two
+# Test 7: Composite secondary index
+DROP TABLE t1;
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+a INT,
+b INT,
+c VARCHAR(100),
+INDEX idx_ab (a, b)
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 10, 20, 'row1');
+INSERT INTO t1 VALUES (2, 10, 30, 'row2');
+INSERT INTO t1 VALUES (3, 20, 20, 'row3');
+INSERT INTO t1 VALUES (4, 20, 30, 'row4');
+# Index lookup with full key
+SELECT * FROM t1 WHERE a = 10 AND b = 20;
+id	a	b	c
+1	10	20	row1
+# Index lookup with prefix
+SELECT * FROM t1 WHERE a = 10 ORDER BY b;
+id	a	b	c
+1	10	20	row1
+2	10	30	row2
+# Range scan on composite index
+SELECT * FROM t1 WHERE a >= 10 AND a <= 20 ORDER BY a, b;
+id	a	b	c
+1	10	20	row1
+2	10	30	row2
+3	20	20	row3
+4	20	30	row4
+# Test 8: Three-column composite key
+DROP TABLE t1;
+CREATE TABLE t1 (
+a INT,
+b INT,
+c INT,
+d VARCHAR(100),
+PRIMARY KEY (a, b, c)
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 1, 1, 'one');
+INSERT INTO t1 VALUES (1, 1, 2, 'two');
+INSERT INTO t1 VALUES (1, 2, 1, 'three');
+INSERT INTO t1 VALUES (2, 1, 1, 'four');
+SELECT * FROM t1 ORDER BY a, b, c;
+a	b	c	d
+1	1	1	one
+1	1	2	two
+1	2	1	three
+2	1	1	four
+SELECT * FROM t1 WHERE a = 1 ORDER BY b, c;
+a	b	c	d
+1	1	1	one
+1	1	2	two
+1	2	1	three
+SELECT * FROM t1 WHERE a = 1 AND b = 1 ORDER BY c;
+a	b	c	d
+1	1	1	one
+1	1	2	two
+# Cleanup
+DROP TABLE t1;
+#
+# Composite key tests completed!
+#

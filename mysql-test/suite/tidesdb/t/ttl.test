@@ -31,6 +31,7 @@ INSERT INTO t1 (id, data) VALUES (1, 'persistent data 1');
 INSERT INTO t1 (id, data) VALUES (2, 'persistent data 2');
 INSERT INTO t1 (id, data) VALUES (3, 'persistent data 3');
 
+--replace_column 3 TIMESTAMP
 SELECT * FROM t1 ORDER BY id;
 
 --echo # Test 4: Verify data persists (no TTL expiration)
@@ -38,6 +39,7 @@ SELECT COUNT(*) FROM t1;
 
 --echo # Test 5: Update data
 UPDATE t1 SET data = 'updated data' WHERE id = 2;
+--replace_column 3 TIMESTAMP
 SELECT * FROM t1 WHERE id = 2;
 
 --echo # Test 6: Delete and verify
@@ -52,9 +54,9 @@ CREATE TABLE t2 (
   INDEX idx_expires (expires_at)
 ) ENGINE=TidesDB;
 
-INSERT INTO t2 VALUES (1, 'temp data 1', DATE_ADD(NOW(), INTERVAL 1 HOUR));
-INSERT INTO t2 VALUES (2, 'temp data 2', DATE_ADD(NOW(), INTERVAL 2 HOUR));
-INSERT INTO t2 VALUES (3, 'expired data', DATE_SUB(NOW(), INTERVAL 1 HOUR));
+INSERT INTO t2 VALUES (1, 'temp data 1', '2099-01-01 00:00:00');
+INSERT INTO t2 VALUES (2, 'temp data 2', '2099-01-02 00:00:00');
+INSERT INTO t2 VALUES (3, 'expired data', '2020-01-01 00:00:00');
 
 --echo # Query for non-expired data
 SELECT id, data FROM t2 WHERE expires_at > NOW() ORDER BY id;

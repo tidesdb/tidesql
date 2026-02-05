@@ -1,0 +1,96 @@
+#
+# TidesDB Fulltext Search Tests
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Create table with FULLTEXT index
+CREATE TABLE articles (
+id INT AUTO_INCREMENT PRIMARY KEY,
+title VARCHAR(200),
+body TEXT,
+FULLTEXT INDEX ft_title (title),
+FULLTEXT INDEX ft_body (body),
+FULLTEXT INDEX ft_all (title, body)
+) ENGINE=TidesDB;
+SHOW CREATE TABLE articles;
+Table	Create Table
+articles	CREATE TABLE `articles` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `title` varchar(200) DEFAULT NULL,
+  `body` text DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  FULLTEXT KEY `ft_title` (`title`),
+  FULLTEXT KEY `ft_body` (`body`),
+  FULLTEXT KEY `ft_all` (`title`,`body`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+# Test 2: Insert test data
+INSERT INTO articles (title, body) VALUES 
+('MySQL Tutorial', 'DBMS stands for DataBase Management System'),
+('How To Use MySQL Well', 'After you went through a tutorial you should practice'),
+('Optimizing MySQL', 'In this tutorial we will show how to optimize queries'),
+('1001 MySQL Tricks', 'How to use MySQL to its full potential'),
+('MySQL vs PostgreSQL', 'Comparing two popular database systems'),
+('Database Design Basics', 'Learn the fundamentals of database design'),
+('Advanced SQL Queries', 'Complex queries for data analysis'),
+('NoSQL Introduction', 'Understanding non-relational databases');
+# Test 3: Natural language search on title
+SELECT id, title FROM articles 
+WHERE MATCH(title) AGAINST('MySQL');
+id	title
+1	MySQL Tutorial
+2	How To Use MySQL Well
+3	Optimizing MySQL
+4	1001 MySQL Tricks
+5	MySQL vs PostgreSQL
+# Test 4: Natural language search on body
+SELECT id, title FROM articles 
+WHERE MATCH(body) AGAINST('tutorial');
+id	title
+2	How To Use MySQL Well
+3	Optimizing MySQL
+# Test 5: Search across multiple columns
+SELECT id, title FROM articles 
+WHERE MATCH(title, body) AGAINST('database');
+id	title
+1	MySQL Tutorial
+5	MySQL vs PostgreSQL
+6	Database Design Basics
+# Test 6: Boolean mode search
+SELECT id, title FROM articles 
+WHERE MATCH(title) AGAINST('+MySQL -PostgreSQL' IN BOOLEAN MODE);
+id	title
+5	MySQL vs PostgreSQL
+# Test 7: Search with relevance score
+SELECT id, title, MATCH(title, body) AGAINST('MySQL tutorial') AS relevance
+FROM articles 
+WHERE MATCH(title, body) AGAINST('MySQL tutorial')
+ORDER BY relevance DESC, id ASC;
+id	title	relevance
+1	MySQL Tutorial	2
+2	How To Use MySQL Well	2
+3	Optimizing MySQL	2
+4	1001 MySQL Tricks	2
+5	MySQL vs PostgreSQL	2
+# Test 8: Update and verify FT index updates
+UPDATE articles SET title = 'MariaDB Tutorial' WHERE id = 1;
+SELECT id, title FROM articles WHERE MATCH(title) AGAINST('MariaDB');
+id	title
+1	MariaDB Tutorial
+SELECT id, title FROM articles WHERE MATCH(title) AGAINST('MySQL');
+id	title
+1	MariaDB Tutorial
+2	How To Use MySQL Well
+3	Optimizing MySQL
+4	1001 MySQL Tricks
+5	MySQL vs PostgreSQL
+# Test 9: Delete and verify FT index updates
+DELETE FROM articles WHERE id = 2;
+SELECT id, title FROM articles WHERE MATCH(body) AGAINST('practice');
+id	title
+# Test 10: Empty search result
+SELECT id, title FROM articles WHERE MATCH(title) AGAINST('nonexistent');
+id	title
+# Cleanup
+DROP TABLE articles;
+#
+# Fulltext tests completed!
+#
