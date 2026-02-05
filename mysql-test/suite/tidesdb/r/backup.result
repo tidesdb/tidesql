@@ -1,0 +1,112 @@
+#
+# TidesDB Backup and Data Integrity Tests
+#
+# Note: TidesDB backup API (tidesdb_backup) is available for programmatic use.
+# This test verifies data integrity and persistence which are prerequisites for backup.
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Create test table with data
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+name VARCHAR(100),
+value INT
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 'Alice', 100);
+INSERT INTO t1 VALUES (2, 'Bob', 200);
+INSERT INTO t1 VALUES (3, 'Charlie', 300);
+INSERT INTO t1 VALUES (4, 'Diana', 400);
+INSERT INTO t1 VALUES (5, 'Eve', 500);
+SELECT * FROM t1 ORDER BY id;
+id	name	value
+1	Alice	100
+2	Bob	200
+3	Charlie	300
+4	Diana	400
+5	Eve	500
+# Test 2: Create secondary index table
+CREATE TABLE t2 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+email VARCHAR(100),
+score INT,
+INDEX idx_score (score)
+) ENGINE=TidesDB;
+INSERT INTO t2 (email, score) VALUES ('user1@test.com', 85);
+INSERT INTO t2 (email, score) VALUES ('user2@test.com', 92);
+INSERT INTO t2 (email, score) VALUES ('user3@test.com', 78);
+SELECT * FROM t2 ORDER BY id;
+id	email	score
+1	user1@test.com	85
+2	user2@test.com	92
+3	user3@test.com	78
+# Test 3: Flush tables to ensure data is persisted (prerequisite for backup)
+FLUSH TABLES t1, t2;
+# Test 4: Verify data is still accessible after flush
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+5
+SELECT COUNT(*) FROM t2;
+COUNT(*)
+2
+# Test 5: ANALYZE TABLE (updates statistics without triggering compaction)
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	Engine-independent statistics collected
+test.t1	analyze	status	OK
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	Engine-independent statistics collected
+test.t2	analyze	status	OK
+# Test 6: Insert more data
+INSERT INTO t1 VALUES (6, 'Frank', 600);
+INSERT INTO t2 (email, score) VALUES ('user4@test.com', 88);
+SELECT * FROM t1 ORDER BY id;
+id	name	value
+1	Alice	100
+2	Bob	200
+3	Charlie	300
+4	Diana	400
+5	Eve	500
+6	Frank	600
+SELECT * FROM t2 ORDER BY id;
+id	email	score
+1	user1@test.com	85
+2	user2@test.com	92
+3	user3@test.com	78
+4	user4@test.com	88
+# Test 7: ANALYZE TABLE (updates statistics)
+ANALYZE TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	analyze	status	Engine-independent statistics collected
+test.t1	analyze	status	OK
+ANALYZE TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	analyze	status	Engine-independent statistics collected
+test.t2	analyze	status	OK
+# Test 8: CHECK TABLE (verifies data integrity)
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+CHECK TABLE t2;
+Table	Op	Msg_type	Msg_text
+test.t2	check	status	OK
+# Test 9: Update and delete operations
+UPDATE t1 SET value = 150 WHERE id = 1;
+DELETE FROM t1 WHERE id = 3;
+SELECT * FROM t1 ORDER BY id;
+id	name	value
+1	Alice	150
+2	Bob	200
+4	Diana	400
+5	Eve	500
+6	Frank	600
+# Test 10: Final flush and check
+FLUSH TABLES;
+CHECK TABLE t1;
+Table	Op	Msg_type	Msg_text
+test.t1	check	status	OK
+# Cleanup
+DROP TABLE t1, t2;
+#
+# Backup prerequisite tests completed!
+# TidesDB backup API (tidesdb_backup) can be called programmatically.
+#

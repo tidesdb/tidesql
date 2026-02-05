@@ -1,0 +1,74 @@
+--echo #
+--echo # TidesDB Rowid Filter Pushdown Tests
+--echo #
+--echo # Tests that rowid_filter_push() is accepted by the engine
+--echo # and semi-join queries work correctly.
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Create tables for semi-join test
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  a INT,
+  b INT,
+  INDEX idx_a (a),
+  INDEX idx_b (b)
+) ENGINE=TidesDB;
+
+CREATE TABLE t2 (
+  id INT PRIMARY KEY,
+  x INT,
+  INDEX idx_x (x)
+) ENGINE=TidesDB;
+
+--echo # Test 2: Populate data
+--disable_query_log
+let $i = 1;
+while ($i <= 100)
+{
+  eval INSERT INTO t1 VALUES ($i, $i MOD 10, $i MOD 7);
+  inc $i;
+}
+
+let $i = 1;
+while ($i <= 20)
+{
+  eval INSERT INTO t2 VALUES ($i, $i MOD 10);
+  inc $i;
+}
+--enable_query_log
+
+--echo # Test 3: Semi-join query (IN subquery)
+SELECT COUNT(*) FROM t1 WHERE a IN (SELECT x FROM t2 WHERE x < 5);
+
+--echo # Test 4: Semi-join with multiple conditions
+SELECT COUNT(*) FROM t1 WHERE a IN (SELECT x FROM t2) AND b < 3;
+
+--echo # Test 5: EXISTS subquery
+SELECT COUNT(*) FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE t2.x = t1.a);
+
+--echo # Test 6: NOT IN subquery
+SELECT COUNT(*) FROM t1 WHERE a NOT IN (SELECT x FROM t2 WHERE x > 7);
+
+--echo # Test 7: Correlated subquery
+SELECT COUNT(*) FROM t1 WHERE a = (SELECT MIN(x) FROM t2);
+
+--echo # Test 8: Join with index usage
+SELECT COUNT(*) FROM t1 JOIN t2 ON t1.a = t2.x WHERE t2.x < 5;
+
+--echo # Cleanup
+DROP TABLE t1, t2;
+
+--echo #
+--echo # Rowid filter tests completed!
+--echo #

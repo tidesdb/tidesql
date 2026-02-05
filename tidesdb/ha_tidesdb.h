@@ -209,6 +209,8 @@ extern "C"
 #define TIDESDB_HIDDEN_PK_META_KEY_LEN     19
 #define TIDESDB_AUTO_INC_META_KEY          "\x00__auto_inc_max__"
 #define TIDESDB_AUTO_INC_META_KEY_LEN      17
+#define TIDESDB_STATS_META_KEY             "\x00__table_stats__"
+#define TIDESDB_STATS_META_KEY_LEN         16
 
 /* Row packing constants */
 #define TIDESDB_BLOB_LENGTH_PREFIX    4
@@ -490,6 +492,10 @@ class ha_tidesdb : public handler
     void persist_auto_increment_value(ulonglong value);
     void load_auto_increment_value();
 
+    /* Persistent statistics */
+    void persist_table_stats();
+    void load_table_stats();
+
    public:
     ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg);
     ~ha_tidesdb();
@@ -691,6 +697,7 @@ class ha_tidesdb : public handler
     /* Foreign key support */
     char *get_foreign_key_create_info();
     int get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list);
+    int get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list) override;
     bool referenced_by_foreign_key() const noexcept override;
     void free_foreign_key_create_info(char *str);
     bool can_switch_engines();
@@ -717,6 +724,12 @@ class ha_tidesdb : public handler
 
     /* Index Condition Pushdown */
     Item *idx_cond_push(uint keyno, Item *idx_cond) override;
+
+    /* Rowid filter pushdown for semi-join optimization */
+    bool rowid_filter_push(Rowid_filter *rowid_filter) override;
+
+    /* Check if ALTER TABLE data is compatible (avoid unnecessary rebuild) */
+    bool check_if_incompatible_data(HA_CREATE_INFO *info, uint table_changes) override;
 
     /* Table Condition Pushdown (full WHERE clause during table scans) */
     const COND *cond_push(const COND *cond) override;

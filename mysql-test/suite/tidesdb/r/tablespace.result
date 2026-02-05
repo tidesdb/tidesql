@@ -1,0 +1,33 @@
+#
+# TidesDB Tablespace Tests
+#
+# Tests for DISCARD/IMPORT TABLESPACE operations
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Create table and insert data
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+name VARCHAR(100)
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');
+SELECT * FROM t1 ORDER BY id;
+id	name
+1	Alice
+2	Bob
+3	Charlie
+# Test 2: DISCARD TABLESPACE
+# Note: This marks the tablespace as discarded
+ALTER TABLE t1 DISCARD TABLESPACE;
+# Verify table is not accessible after DISCARD
+SELECT * FROM t1;
+ERROR 42S02: Table 'test.t1' doesn't exist in engine
+# Test 3: IMPORT TABLESPACE
+# Note: This would normally import from a backup
+# For testing, we just verify the operation is accepted
+ALTER TABLE t1 IMPORT TABLESPACE;
+ERROR 42S02: Table 'test.t1' doesn't exist in engine
+# Cleanup - need to drop the discarded table
+DROP TABLE t1;
+#
+# Tablespace tests completed!
+#

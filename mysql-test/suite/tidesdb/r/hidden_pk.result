@@ -1,0 +1,72 @@
+#
+# TidesDB Hidden Primary Key Tests
+#
+# Tests for tables without explicit PRIMARY KEY
+# TidesDB uses an 8-byte auto-increment hidden PK
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Table without PRIMARY KEY
+CREATE TABLE t1 (
+name VARCHAR(100),
+value INT
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES ('Alice', 100);
+INSERT INTO t1 VALUES ('Bob', 200);
+INSERT INTO t1 VALUES ('Charlie', 300);
+SELECT * FROM t1 ORDER BY name;
+name	value
+Alice	100
+Bob	200
+Charlie	300
+# Test 2: UPDATE on table without PK
+UPDATE t1 SET value = 150 WHERE name = 'Alice';
+SELECT * FROM t1 ORDER BY name;
+name	value
+Alice	150
+Bob	200
+Charlie	300
+# Test 3: DELETE on table without PK
+DELETE FROM t1 WHERE name = 'Bob';
+SELECT * FROM t1 ORDER BY name;
+name	value
+Alice	150
+Charlie	300
+# Test 4: Duplicate values allowed (no unique constraint)
+INSERT INTO t1 VALUES ('Alice', 999);
+SELECT * FROM t1 ORDER BY name, value;
+name	value
+Alice	150
+Alice	999
+Charlie	300
+# Test 5: Table scan works correctly
+SELECT COUNT(*) FROM t1;
+COUNT(*)
+4
+SELECT * FROM t1 WHERE value > 100 ORDER BY value;
+name	value
+Alice	150
+Charlie	300
+Alice	999
+# Test 6: Secondary index on table without PK
+DROP TABLE t1;
+CREATE TABLE t1 (
+name VARCHAR(100),
+value INT,
+INDEX idx_value (value)
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES ('A', 10), ('B', 20), ('C', 30), ('D', 20);
+SELECT * FROM t1 WHERE value = 20 ORDER BY name;
+name	value
+SELECT * FROM t1 WHERE value >= 20 ORDER BY value, name;
+name	value
+# Test 7: TRUNCATE table without PK
+TRUNCATE TABLE t1;
+INSERT INTO t1 VALUES ('New', 100);
+SELECT * FROM t1;
+name	value
+New	100
+# Cleanup
+DROP TABLE t1;
+#
+# Hidden PK tests completed!
+#

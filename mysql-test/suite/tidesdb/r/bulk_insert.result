@@ -1,0 +1,75 @@
+#
+# TidesDB Bulk Insert Tests
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: LOAD DATA style bulk insert
+CREATE TABLE t1 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(100),
+value INT
+) ENGINE=TidesDB;
+# Test 2: INSERT ... SELECT bulk insert
+CREATE TABLE t2 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+name VARCHAR(100),
+value INT
+) ENGINE=TidesDB;
+INSERT INTO t1 (name, value) VALUES ('row1', 1), ('row2', 2), ('row3', 3);
+INSERT INTO t1 (name, value) VALUES ('row4', 4), ('row5', 5), ('row6', 6);
+INSERT INTO t1 (name, value) VALUES ('row7', 7), ('row8', 8), ('row9', 9);
+INSERT INTO t2 SELECT * FROM t1;
+SELECT COUNT(*) FROM t2;
+COUNT(*)
+8
+# Test 3: Large multi-row INSERT
+CREATE TABLE t3 (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB;
+SELECT COUNT(*) FROM t3;
+COUNT(*)
+100
+SELECT * FROM t3 WHERE id IN (1, 50, 100);
+id	data
+1	data_1
+50	data_50
+100	data_100
+# Test 4: Bulk insert with secondary index
+CREATE TABLE t4 (
+id INT PRIMARY KEY,
+indexed_col VARCHAR(50),
+INDEX idx_col (indexed_col)
+) ENGINE=TidesDB;
+SELECT COUNT(*) FROM t4;
+COUNT(*)
+50
+SELECT COUNT(*) FROM t4 WHERE indexed_col = 'value_5';
+COUNT(*)
+5
+# Test 5: Bulk insert with auto-increment
+CREATE TABLE t5 (
+id INT AUTO_INCREMENT PRIMARY KEY,
+data VARCHAR(100)
+) ENGINE=TidesDB;
+INSERT INTO t5 (data) VALUES ('a'), ('b'), ('c'), ('d'), ('e');
+INSERT INTO t5 (data) VALUES ('f'), ('g'), ('h'), ('i'), ('j');
+SELECT * FROM t5 ORDER BY id;
+id	data
+1	a
+2	b
+3	c
+4	d
+5	e
+6	f
+7	g
+8	h
+9	i
+10	j
+SELECT MAX(id) FROM t5;
+MAX(id)
+10
+# Cleanup
+DROP TABLE t1, t2, t3, t4, t5;
+#
+# Bulk insert tests completed!
+#

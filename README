@@ -37,13 +37,7 @@ LINUX (Ubuntu/Debian)
 4. Build MariaDB:
 
    mkdir build && cd build
-   cmake .. \
-     -DPLUGIN_TIDESDB=DYNAMIC \
-     -DPLUGIN_ROCKSDB=NO \
-     -DPLUGIN_MROONGA=NO \
-     -DPLUGIN_SPIDER=NO \
-     -DPLUGIN_COLUMNSTORE=NO \
-     -DWITH_UNIT_TESTS=OFF
+   cmake ..
    make -j$(nproc)
 
 5. Run tests:
@@ -95,12 +89,6 @@ MACOS
      -DCMAKE_C_FLAGS="-Wno-nullability-completeness" \
      -DCMAKE_CXX_FLAGS="-Wno-nullability-completeness" \
      -DPLUGIN_TIDESDB=DYNAMIC \
-     -DPLUGIN_ROCKSDB=NO \
-     -DPLUGIN_MROONGA=NO \
-     -DPLUGIN_CONNECT=NO \
-     -DPLUGIN_SPIDER=NO \
-     -DPLUGIN_COLUMNSTORE=NO \
-     -DWITH_UNIT_TESTS=OFF \
      -DWITH_SSL=bundled \
      -DWITH_PCRE=bundled \
      -G Ninja
@@ -155,12 +143,6 @@ WINDOWS
    mkdir build && cd build
    cmake .. -G "Visual Studio 17 2022" -A x64 ^
      -DPLUGIN_TIDESDB=DYNAMIC ^
-     -DPLUGIN_ROCKSDB=NO ^
-     -DPLUGIN_MROONGA=NO ^
-     -DPLUGIN_CONNECT=NO ^
-     -DPLUGIN_SPIDER=NO ^
-     -DPLUGIN_COLUMNSTORE=NO ^
-     -DWITH_UNIT_TESTS=OFF ^
      -DCMAKE_PREFIX_PATH="C:/tidesdb;C:/vcpkg/installed/x64-windows"
    cmake --build . --config RelWithDebInfo --parallel
 
@@ -219,15 +201,18 @@ Advanced:
 - XA distributed transactions (two-phase commit)
 - TTL (time-to-live) per-row expiration
 - Spatial indexes (Z-order/Morton code)
-- Foreign key constraints (CASCADE, SET NULL)
+- Foreign key constraints (CASCADE, SET NULL, self-referencing)
+- Foreign key parent list for ALTER TABLE safety
 - Full-text search indexing
 - Virtual/generated columns
 - Online backup
 - Partitioning (RANGE, LIST, HASH, KEY)
 - Data-at-rest encryption
-- Online DDL for index operations
+- Online DDL (instant metadata, inplace indexes, copy for columns)
+- Compatible data check to avoid unnecessary rebuilds
 - Change buffer for secondary indexes
 - Bulk insert optimization with intermediate commits
+- Persistent statistics (ANALYZE TABLE persists to metadata)
 
 
 CONFIGURATION
@@ -236,8 +221,8 @@ CONFIGURATION
 All variables are prefixed with tidesdb_
 
 Storage:
-  data_dir                  Data directory (default: ./tidesdb)
-  block_cache_size          Block cache size in bytes (default: 64MB)
+  data_dir                  Data directory (default: <datadir>/tidesdb)
+  block_cache_size          Block cache size in bytes (default: 256MB)
   write_buffer_size         Memtable size before flush (default: 64MB)
   max_open_sstables         Max cached SSTable structures (default: 256)
 
@@ -322,38 +307,47 @@ Run with verbose output:
 
   ./mysql-test/mtr --suite=tidesdb --verbose
 
-Available tests:
-  auto_increment    - Auto-increment columns
-  backup            - Backup operations
-  basic             - Basic CRUD operations
-  bulk_insert       - Bulk insert performance
-  composite_keys    - Composite primary/secondary keys
-  datatypes         - Data type handling
-  ddl               - DDL operations (CREATE, DROP, RENAME)
-  edge_cases        - Edge case handling
-  encryption        - Encryption configuration
-  fk_cascade        - Foreign key CASCADE/SET NULL
-  foreign_keys      - Foreign key definitions
-  fulltext          - Full-text search
-  hidden_pk         - Hidden primary key (tables without PK)
-  icp_mrr           - Index Condition Pushdown and Multi-Range Read
-  index_operations  - Index create/drop
-  index_scan        - Index scan operations
-  inplace_alter     - In-place ALTER TABLE
-  large_data        - Large data handling
-  maintenance       - OPTIMIZE, ANALYZE, CHECK
-  online_ddl        - Online ALTER TABLE
-  partitioning      - Table partitioning
-  secondary_index   - Secondary index operations
-  spatial           - Spatial data types
-  spatial_geometry  - Geometry functions
-  spatial_index     - Spatial indexing
-  table_operations  - Table operations
-  tablespace        - Tablespace operations
-  transactions      - Transaction commit/rollback
-  ttl               - Time-to-live expiration
-  virtual_columns   - Generated columns
-  xa_transactions   - XA distributed transactions
+Available tests (40 total):
+  auto_increment      - Auto-increment columns
+  backup              - Backup operations
+  basic               - Basic CRUD operations
+  bulk_insert         - Bulk insert performance
+  clustered_index     - Clustered index behavior
+  compatible_data     - check_if_incompatible_data / metadata-only ALTERs
+  composite_keys      - Composite primary/secondary keys
+  condition_pushdown  - Table Condition Pushdown (WHERE to engine)
+  consistent_snapshot - START TRANSACTION WITH CONSISTENT SNAPSHOT
+  datatypes           - Data type handling
+  ddl                 - DDL operations (CREATE, DROP, RENAME)
+  edge_cases          - Edge case handling
+  encryption          - Encryption configuration
+  fk_cascade          - Foreign key CASCADE/SET NULL/self-referencing
+  fk_parent_list      - get_parent_foreign_key_list / ALTER on FK tables
+  foreign_keys        - Foreign key definitions
+  fulltext            - Full-text search
+  hidden_pk           - Hidden primary key (tables without PK)
+  icp_mrr             - Index Condition Pushdown and Multi-Range Read
+  index_operations    - Index create/drop
+  index_scan          - Index scan operations
+  inplace_alter       - In-place ALTER TABLE
+  large_data          - Large data handling
+  maintenance         - ANALYZE, CHECK TABLE
+  online_ddl          - Online ALTER TABLE
+  partitioning        - Table partitioning
+  persistent_stats    - Persistent statistics (ANALYZE persists to metadata)
+  preload_keys        - LOAD INDEX INTO CACHE
+  rowid_filter         - Rowid filter pushdown for semi-joins
+  secondary_index     - Secondary index operations
+  skip_locked         - SELECT FOR UPDATE SKIP LOCKED
+  spatial             - Spatial data types
+  spatial_geometry    - Geometry functions
+  spatial_index       - Spatial indexing
+  table_operations    - Table operations
+  tablespace          - Tablespace operations
+  transactions        - Transaction commit/rollback
+  ttl                 - Time-to-live expiration
+  virtual_columns     - Generated columns
+  xa_transactions     - XA distributed transactions
 
 
 QUICK TEST
@@ -363,6 +357,25 @@ QUICK TEST
   INSERT INTO t VALUES (1, 'hello'), (2, 'world');
   SELECT * FROM t;
   DROP TABLE t;
+
+
+SANITIZER BUILDS
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+
+The TidesDB plugin supports plugin-level UBSAN/ASAN without rebuilding the
+entire MariaDB server:
+
+  cmake .. -DTIDESDB_WITH_UBSAN=ON
+  make -j$(nproc) tidesdb
+
+  # Run tests with UBSAN error logging:
+  UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0 \
+    perl ./mtr --suite=tidesdb --parallel=4
+
+For full ASAN coverage (requires full server rebuild):
+
+  cmake .. -DWITH_ASAN=ON -DWITH_UBSAN=ON -DCMAKE_BUILD_TYPE=Debug
+  make -j$(nproc)
 
 
 LICENSE

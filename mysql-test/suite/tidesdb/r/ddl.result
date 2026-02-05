@@ -1,0 +1,110 @@
+#
+# TidesDB DDL (Data Definition Language) Tests
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: CREATE TABLE with various constraints
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+name VARCHAR(100) NOT NULL,
+email VARCHAR(100),
+age INT DEFAULT 0,
+INDEX idx_email (email)
+) ENGINE=TidesDB;
+Warnings:
+Note	1071	Specified key was too long; max key length is 255 bytes
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int(11) NOT NULL,
+  `name` varchar(100) NOT NULL,
+  `email` varchar(100) DEFAULT NULL,
+  `age` int(11) DEFAULT 0,
+  PRIMARY KEY (`id`),
+  KEY `idx_email` (`email`(63))
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+# Test 2: RENAME TABLE
+RENAME TABLE t1 TO t1_renamed;
+SHOW TABLES LIKE 't1%';
+Tables_in_test (t1%)
+t1_renamed
+RENAME TABLE t1_renamed TO t1;
+# Test 3: DROP TABLE
+INSERT INTO t1 VALUES (1, 'Test', 'test@example.com', 25);
+SELECT * FROM t1;
+id	name	email	age
+1	Test	test@example.com	25
+DROP TABLE t1;
+SELECT * FROM t1;
+ERROR 42S02: Table 'test.t1' doesn't exist
+# Test 4: CREATE TABLE with composite primary key
+CREATE TABLE t2 (
+part1 INT,
+part2 INT,
+data VARCHAR(100),
+PRIMARY KEY (part1, part2)
+) ENGINE=TidesDB;
+INSERT INTO t2 VALUES (1, 1, 'data1');
+INSERT INTO t2 VALUES (1, 2, 'data2');
+INSERT INTO t2 VALUES (2, 1, 'data3');
+SELECT * FROM t2 ORDER BY part1, part2;
+part1	part2	data
+1	1	data1
+1	2	data2
+2	1	data3
+# Test 5: CREATE TABLE without primary key (hidden PK)
+CREATE TABLE t3 (
+name VARCHAR(100),
+value INT
+) ENGINE=TidesDB;
+INSERT INTO t3 VALUES ('row1', 1);
+INSERT INTO t3 VALUES ('row2', 2);
+INSERT INTO t3 VALUES ('row1', 3);
+SELECT * FROM t3 ORDER BY value;
+name	value
+row1	1
+row2	2
+row1	3
+# Test 6: TRUNCATE TABLE
+INSERT INTO t3 VALUES ('row4', 4);
+SELECT COUNT(*) FROM t3;
+COUNT(*)
+4
+TRUNCATE TABLE t3;
+SELECT COUNT(*) FROM t3;
+COUNT(*)
+0
+# Test 7: CREATE TABLE with multiple indexes
+CREATE TABLE t4 (
+id INT PRIMARY KEY,
+col1 VARCHAR(50),
+col2 INT,
+col3 DATE,
+INDEX idx1 (col1),
+INDEX idx2 (col2),
+INDEX idx3 (col3),
+INDEX idx_composite (col1, col2)
+) ENGINE=TidesDB;
+SHOW INDEX FROM t4;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
+t4	0	PRIMARY	1	id	A	NULL	NULL	NULL		LSMB+			NO
+t4	1	idx1	1	col1	A	NULL	NULL	NULL	YES	LSMB+			NO
+t4	1	idx2	1	col2	A	NULL	NULL	NULL	YES	LSMB+			NO
+t4	1	idx3	1	col3	A	NULL	NULL	NULL	YES	LSMB+			NO
+t4	1	idx_composite	1	col1	A	NULL	NULL	NULL	YES	LSMB+			NO
+t4	1	idx_composite	2	col2	A	NULL	NULL	NULL	YES	LSMB+			NO
+# Test 8: CREATE TABLE IF NOT EXISTS
+CREATE TABLE IF NOT EXISTS t4 (id INT);
+Warnings:
+Note	1050	Table 't4' already exists
+SHOW WARNINGS;
+Level	Code	Message
+Note	1050	Table 't4' already exists
+# Test 9: DROP TABLE IF EXISTS
+DROP TABLE IF EXISTS nonexistent_table;
+SHOW WARNINGS;
+Level	Code	Message
+# Cleanup
+DROP TABLE t2, t3, t4;
+#
+# DDL tests completed!
+#

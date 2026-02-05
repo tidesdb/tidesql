@@ -56,7 +56,7 @@ WHERE MATCH(title) AGAINST('+MySQL -PostgreSQL' IN BOOLEAN MODE);
 SELECT id, title, MATCH(title, body) AGAINST('MySQL tutorial') AS relevance
 FROM articles 
 WHERE MATCH(title, body) AGAINST('MySQL tutorial')
-ORDER BY relevance DESC;
+ORDER BY relevance DESC, id ASC;
 
 --echo # Test 8: Update and verify FT index updates
 UPDATE articles SET title = 'MariaDB Tutorial' WHERE id = 1;

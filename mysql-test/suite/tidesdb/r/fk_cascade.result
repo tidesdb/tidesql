@@ -121,7 +121,55 @@ SELECT * FROM child4 ORDER BY id;
 id	p_id1	p_id2	value
 1	1	1	Child referencing 1-1
 2	1	2	Child referencing 1-2
+# Test 5: Self-referencing FK (employee -> manager)
+CREATE TABLE employees (
+id INT PRIMARY KEY,
+name VARCHAR(50),
+manager_id INT,
+FOREIGN KEY (manager_id) REFERENCES employees(id) ON DELETE SET NULL
+) ENGINE=TidesDB;
+# Verify self-referencing FK definition
+SHOW CREATE TABLE employees;
+Table	Create Table
+employees	CREATE TABLE `employees` (
+  `id` int(11) NOT NULL,
+  `name` varchar(50) DEFAULT NULL,
+  `manager_id` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `manager_id` (`manager_id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+# Insert hierarchical data
+INSERT INTO employees VALUES (1, 'CEO', NULL);
+INSERT INTO employees VALUES (2, 'VP', 1);
+INSERT INTO employees VALUES (3, 'Manager', 2);
+INSERT INTO employees VALUES (4, 'Employee', 3);
+SELECT * FROM employees ORDER BY id;
+id	name	manager_id
+1	CEO	NULL
+2	VP	1
+3	Manager	2
+4	Employee	3
+# Test 6: ALTER TABLE on table with self-referencing FK
+# This tests get_parent_foreign_key_list() functionality
+ALTER TABLE employees ADD COLUMN department VARCHAR(50);
+SHOW CREATE TABLE employees;
+Table	Create Table
+employees	CREATE TABLE `employees` (
+  `id` int(11) NOT NULL,
+  `name` varchar(50) DEFAULT NULL,
+  `manager_id` int(11) DEFAULT NULL,
+  `department` varchar(50) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `manager_id` (`manager_id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+SELECT * FROM employees ORDER BY id;
+id	name	manager_id	department
+1	CEO	NULL	NULL
+2	VP	1	NULL
+3	Manager	2	NULL
+4	Employee	3	NULL
 # Cleanup
+DROP TABLE employees;
 DROP TABLE child4;
 DROP TABLE parent4;
 DROP TABLE child3;
