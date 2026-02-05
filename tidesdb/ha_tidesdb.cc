@@ -640,6 +640,23 @@ static void set_thd_txn(THD *thd, handlerton *hton, tidesdb_txn_t *txn)
 
 /**
   @brief
+  Ensure we have a valid transaction for the current THD.
+
+  Similar to InnoDB's check_trx_exists(), this function ensures that
+  the handler has access to the correct transaction. For multi-statement
+  transactions, this returns the THD-level transaction. For auto-commit
+  mode, this returns NULL (caller should create a handler-level transaction).
+
+  @param thd   The current thread handle
+  @return      The THD-level transaction, or NULL if not in a transaction
+*/
+static tidesdb_txn_t *check_tidesdb_trx(THD *thd)
+{
+    return get_thd_txn(thd, tidesdb_hton);
+}
+
+/**
+  @brief
   Commit a transaction.
 
   Called by MySQL/MariaDB when COMMIT is issued or when auto-commit commits
@@ -6820,9 +6837,21 @@ int ha_tidesdb::start_stmt(THD *thd, thr_lock_type lock_type)
     DBUG_ENTER("ha_tidesdb::start_stmt");
 
     /*
-      TidesDB uses MVCC -- no special statement-level handling needed.
-      Transaction is managed at the THD level via external_lock().
+      Like InnoDB, we sync the handler's transaction with the THD-level
+      transaction at the start of each statement. This is critical for
+      multi-statement transactions where a new handler instance may be
+      created for each statement.
     */
+    bool in_transaction = thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+    if (in_transaction)
+    {
+        tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+        if (thd_txn)
+        {
+            current_txn = thd_txn;
+        }
+    }
+
     DBUG_RETURN(0);
 }
 
@@ -7370,12 +7399,24 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
     int ret;
     bool in_transaction = thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
 
+    /*
+      Like InnoDB's update_thd(), we always sync the handler's transaction
+      with the THD-level transaction at the start of external_lock().
+      This ensures that even if a new handler instance is created for a
+      statement within a multi-statement transaction, it will have access
+      to the correct transaction context.
+    */
+    tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+    if (thd_txn && in_transaction)
+    {
+        current_txn = thd_txn;
+    }
+
     if (lock_type != F_UNLCK)
     {
         if (in_transaction)
         {
             /* Multi-statement transaction -- we use THD-level transaction for savepoint support */
-            tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
 
             if (!thd_txn)
             {
