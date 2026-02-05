@@ -4459,8 +4459,21 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
         snprintf(old_idx_cf, sizeof(old_idx_cf), "%s_idx_%u", old_cf_name, i);
         snprintf(new_idx_cf, sizeof(new_idx_cf), "%s_idx_%u", new_cf_name, i);
 
-        /* Try to rename -- ignore errors for non-existent indexes */
-        tidesdb_rename_column_family(tidesdb_instance, old_idx_cf, new_idx_cf);
+        /*
+          Only rename if source exists and target doesn't exist.
+          This prevents TDB_ERR_IO on Windows when target directory exists.
+        */
+        tidesdb_column_family_t *old_cf = tidesdb_get_column_family(tidesdb_instance, old_idx_cf);
+        tidesdb_column_family_t *new_cf = tidesdb_get_column_family(tidesdb_instance, new_idx_cf);
+        if (old_cf && !new_cf)
+        {
+            tidesdb_rename_column_family(tidesdb_instance, old_idx_cf, new_idx_cf);
+        }
+        else if (old_cf && new_cf)
+        {
+            /* Target exists -- drop source instead of rename to avoid conflict */
+            tidesdb_drop_column_family(tidesdb_instance, old_idx_cf);
+        }
     }
 
     /* We rename fulltext index column families */
@@ -4470,7 +4483,16 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
         snprintf(old_ft_cf, sizeof(old_ft_cf), "%s_ft_%u", old_cf_name, i);
         snprintf(new_ft_cf, sizeof(new_ft_cf), "%s_ft_%u", new_cf_name, i);
 
-        tidesdb_rename_column_family(tidesdb_instance, old_ft_cf, new_ft_cf);
+        tidesdb_column_family_t *old_cf = tidesdb_get_column_family(tidesdb_instance, old_ft_cf);
+        tidesdb_column_family_t *new_cf = tidesdb_get_column_family(tidesdb_instance, new_ft_cf);
+        if (old_cf && !new_cf)
+        {
+            tidesdb_rename_column_family(tidesdb_instance, old_ft_cf, new_ft_cf);
+        }
+        else if (old_cf && new_cf)
+        {
+            tidesdb_drop_column_family(tidesdb_instance, old_ft_cf);
+        }
     }
 
     /* We rename spatial index column families */
@@ -4481,7 +4503,18 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
         snprintf(old_spatial_cf, sizeof(old_spatial_cf), "%s_spatial_%u", old_cf_name, i);
         snprintf(new_spatial_cf, sizeof(new_spatial_cf), "%s_spatial_%u", new_cf_name, i);
 
-        tidesdb_rename_column_family(tidesdb_instance, old_spatial_cf, new_spatial_cf);
+        tidesdb_column_family_t *old_cf =
+            tidesdb_get_column_family(tidesdb_instance, old_spatial_cf);
+        tidesdb_column_family_t *new_cf =
+            tidesdb_get_column_family(tidesdb_instance, new_spatial_cf);
+        if (old_cf && !new_cf)
+        {
+            tidesdb_rename_column_family(tidesdb_instance, old_spatial_cf, new_spatial_cf);
+        }
+        else if (old_cf && new_cf)
+        {
+            tidesdb_drop_column_family(tidesdb_instance, old_spatial_cf);
+        }
     }
 
     sql_print_information("TidesDB: Renamed table '%s' to '%s'", from, to);
@@ -5389,36 +5422,187 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
 
     if (active_index == table->s->primary_key)
     {
-        /* With primary key lookup we directly get from main CF */
-        ret = tidesdb_txn_get(current_txn, share->cf, key, key_len, &value, &value_size);
+        /*
+          For primary key lookups, we need to distinguish between:
+          1. Full key lookup (exact match) -- use tidesdb_txn_get for efficiency
+          2. Partial key prefix lookup (composite PK) -- use iterator with prefix match
+          3. Range scans (>=, >, etc.) -- use iterator
+        */
+        uint full_pk_len = table->key_info[table->s->primary_key].key_length;
+        bool is_partial_key = (key_len < full_pk_len);
+        bool needs_iterator = is_partial_key || find_flag == HA_READ_KEY_OR_NEXT ||
+                              find_flag == HA_READ_AFTER_KEY || find_flag == HA_READ_PREFIX_LAST ||
+                              find_flag == HA_READ_PREFIX_LAST_OR_PREV;
 
-        if (ret == TDB_ERR_NOT_FOUND)
+        if (!needs_iterator && find_flag == HA_READ_KEY_EXACT)
         {
-            DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-        }
-        else if (ret != TDB_SUCCESS)
-        {
-            sql_print_error("TidesDB: Failed to get row by PK: %d", ret);
-            DBUG_RETURN(HA_ERR_GENERIC);
-        }
+            /* Full key exact match -- use direct get for efficiency */
+            ret = tidesdb_txn_get(current_txn, share->cf, key, key_len, &value, &value_size);
 
-        if (key_len > current_key_capacity)
-        {
-            size_t new_capacity = key_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
-                                      ? key_len * 2
-                                      : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
-            uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
-            if (!new_key)
+            if (ret == TDB_ERR_NOT_FOUND)
             {
-                tidesdb_free(value);
-                DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
             }
-            if (current_key) my_free(current_key);
-            current_key = new_key;
-            current_key_capacity = new_capacity;
+            else if (ret != TDB_SUCCESS)
+            {
+                sql_print_error("TidesDB: Failed to get row by PK: %d", ret);
+                DBUG_RETURN(HA_ERR_GENERIC);
+            }
+
+            if (key_len > current_key_capacity)
+            {
+                size_t new_capacity = key_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                          ? key_len * 2
+                                          : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+                uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+                if (!new_key)
+                {
+                    tidesdb_free(value);
+                    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+                }
+                if (current_key) my_free(current_key);
+                current_key = new_key;
+                current_key_capacity = new_capacity;
+            }
+            memcpy(current_key, key, key_len);
+            current_key_len = key_len;
         }
-        memcpy(current_key, key, key_len);
-        current_key_len = key_len;
+        else
+        {
+            /* Partial key prefix or range scan -- use iterator */
+            tidesdb_iter_t *iter = NULL;
+            ret = tidesdb_iter_new(current_txn, share->cf, &iter);
+            if (ret != TDB_SUCCESS)
+            {
+                DBUG_RETURN(HA_ERR_GENERIC);
+            }
+
+            ret = tidesdb_iter_seek(iter, (uint8_t *)key, key_len);
+            if (ret != TDB_SUCCESS || !tidesdb_iter_valid(iter))
+            {
+                tidesdb_iter_free(iter);
+                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+            }
+
+            /* Get the found key */
+            uint8_t *found_key = NULL;
+            size_t found_key_len = 0;
+            ret = tidesdb_iter_key(iter, &found_key, &found_key_len);
+            if (ret != TDB_SUCCESS)
+            {
+                tidesdb_iter_free(iter);
+                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+            }
+
+            /* Check if key matches based on find_flag */
+            bool key_matches = false;
+            switch (find_flag)
+            {
+                case HA_READ_KEY_EXACT:
+                case HA_READ_PREFIX:
+                    /* Prefix match required */
+                    key_matches =
+                        (found_key_len >= key_len && memcmp(found_key, key, key_len) == 0);
+                    break;
+                case HA_READ_KEY_OR_NEXT:
+                case HA_READ_AFTER_KEY:
+                    /* Any key >= search key is valid */
+                    key_matches = true;
+                    /* For HA_READ_AFTER_KEY, skip exact prefix matches */
+                    if (find_flag == HA_READ_AFTER_KEY && found_key_len >= key_len &&
+                        memcmp(found_key, key, key_len) == 0)
+                    {
+                        tidesdb_iter_next(iter);
+                        if (!tidesdb_iter_valid(iter))
+                        {
+                            tidesdb_iter_free(iter);
+                            DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+                        }
+                        ret = tidesdb_iter_key(iter, &found_key, &found_key_len);
+                        if (ret != TDB_SUCCESS)
+                        {
+                            tidesdb_iter_free(iter);
+                            DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+                        }
+                    }
+                    break;
+                case HA_READ_PREFIX_LAST:
+                case HA_READ_PREFIX_LAST_OR_PREV:
+                    /* For reverse scans, accept */
+                    key_matches = true;
+                    break;
+                default:
+                    /* Default to prefix match */
+                    key_matches =
+                        (found_key_len >= key_len && memcmp(found_key, key, key_len) == 0);
+                    break;
+            }
+
+            if (!key_matches)
+            {
+                tidesdb_iter_free(iter);
+                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+            }
+
+            /* Save the found key as current key */
+            if (found_key_len > current_key_capacity)
+            {
+                size_t new_capacity = found_key_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                          ? found_key_len * 2
+                                          : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+                uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+                if (!new_key)
+                {
+                    tidesdb_iter_free(iter);
+                    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+                }
+                if (current_key) my_free(current_key);
+                current_key = new_key;
+                current_key_capacity = new_capacity;
+            }
+            memcpy(current_key, found_key, found_key_len);
+            current_key_len = found_key_len;
+
+            /* Save iterator for index_next */
+            if (scan_iter)
+            {
+                tidesdb_iter_free(scan_iter);
+            }
+            scan_iter = iter;
+            scan_initialized = true;
+
+            /* Save search key prefix for boundary checking in index_next */
+            if (key_len > index_key_buf_capacity)
+            {
+                uint new_capacity = key_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                        ? key_len * 2
+                                        : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+                uchar *new_buf;
+                if (index_key_buf == NULL)
+                    new_buf = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+                else
+                    new_buf = (uchar *)my_realloc(PSI_INSTRUMENT_ME, index_key_buf, new_capacity,
+                                                  MYF(MY_WME));
+                if (new_buf)
+                {
+                    index_key_buf = new_buf;
+                    index_key_buf_capacity = new_capacity;
+                }
+            }
+            if (index_key_buf)
+            {
+                memcpy(index_key_buf, key, key_len);
+                index_key_len = key_len;
+            }
+
+            /* Fetch the actual row value using tidesdb_txn_get (returns allocated memory) */
+            ret = tidesdb_txn_get(current_txn, share->cf, current_key, current_key_len, &value,
+                                  &value_size);
+            if (ret != TDB_SUCCESS)
+            {
+                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+            }
+        }
     }
     else
     {
@@ -5458,11 +5642,11 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
 
         /*
           Check if the found key matches based on find_flag:
-          - HA_READ_KEY_EXACT: exact prefix match required
-          - HA_READ_KEY_OR_NEXT (>=): any key >= search key is valid
-          - HA_READ_AFTER_KEY (>): any key > search key is valid
-          - HA_READ_KEY_OR_PREV (<=): any key <= search key is valid
-          - HA_READ_BEFORE_KEY (<): any key < search key is valid
+          -- HA_READ_KEY_EXACT        -- exact prefix match required
+          -- HA_READ_KEY_OR_NEXT (>=) -- any key >= search key is valid
+          -- HA_READ_AFTER_KEY (>)    -- any key > search key is valid
+          -- HA_READ_KEY_OR_PREV (<=) -- any key <= search key is valid
+          -- HA_READ_BEFORE_KEY (<)   -- any key < search key is valid
         */
         bool key_matches = false;
         switch (find_flag)
@@ -5757,6 +5941,19 @@ int ha_tidesdb::index_next(uchar *buf)
         if (key_size > 0 && key[0] == 0) continue;
 
         break;
+    }
+
+    /*
+      For primary key prefix scans (composite keys), check if we're still
+      within the prefix boundary. If index_key_len > 0, we have a prefix
+      to check against.
+    */
+    if (active_index == table->s->primary_key && index_key_len > 0)
+    {
+        if (key_size < index_key_len || memcmp(key, index_key_buf, index_key_len) != 0)
+        {
+            DBUG_RETURN(HA_ERR_END_OF_FILE);
+        }
     }
 
     ret = tidesdb_iter_value(scan_iter, &value, &value_size);

@@ -56,6 +56,10 @@ id	a	b
 SELECT * FROM t1 FORCE INDEX (PRIMARY) WHERE id >= 1 ORDER BY id;
 id	a	b
 1	100	row1
+2	200	row2
+3	300	row3
+4	400	row4
+5	500	row5
 # Cleanup
 DROP TABLE t1;
 #

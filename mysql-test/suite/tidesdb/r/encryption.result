@@ -69,6 +69,7 @@ ROLLBACK;
 SELECT * FROM t1 WHERE id >= 10 ORDER BY id;
 id	name	secret_data	amount
 10	Trans1	Transaction data 1	100.00
+11	Trans2	Transaction data 2	200.00
 # Cleanup
 DROP TABLE t1;
 DROP TABLE t2;
