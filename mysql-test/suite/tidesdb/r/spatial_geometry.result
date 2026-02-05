@@ -18,18 +18,15 @@ INSERT INTO points VALUES
 (5, 'Phoenix', ST_GeomFromText('POINT(-112.0740 33.4484)'));
 SELECT id, name, ST_AsText(location) FROM points ORDER BY id;
 id	name	ST_AsText(location)
-1	New York	POINT(-112.074 33.4484)
-2	Los Angeles	POINT(-112.074 33.4484)
-3	Chicago	POINT(-112.074 33.4484)
-4	Houston	POINT(-112.074 33.4484)
+1	New York	POINT(-74.006 40.7128)
+2	Los Angeles	POINT(-118.2437 34.0522)
+3	Chicago	POINT(-87.6298 41.8781)
+4	Houston	POINT(-95.3698 29.7604)
 5	Phoenix	POINT(-112.074 33.4484)
 # Query points
 SELECT id, name FROM points WHERE ST_X(location) < -100 ORDER BY id;
 id	name
-1	New York
 2	Los Angeles
-3	Chicago
-4	Houston
 5	Phoenix
 DROP TABLE points;
 #
@@ -47,8 +44,8 @@ INSERT INTO routes VALUES
 (3, 'Route C', ST_GeomFromText('LINESTRING(-10 -10, 0 0, 10 -10)'));
 SELECT id, name, ST_AsText(path) FROM routes ORDER BY id;
 id	name	ST_AsText(path)
-1	Route A	LINESTRING(-10 -10,0 0,10 -10)
-2	Route B	LINESTRING(-10 -10,0 0,10 -10)
+1	Route A	LINESTRING(0 0,10 10,20 0)
+2	Route B	LINESTRING(5 5,15 15,25 5)
 3	Route C	LINESTRING(-10 -10,0 0,10 -10)
 DROP TABLE routes;
 #
@@ -66,8 +63,8 @@ INSERT INTO regions VALUES
 (3, 'Rectangle', ST_GeomFromText('POLYGON((40 0, 60 0, 60 20, 40 20, 40 0))'));
 SELECT id, name, ST_AsText(boundary) FROM regions ORDER BY id;
 id	name	ST_AsText(boundary)
-1	Square	POLYGON((40 0,60 0,60 20,40 20,40 0))
-2	Triangle	NULL
+1	Square	POLYGON((0 0,10 0,10 10,0 10,0 0))
+2	Triangle	POLYGON((20 0,30 10,20 10,20 0))
 3	Rectangle	POLYGON((40 0,60 0,60 20,40 20,40 0))
 DROP TABLE regions;
 #
@@ -84,8 +81,8 @@ INSERT INTO geo_data VALUES
 (3, ST_GeomFromText('POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))'));
 SELECT id, ST_GeometryType(geom), ST_AsText(geom) FROM geo_data ORDER BY id;
 id	ST_GeometryType(geom)	ST_AsText(geom)
-1	NULL	NULL
-2	NULL	NULL
+1	POINT	POINT(5 5)
+2	LINESTRING	LINESTRING(0 0,10 10)
 3	POLYGON	POLYGON((0 0,10 0,10 10,0 10,0 0))
 DROP TABLE geo_data;
 #
@@ -103,7 +100,7 @@ INSERT INTO moving_points VALUES
 # Before update
 SELECT id, name, ST_AsText(pos) FROM moving_points ORDER BY id;
 id	name	ST_AsText(pos)
-1	Object A	POINT(10 10)
+1	Object A	POINT(0 0)
 2	Object B	POINT(10 10)
 # Move Object A
 UPDATE moving_points SET pos = ST_GeomFromText('POINT(50 50)') WHERE id = 1;
@@ -111,7 +108,7 @@ UPDATE moving_points SET pos = ST_GeomFromText('POINT(50 50)') WHERE id = 1;
 SELECT id, name, ST_AsText(pos) FROM moving_points ORDER BY id;
 id	name	ST_AsText(pos)
 1	Object A	POINT(50 50)
-2	Object B	POINT(50 50)
+2	Object B	POINT(10 10)
 # Delete and verify
 DELETE FROM moving_points WHERE id = 2;
 SELECT id, name, ST_AsText(pos) FROM moving_points ORDER BY id;
@@ -133,7 +130,7 @@ INSERT INTO dual_spatial VALUES
 (2, ST_GeomFromText('POINT(10 10)'), ST_GeomFromText('POINT(90 90)'));
 SELECT id, ST_AsText(start_point), ST_AsText(end_point) FROM dual_spatial ORDER BY id;
 id	ST_AsText(start_point)	ST_AsText(end_point)
-1	POINT(10 10)	POINT(90 90)
+1	POINT(0 0)	POINT(100 100)
 2	POINT(10 10)	POINT(90 90)
 DROP TABLE dual_spatial;
 #

@@ -18,18 +18,15 @@ INSERT INTO locations VALUES (5, 'Phoenix', ST_GeomFromText('POINT(-112.074 33.4
 # Test 3: Verify data was inserted
 SELECT id, name, ST_AsText(coords) FROM locations ORDER BY id;
 id	name	ST_AsText(coords)
-1	New York	POINT(-112.074 33.4484)
-2	Los Angeles	POINT(-112.074 33.4484)
-3	Chicago	POINT(-112.074 33.4484)
-4	Houston	POINT(-112.074 33.4484)
+1	New York	POINT(-74.006 40.7128)
+2	Los Angeles	POINT(-118.2437 34.0522)
+3	Chicago	POINT(-87.6298 41.8781)
+4	Houston	POINT(-95.3698 29.7604)
 5	Phoenix	POINT(-112.074 33.4484)
 # Test 4: Spatial query - find points
 SELECT id, name FROM locations WHERE ST_X(coords) < -100 ORDER BY id;
 id	name
-1	New York
 2	Los Angeles
-3	Chicago
-4	Houston
 5	Phoenix
 # Test 5: Update spatial data
 UPDATE locations SET coords = ST_GeomFromText('POINT(-74.0060 40.7128)') WHERE id = 1;
@@ -53,7 +50,7 @@ INSERT INTO geo_data VALUES (1, ST_GeomFromText('POINT(0 0)'), ST_GeomFromText('
 INSERT INTO geo_data VALUES (2, ST_GeomFromText('POINT(5 5)'), ST_GeomFromText('POINT(15 15)'));
 SELECT id, ST_AsText(location), ST_AsText(boundary) FROM geo_data ORDER BY id;
 id	ST_AsText(location)	ST_AsText(boundary)
-1	POINT(5 5)	POINT(15 15)
+1	POINT(0 0)	POINT(10 10)
 2	POINT(5 5)	POINT(15 15)
 # Cleanup
 DROP TABLE geo_data;

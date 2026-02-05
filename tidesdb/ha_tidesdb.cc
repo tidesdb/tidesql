@@ -1455,7 +1455,8 @@ int ha_tidesdb::pack_row(const uchar *buf, uchar **packed, size_t *packed_len)
     {
         Field *field = table->field[i];
         if (field->type() == MYSQL_TYPE_BLOB || field->type() == MYSQL_TYPE_MEDIUM_BLOB ||
-            field->type() == MYSQL_TYPE_LONG_BLOB || field->type() == MYSQL_TYPE_TINY_BLOB)
+            field->type() == MYSQL_TYPE_LONG_BLOB || field->type() == MYSQL_TYPE_TINY_BLOB ||
+            field->type() == MYSQL_TYPE_GEOMETRY)
         {
             total_len += TIDESDB_BLOB_LEN_PREFIX_SIZE;
             if (!field->is_null())
@@ -1489,13 +1490,14 @@ int ha_tidesdb::pack_row(const uchar *buf, uchar **packed, size_t *packed_len)
 
     memcpy(pack_buffer, buf, row_len);
 
-    /* We append BLOB/TEXT data with length prefix */
+    /* We append BLOB/TEXT/GEOMETRY data with length prefix */
     size_t blob_offset = row_len;
     for (uint i = 0; i < table->s->fields; i++)
     {
         Field *field = table->field[i];
         if (field->type() == MYSQL_TYPE_BLOB || field->type() == MYSQL_TYPE_MEDIUM_BLOB ||
-            field->type() == MYSQL_TYPE_LONG_BLOB || field->type() == MYSQL_TYPE_TINY_BLOB)
+            field->type() == MYSQL_TYPE_LONG_BLOB || field->type() == MYSQL_TYPE_TINY_BLOB ||
+            field->type() == MYSQL_TYPE_GEOMETRY)
         {
             uint32 blob_len = 0;
             if (!field->is_null())
@@ -1555,7 +1557,8 @@ int ha_tidesdb::unpack_row(uchar *buf, const uchar *packed, size_t packed_len)
     {
         Field *field = table->field[i];
         if (field->type() == MYSQL_TYPE_BLOB || field->type() == MYSQL_TYPE_MEDIUM_BLOB ||
-            field->type() == MYSQL_TYPE_LONG_BLOB || field->type() == MYSQL_TYPE_TINY_BLOB)
+            field->type() == MYSQL_TYPE_LONG_BLOB || field->type() == MYSQL_TYPE_TINY_BLOB ||
+            field->type() == MYSQL_TYPE_GEOMETRY)
         {
             if (blob_offset + TIDESDB_BLOB_LEN_PREFIX_SIZE > packed_len)
                 DBUG_RETURN(HA_ERR_CRASHED);
@@ -1578,14 +1581,15 @@ int ha_tidesdb::unpack_row(uchar *buf, const uchar *packed, size_t packed_len)
         }
     }
 
-    /* We read BLOB/TEXT data and set up pointers */
+    /* We read BLOB/TEXT/GEOMETRY data and set up pointers */
     blob_offset = row_len;
     size_t buffer_offset = 0;
     for (uint i = 0; i < table->s->fields; i++)
     {
         Field *field = table->field[i];
         if (field->type() == MYSQL_TYPE_BLOB || field->type() == MYSQL_TYPE_MEDIUM_BLOB ||
-            field->type() == MYSQL_TYPE_LONG_BLOB || field->type() == MYSQL_TYPE_TINY_BLOB)
+            field->type() == MYSQL_TYPE_LONG_BLOB || field->type() == MYSQL_TYPE_TINY_BLOB ||
+            field->type() == MYSQL_TYPE_GEOMETRY)
         {
             Field_blob *blob_field = (Field_blob *)field;
             uint packlength = blob_field->pack_length_no_ptr();
@@ -5452,8 +5456,57 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
             DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
         }
 
-        /* We check if the found key starts with our search key (prefix match) */
-        if (idx_key_len < key_len || memcmp(idx_key, key, key_len) != 0)
+        /*
+          Check if the found key matches based on find_flag:
+          - HA_READ_KEY_EXACT: exact prefix match required
+          - HA_READ_KEY_OR_NEXT (>=): any key >= search key is valid
+          - HA_READ_AFTER_KEY (>): any key > search key is valid
+          - HA_READ_KEY_OR_PREV (<=): any key <= search key is valid
+          - HA_READ_BEFORE_KEY (<): any key < search key is valid
+        */
+        bool key_matches = false;
+        switch (find_flag)
+        {
+            case HA_READ_KEY_EXACT:
+            case HA_READ_PREFIX:
+                /* Exact prefix match required */
+                key_matches = (idx_key_len >= key_len && memcmp(idx_key, key, key_len) == 0);
+                break;
+            case HA_READ_KEY_OR_NEXT:
+            case HA_READ_AFTER_KEY:
+                /* Any key >= search key is valid (seek already positioned us there) */
+                key_matches = true;
+                /* For HA_READ_AFTER_KEY, skip if exact match */
+                if (find_flag == HA_READ_AFTER_KEY && idx_key_len >= key_len &&
+                    memcmp(idx_key, key, key_len) == 0)
+                {
+                    /* Move to next key */
+                    tidesdb_iter_next(iter);
+                    if (!tidesdb_iter_valid(iter))
+                    {
+                        tidesdb_iter_free(iter);
+                        DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+                    }
+                    ret = tidesdb_iter_key(iter, &idx_key, &idx_key_len);
+                    if (ret != TDB_SUCCESS)
+                    {
+                        tidesdb_iter_free(iter);
+                        DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+                    }
+                }
+                break;
+            case HA_READ_PREFIX_LAST:
+            case HA_READ_PREFIX_LAST_OR_PREV:
+                /* For reverse scans, accept if prefix matches or is less */
+                key_matches = true;
+                break;
+            default:
+                /* Default to prefix match for safety */
+                key_matches = (idx_key_len >= key_len && memcmp(idx_key, key, key_len) == 0);
+                break;
+        }
+
+        if (!key_matches)
         {
             tidesdb_iter_free(iter);
             DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
