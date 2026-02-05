@@ -541,8 +541,18 @@ static int tidesdb_init_func(void *p)
     }
     else
     {
-        /* Default to MySQL/MariaDB data directory + tidesdb */
-        snprintf(db_path, sizeof(db_path), "%s" TIDESDB_PATH_SEP_STR "tidesdb", mysql_data_home);
+        /*
+          Default to MySQL/MariaDB data directory + tidesdb.
+
+          We must use an absolute path here. mysql_data_home can be
+          a relative path (e.g., "." or "./data"), which causes problems when
+          running parallel MTR tests -- all workers would share the same relative
+          path and conflict with each other.
+
+          We use mysql_real_data_home which is the absolute path version.
+        */
+        snprintf(db_path, sizeof(db_path), "%s" TIDESDB_PATH_SEP_STR "tidesdb",
+                 mysql_real_data_home);
     }
     db_path[sizeof(db_path) - 1] = '\0';
 
@@ -4488,7 +4498,7 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
         }
         else if (old_cf && new_cf)
         {
-            /* Target exists - drop source instead of rename to avoid conflict */
+            /* Target exists -- we drop source instead of rename to avoid conflict */
             tidesdb_drop_column_family(tidesdb_instance, old_idx_cf);
         }
     }
@@ -5386,7 +5396,7 @@ int ha_tidesdb::index_init(uint idx, bool sorted)
     DBUG_ENTER("ha_tidesdb::index_init");
     active_index = idx;
 
-    /* Ensure we have a transaction - check THD-level transaction if handler doesn't have one */
+    /* Ensure we have a transaction -- we check THD-level transaction if handler doesn't have one */
     if (!current_txn)
     {
         THD *thd = ha_thd();
@@ -5438,7 +5448,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
 
     int ret;
 
-    /* Ensure we have a transaction - check THD-level transaction if handler doesn't have one */
+    /* Ensure we have a transaction -- we check THD-level transaction if handler doesn't have one */
     if (!current_txn)
     {
         THD *thd = ha_thd();
@@ -5463,9 +5473,9 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
     {
         /*
           For primary key lookups, we need to distinguish between:
-          1. Full key lookup (exact match) - use tidesdb_txn_get for efficiency
-          2. Partial key prefix lookup (composite PK) - use iterator with prefix match
-          3. Range scans (>=, >, etc.) - use iterator
+          1. Full key lookup (exact match)            -- use tidesdb_txn_get for efficiency
+          2. Partial key prefix lookup (composite PK) -- we use iterator with prefix match
+          3. Range scans (>=, >, etc.)                -- we use iterator
         */
         uint full_pk_len = table->key_info[table->s->primary_key].key_length;
         bool is_partial_key = (key_len < full_pk_len);
@@ -5475,7 +5485,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
 
         if (!needs_iterator && find_flag == HA_READ_KEY_EXACT)
         {
-            /* Full key exact match - use direct get for efficiency */
+            /* Full key exact match -- we use direct get for efficiency */
             ret = tidesdb_txn_get(current_txn, share->cf, key, key_len, &value, &value_size);
 
             if (ret == TDB_ERR_NOT_FOUND)
@@ -5508,7 +5518,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         }
         else
         {
-            /* Partial key prefix or range scan - use iterator */
+            /* Partial key prefix or range scan -- we use iterator */
             tidesdb_iter_t *iter = NULL;
             ret = tidesdb_iter_new(current_txn, share->cf, &iter);
             if (ret != TDB_SUCCESS)
