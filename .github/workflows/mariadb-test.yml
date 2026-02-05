@@ -310,4 +310,4 @@ jobs:
       working-directory: mariadb-server/build
       run: |
         set PATH=%VCPKG_INSTALLATION_ROOT%\installed\x64-windows\bin;C:\tidesdb\bin;%PATH%
-        perl mysql-test\mysql-test-run.pl --suite=tidesdb --parallel=4 --force --retry=1
+        perl mysql-test\mysql-test-run.pl --suite=tidesdb --parallel=1 --force --retry=1
