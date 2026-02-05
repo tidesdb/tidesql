@@ -4496,18 +4496,22 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
         if (old_cf)
         {
             int rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_idx_cf, new_idx_cf);
-            if (rename_ret == TDB_ERR_EXISTS)
+            if (rename_ret != TDB_SUCCESS && rename_ret != TDB_ERR_NOT_FOUND)
             {
-                /*
-                  Target directory exists on disk (Windows issue) or CF already loaded.
-                  Drop the target first, then retry rename.
-                */
-                tidesdb_drop_column_family(tidesdb_instance, new_idx_cf);
-                rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_idx_cf, new_idx_cf);
+                sql_print_information("TidesDB: Rename index CF '%s' to '%s' failed with %d, retrying...",
+                                      old_idx_cf, new_idx_cf, rename_ret);
+                /* Retry with delay for file system timing issues */
+                for (int retry = 0; retry < 3 && rename_ret != TDB_SUCCESS; retry++)
+                {
+                    my_sleep(50000); /* 50ms delay */
+                    rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_idx_cf, new_idx_cf);
+                    sql_print_information("TidesDB: Rename retry %d: %s -> %s = %d",
+                                          retry + 1, old_idx_cf, new_idx_cf, rename_ret);
+                }
                 if (rename_ret != TDB_SUCCESS && rename_ret != TDB_ERR_NOT_FOUND)
                 {
-                    /* If rename still fails, just drop the source to avoid orphans */
-                    tidesdb_drop_column_family(tidesdb_instance, old_idx_cf);
+                    sql_print_error("TidesDB: Failed to rename index CF '%s' to '%s' after retries: %d",
+                                    old_idx_cf, new_idx_cf, rename_ret);
                 }
             }
         }
@@ -4524,13 +4528,22 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
         if (old_cf)
         {
             int rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_ft_cf, new_ft_cf);
-            if (rename_ret == TDB_ERR_EXISTS)
+            if (rename_ret != TDB_SUCCESS && rename_ret != TDB_ERR_NOT_FOUND)
             {
-                tidesdb_drop_column_family(tidesdb_instance, new_ft_cf);
-                rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_ft_cf, new_ft_cf);
+                sql_print_information("TidesDB: Rename FT index CF '%s' to '%s' failed with %d, retrying...",
+                                      old_ft_cf, new_ft_cf, rename_ret);
+                /* Retry with delay for file system timing issues */
+                for (int retry = 0; retry < 3 && rename_ret != TDB_SUCCESS; retry++)
+                {
+                    my_sleep(50000); /* 50ms delay */
+                    rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_ft_cf, new_ft_cf);
+                    sql_print_information("TidesDB: FT rename retry %d: %s -> %s = %d",
+                                          retry + 1, old_ft_cf, new_ft_cf, rename_ret);
+                }
                 if (rename_ret != TDB_SUCCESS && rename_ret != TDB_ERR_NOT_FOUND)
                 {
-                    tidesdb_drop_column_family(tidesdb_instance, old_ft_cf);
+                    sql_print_error("TidesDB: Failed to rename FT index CF '%s' to '%s' after retries: %d",
+                                    old_ft_cf, new_ft_cf, rename_ret);
                 }
             }
         }
@@ -4550,14 +4563,23 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
         {
             int rename_ret =
                 tidesdb_rename_column_family(tidesdb_instance, old_spatial_cf, new_spatial_cf);
-            if (rename_ret == TDB_ERR_EXISTS)
+            if (rename_ret != TDB_SUCCESS && rename_ret != TDB_ERR_NOT_FOUND)
             {
-                tidesdb_drop_column_family(tidesdb_instance, new_spatial_cf);
-                rename_ret =
-                    tidesdb_rename_column_family(tidesdb_instance, old_spatial_cf, new_spatial_cf);
+                sql_print_information("TidesDB: Rename spatial CF '%s' to '%s' failed with %d, retrying...",
+                                      old_spatial_cf, new_spatial_cf, rename_ret);
+                /* Retry with delay for file system timing issues */
+                for (int retry = 0; retry < 3 && rename_ret != TDB_SUCCESS; retry++)
+                {
+                    my_sleep(50000); /* 50ms delay */
+                    rename_ret =
+                        tidesdb_rename_column_family(tidesdb_instance, old_spatial_cf, new_spatial_cf);
+                    sql_print_information("TidesDB: Spatial rename retry %d: %s -> %s = %d",
+                                          retry + 1, old_spatial_cf, new_spatial_cf, rename_ret);
+                }
                 if (rename_ret != TDB_SUCCESS && rename_ret != TDB_ERR_NOT_FOUND)
                 {
-                    tidesdb_drop_column_family(tidesdb_instance, old_spatial_cf);
+                    sql_print_error("TidesDB: Failed to rename spatial CF '%s' to '%s' after retries: %d",
+                                    old_spatial_cf, new_spatial_cf, rename_ret);
                 }
             }
         }

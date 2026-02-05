@@ -28,6 +28,7 @@ jobs:
         sudo apt-get install -y \
           build-essential \
           cmake \
+          ninja-build \
           git \
           libncurses5-dev \
           libssl-dev \
@@ -43,7 +44,8 @@ jobs:
           libboost-dev \
           libpcre2-dev \
           libpmem-dev \
-          libjemalloc-dev
+          libjemalloc-dev \
+          ccache
 
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
@@ -64,7 +66,8 @@ jobs:
           ninja \
           ncurses \
           snappy \
-          lz4
+          lz4 \
+          ccache
         
         if [ $(uname -m) = "x86_64" ]; then
           HOMEBREW_BASE_DIR="/usr/local"
@@ -91,6 +94,34 @@ jobs:
         key: vcpkg-windows-x64-${{ hashFiles('**/CMakeLists.txt') }}
         restore-keys: |
           vcpkg-windows-x64-
+
+    - name: Cache TidesDB library
+      uses: actions/cache@v4
+      with:
+        path: |
+          tidesdb-lib/build
+          /usr/local/lib/libtidesdb*
+          /usr/local/include/tidesdb*
+          C:/tidesdb
+        key: tidesdb-${{ runner.os }}-${{ hashFiles('tidesql/tidesdb/**') }}
+        restore-keys: |
+          tidesdb-${{ runner.os }}-
+
+    - name: Cache ccache
+      if: runner.os != 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: ccache-${{ runner.os }}-${{ github.sha }}
+        restore-keys: |
+          ccache-${{ runner.os }}-
+
+    - name: Configure ccache
+      if: runner.os != 'Windows'
+      run: |
+        ccache --set-config=max_size=500M
+        ccache --set-config=compression=true
+        ccache -z
 
     - name: Install dependencies (Windows)
       if: runner.os == 'Windows'
@@ -165,6 +196,8 @@ jobs:
           sleep 10
         done
         cd tidesdb-lib
+        echo "TidesDB commit: $(git rev-parse HEAD)"
+        git log -1 --oneline
         mkdir build && cd build
         cmake ..
         make -j$(nproc)
@@ -186,6 +219,8 @@ jobs:
           sleep 10
         done
         cd tidesdb-lib
+        echo "TidesDB commit: $(git rev-parse HEAD)"
+        git log -1 --oneline
         mkdir build && cd build
         cmake .. -DCMAKE_OSX_SYSROOT=${SDKROOT} -DOPENSSL_ROOT_DIR=${HOMEBREW_BASE_DIR}/opt/openssl@3
         make -j$(sysctl -n hw.ncpu)
@@ -204,6 +239,8 @@ jobs:
           sleep 10
         done
         cd tidesdb-lib
+        echo "TidesDB commit: $(git rev-parse HEAD)"
+        git log -1 --oneline
         mkdir build
         cd build
         cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_INSTALL_PREFIX=C:/tidesdb
@@ -231,14 +268,25 @@ jobs:
       run: |
         mkdir -p build && cd build
         cmake .. \
+          -G Ninja \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
           -DPLUGIN_TIDESDB=DYNAMIC \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
           -DPLUGIN_ROCKSDB=NO \
           -DPLUGIN_MROONGA=NO \
           -DPLUGIN_SPIDER=NO \
           -DPLUGIN_COLUMNSTORE=NO \
-          -DWITH_UNIT_TESTS=OFF
-        make -j$(nproc)
+          -DPLUGIN_CONNECT=NO \
+          -DPLUGIN_OQGRAPH=NO \
+          -DPLUGIN_TOKUDB=NO \
+          -DPLUGIN_ARCHIVE=NO \
+          -DWITH_UNIT_TESTS=OFF \
+          -DCONC_WITH_UNITTEST=OFF \
+          -DWITH_MARIABACKUP=OFF \
+          -DWITH_EMBEDDED_SERVER=OFF
+        ninja -j$(nproc)
+        ccache -s
 
     - name: Build MariaDB with TidesDB plugin (macOS)
       if: runner.os == 'macOS'
@@ -255,6 +303,8 @@ jobs:
         mkdir -p mariadb-build && cd mariadb-build
         cmake .. \
           -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
           -DCMAKE_C_COMPILER=${CC} \
           -DCMAKE_CXX_COMPILER=${CXX} \
           -DCMAKE_OSX_SYSROOT=${SDKROOT} \
@@ -279,6 +329,7 @@ jobs:
           -DWITH_PCRE=bundled \
           -G Ninja
         cmake --build . --parallel $(sysctl -n hw.ncpu)
+        ccache -s
 
     - name: Build MariaDB with TidesDB plugin (Windows)
       if: runner.os == 'Windows'
@@ -311,3 +362,12 @@ jobs:
       run: |
         set PATH=%VCPKG_INSTALLATION_ROOT%\installed\x64-windows\bin;C:\tidesdb\bin;%PATH%
         perl mysql-test\mysql-test-run.pl --suite=tidesdb --parallel=1 --force --retry=1
+        if %ERRORLEVEL% NEQ 0 (
+          echo === TidesDB Error Logs ===
+          if exist mysql-test\var\log\mysqld.1.err type mysql-test\var\log\mysqld.1.err
+          echo === Test Reject Files ===
+          for /r mysql-test\var\log %%f in (*.reject) do (
+            echo === %%f ===
+            type "%%f"
+          )
+        )
