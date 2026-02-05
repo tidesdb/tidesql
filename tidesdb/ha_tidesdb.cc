@@ -767,6 +767,9 @@ static int tidesdb_start_consistent_snapshot(THD *thd)
     /* We store the transaction in THD for later use */
     set_thd_txn(thd, tidesdb_hton, txn);
 
+    /* We register with transaction coordinator so commit/rollback handlers are called */
+    trans_register_ha(thd, TRUE, tidesdb_hton, 0);
+
     DBUG_PRINT("info", ("TidesDB: Consistent snapshot started"));
     DBUG_RETURN(0);
 }
@@ -1446,6 +1449,7 @@ ha_tidesdb::~ha_tidesdb()
     if (current_key) my_free(current_key);
     if (pk_buffer) my_free(pk_buffer);
     if (row_buffer) my_free(row_buffer);
+    if (scan_iter) tidesdb_iter_free(scan_iter);
     if (index_iter) tidesdb_iter_free(index_iter);
     if (index_key_buf) my_free(index_key_buf);
 
@@ -2109,6 +2113,7 @@ void ha_tidesdb::load_hidden_pk_value()
             value_len == TIDESDB_HIDDEN_PK_LEN)
         {
             max_pk = uint8korr(value);
+            tidesdb_free(value);
         }
 
         /* If no persisted value or to verify, scan for actual max.
@@ -2150,6 +2155,7 @@ void ha_tidesdb::load_hidden_pk_value()
             }
         }
 
+        tidesdb_txn_rollback(txn);
         tidesdb_txn_free(txn);
     }
 
@@ -4486,20 +4492,24 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
         snprintf(old_idx_cf, sizeof(old_idx_cf), "%s_idx_%u", old_cf_name, i);
         snprintf(new_idx_cf, sizeof(new_idx_cf), "%s_idx_%u", new_cf_name, i);
 
-        /*
-          Only rename if source exists and target doesn't exist.
-          This prevents TDB_ERR_IO on Windows when target directory exists.
-        */
         tidesdb_column_family_t *old_cf = tidesdb_get_column_family(tidesdb_instance, old_idx_cf);
-        tidesdb_column_family_t *new_cf = tidesdb_get_column_family(tidesdb_instance, new_idx_cf);
-        if (old_cf && !new_cf)
+        if (old_cf)
         {
-            tidesdb_rename_column_family(tidesdb_instance, old_idx_cf, new_idx_cf);
-        }
-        else if (old_cf && new_cf)
-        {
-            /* Target exists -- we drop source instead of rename to avoid conflict */
-            tidesdb_drop_column_family(tidesdb_instance, old_idx_cf);
+            int rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_idx_cf, new_idx_cf);
+            if (rename_ret == TDB_ERR_EXISTS)
+            {
+                /*
+                  Target directory exists on disk (Windows issue) or CF already loaded.
+                  Drop the target first, then retry rename.
+                */
+                tidesdb_drop_column_family(tidesdb_instance, new_idx_cf);
+                rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_idx_cf, new_idx_cf);
+                if (rename_ret != TDB_SUCCESS && rename_ret != TDB_ERR_NOT_FOUND)
+                {
+                    /* If rename still fails, just drop the source to avoid orphans */
+                    tidesdb_drop_column_family(tidesdb_instance, old_idx_cf);
+                }
+            }
         }
     }
 
@@ -4511,14 +4521,18 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
         snprintf(new_ft_cf, sizeof(new_ft_cf), "%s_ft_%u", new_cf_name, i);
 
         tidesdb_column_family_t *old_cf = tidesdb_get_column_family(tidesdb_instance, old_ft_cf);
-        tidesdb_column_family_t *new_cf = tidesdb_get_column_family(tidesdb_instance, new_ft_cf);
-        if (old_cf && !new_cf)
+        if (old_cf)
         {
-            tidesdb_rename_column_family(tidesdb_instance, old_ft_cf, new_ft_cf);
-        }
-        else if (old_cf && new_cf)
-        {
-            tidesdb_drop_column_family(tidesdb_instance, old_ft_cf);
+            int rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_ft_cf, new_ft_cf);
+            if (rename_ret == TDB_ERR_EXISTS)
+            {
+                tidesdb_drop_column_family(tidesdb_instance, new_ft_cf);
+                rename_ret = tidesdb_rename_column_family(tidesdb_instance, old_ft_cf, new_ft_cf);
+                if (rename_ret != TDB_SUCCESS && rename_ret != TDB_ERR_NOT_FOUND)
+                {
+                    tidesdb_drop_column_family(tidesdb_instance, old_ft_cf);
+                }
+            }
         }
     }
 
@@ -4532,15 +4546,20 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
 
         tidesdb_column_family_t *old_cf =
             tidesdb_get_column_family(tidesdb_instance, old_spatial_cf);
-        tidesdb_column_family_t *new_cf =
-            tidesdb_get_column_family(tidesdb_instance, new_spatial_cf);
-        if (old_cf && !new_cf)
+        if (old_cf)
         {
-            tidesdb_rename_column_family(tidesdb_instance, old_spatial_cf, new_spatial_cf);
-        }
-        else if (old_cf && new_cf)
-        {
-            tidesdb_drop_column_family(tidesdb_instance, old_spatial_cf);
+            int rename_ret =
+                tidesdb_rename_column_family(tidesdb_instance, old_spatial_cf, new_spatial_cf);
+            if (rename_ret == TDB_ERR_EXISTS)
+            {
+                tidesdb_drop_column_family(tidesdb_instance, new_spatial_cf);
+                rename_ret =
+                    tidesdb_rename_column_family(tidesdb_instance, old_spatial_cf, new_spatial_cf);
+                if (rename_ret != TDB_SUCCESS && rename_ret != TDB_ERR_NOT_FOUND)
+                {
+                    tidesdb_drop_column_family(tidesdb_instance, old_spatial_cf);
+                }
+            }
         }
     }
 
@@ -4988,6 +5007,32 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
         DBUG_RETURN(ret);
     }
 
+    /* We update fulltext index entries */
+    for (uint i = 0; i < share->num_ft_indexes; i++)
+    {
+        ret = delete_ft_words(i, old_data, txn);
+        if (ret)
+        {
+            if (own_txn)
+            {
+                tidesdb_txn_rollback(txn);
+                tidesdb_txn_free(txn);
+            }
+            DBUG_RETURN(ret);
+        }
+
+        ret = insert_ft_words(i, new_data, txn);
+        if (ret)
+        {
+            if (own_txn)
+            {
+                tidesdb_txn_rollback(txn);
+                tidesdb_txn_free(txn);
+            }
+            DBUG_RETURN(ret);
+        }
+    }
+
     for (uint i = 0; i < share->num_spatial_indexes; i++)
     {
         ret = delete_spatial_entry(i, old_data, txn);
@@ -5051,38 +5096,110 @@ int ha_tidesdb::delete_row(const uchar *buf)
         if (ret) DBUG_RETURN(ret);
     }
 
-    if (!current_txn)
+    tidesdb_txn_t *txn = NULL;
+    bool own_txn = false;
+
+    if (current_txn)
     {
-        sql_print_error("TidesDB: No transaction available for delete");
-        DBUG_RETURN(HA_ERR_GENERIC);
+        txn = current_txn;
+    }
+    else
+    {
+        /* We check for THD-level transaction (multi-statement transaction) */
+        THD *thd = ha_thd();
+        tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+        if (thd_txn)
+        {
+            txn = thd_txn;
+        }
+        else
+        {
+            /* No transaction available, we create one for this operation */
+            ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+            if (ret != TDB_SUCCESS)
+            {
+                sql_print_error("TidesDB: Failed to begin transaction for delete: %d", ret);
+                DBUG_RETURN(HA_ERR_GENERIC);
+            }
+            own_txn = true;
+        }
     }
 
-    ret = check_foreign_key_constraints_delete(buf, current_txn);
-    if (ret) DBUG_RETURN(ret);
+    ret = check_foreign_key_constraints_delete(buf, txn);
+    if (ret)
+    {
+        if (own_txn)
+        {
+            tidesdb_txn_rollback(txn);
+            tidesdb_txn_free(txn);
+        }
+        DBUG_RETURN(ret);
+    }
 
     for (uint i = 0; i < table->s->keys; i++)
     {
-        ret = delete_index_entry(i, buf, current_txn);
-        if (ret) DBUG_RETURN(ret);
+        ret = delete_index_entry(i, buf, txn);
+        if (ret)
+        {
+            if (own_txn)
+            {
+                tidesdb_txn_rollback(txn);
+                tidesdb_txn_free(txn);
+            }
+            DBUG_RETURN(ret);
+        }
     }
 
     for (uint i = 0; i < share->num_ft_indexes; i++)
     {
-        ret = delete_ft_words(i, buf, current_txn);
-        if (ret) DBUG_RETURN(ret);
+        ret = delete_ft_words(i, buf, txn);
+        if (ret)
+        {
+            if (own_txn)
+            {
+                tidesdb_txn_rollback(txn);
+                tidesdb_txn_free(txn);
+            }
+            DBUG_RETURN(ret);
+        }
     }
 
     for (uint i = 0; i < share->num_spatial_indexes; i++)
     {
-        ret = delete_spatial_entry(i, buf, current_txn);
-        if (ret) DBUG_RETURN(ret);
+        ret = delete_spatial_entry(i, buf, txn);
+        if (ret)
+        {
+            if (own_txn)
+            {
+                tidesdb_txn_rollback(txn);
+                tidesdb_txn_free(txn);
+            }
+            DBUG_RETURN(ret);
+        }
     }
 
-    ret = tidesdb_txn_delete(current_txn, share->cf, key, key_len);
+    ret = tidesdb_txn_delete(txn, share->cf, key, key_len);
     if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
     {
+        if (own_txn)
+        {
+            tidesdb_txn_rollback(txn);
+            tidesdb_txn_free(txn);
+        }
         sql_print_error("TidesDB: Failed to delete row: %d", ret);
         DBUG_RETURN(HA_ERR_GENERIC);
+    }
+
+    if (own_txn)
+    {
+        ret = tidesdb_txn_commit(txn);
+        tidesdb_txn_free(txn);
+
+        if (ret != TDB_SUCCESS)
+        {
+            sql_print_error("TidesDB: Failed to commit delete transaction: %d", ret);
+            DBUG_RETURN(HA_ERR_GENERIC);
+        }
     }
 
     stats.records--;
@@ -5170,15 +5287,12 @@ int ha_tidesdb::rnd_end()
 
     if (scan_txn_owned && current_txn)
     {
-        if (is_read_only_scan)
-        {
-            tidesdb_txn_free(current_txn);
-        }
-        else
-        {
-            tidesdb_txn_rollback(current_txn);
-            tidesdb_txn_free(current_txn);
-        }
+        /*
+          Always call tidesdb_txn_rollback() before tidesdb_txn_free() to ensure
+          proper cleanup of internal transaction state, even for read-only scans.
+        */
+        tidesdb_txn_rollback(current_txn);
+        tidesdb_txn_free(current_txn);
         current_txn = NULL;
         scan_txn_owned = false;
         is_read_only_scan = false;
@@ -7694,11 +7808,22 @@ static int ft_search_word(tidesdb_txn_t *txn, tidesdb_column_family_t *ft_cf, co
                                        MYF(MY_WME | MY_ZEROFILL));
     *out_count = 0;
 
-    if (!*out_pks || !*out_pk_lens) return -1;
+    if (!*out_pks || !*out_pk_lens)
+    {
+        if (*out_pks) my_free(*out_pks);
+        if (*out_pk_lens) my_free(*out_pk_lens);
+        *out_pks = NULL;
+        *out_pk_lens = NULL;
+        return -1;
+    }
 
     tidesdb_iter_t *iter = NULL;
     if (tidesdb_iter_new(txn, ft_cf, &iter) != TDB_SUCCESS)
     {
+        my_free(*out_pks);
+        my_free(*out_pk_lens);
+        *out_pks = NULL;
+        *out_pk_lens = NULL;
         return -1;
     }
 
@@ -8455,6 +8580,7 @@ int ha_tidesdb::check(THD *thd, HA_CHECK_OPT *check_opt)
     ret = tidesdb_iter_new(txn, share->cf, &iter);
     if (ret != TDB_SUCCESS)
     {
+        tidesdb_txn_rollback(txn);
         tidesdb_txn_free(txn);
         DBUG_RETURN(HA_ADMIN_FAILED);
     }
@@ -8469,6 +8595,7 @@ int ha_tidesdb::check(THD *thd, HA_CHECK_OPT *check_opt)
     }
 
     tidesdb_iter_free(iter);
+    tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
 
     share->row_count = count;
@@ -9446,6 +9573,7 @@ int ha_tidesdb::rebuild_secondary_index(KEY *key_info, const char *key_name, TAB
         tidesdb_txn_rollback(read_txn);
         tidesdb_txn_free(read_txn);
         my_free(row_buf);
+        my_free(idx_key_buf);
         sql_print_error("TidesDB: Failed to create rebuild iterator: %d", ret);
         DBUG_RETURN(HA_ERR_GENERIC);
     }
@@ -9458,6 +9586,7 @@ int ha_tidesdb::rebuild_secondary_index(KEY *key_info, const char *key_name, TAB
         tidesdb_txn_rollback(read_txn);
         tidesdb_txn_free(read_txn);
         my_free(row_buf);
+        my_free(idx_key_buf);
         sql_print_error("TidesDB: Failed to begin write transaction: %d", ret);
         DBUG_RETURN(HA_ERR_GENERIC);
     }
