@@ -31,10 +31,7 @@
 #pragma interface /* gcc class implementation */
 #endif
 
-/* handler.h includes ft_global.h and other required headers */
 #include "handler.h"
-
-/* Include TidesDB header after MariaDB headers */
 #ifdef __cplusplus
 extern "C"
 {
@@ -57,24 +54,227 @@ extern "C"
 /* Maximum number of foreign keys per table */
 #define TIDESDB_MAX_FK 32
 
+/* Maximum columns in a foreign key */
+#define TIDESDB_FK_MAX_COLS 16
+
+/* FK/table name buffer size */
+#define TIDESDB_FK_NAME_MAX_LEN 128
+
+/* Table name buffer size */
+#define TIDESDB_TABLE_NAME_MAX_LEN 256
+
+/* Max referencing tables for FK */
+#define TIDESDB_MAX_REFERENCING 16
+
+/* Max supported key length */
+#define TIDESDB_MAX_KEY_LENGTH 3072
+
+/* Platform-specific path separator */
+#ifdef _WIN32
+#define TIDESDB_PATH_SEP     '\\'
+#define TIDESDB_PATH_SEP_STR "\\"
+#else
+#define TIDESDB_PATH_SEP     '/'
+#define TIDESDB_PATH_SEP_STR "/"
+#endif
+
+/* Buffer sizes */
+#define TIDESDB_CF_NAME_BUF_SIZE         256
+#define TIDESDB_CF_DROPPING_SUFFIX       "__dropping_%lu"
+#define TIDESDB_CF_TRUNCATING_SUFFIX     "__truncating_%lu"
+#define TIDESDB_IDX_CF_NAME_BUF_SIZE     512
+#define TIDESDB_STATUS_BUF_SIZE          16384
+#define TIDESDB_SAVEPOINT_NAME_LEN       64
+#define TIDESDB_TIMESTAMP_BUF_SIZE       32
+#define TIDESDB_ENCRYPTION_IV_SIZE       16
+#define TIDESDB_ENCRYPTION_VERSION_SIZE  4
+#define TIDESDB_ENCRYPTION_KEY_SIZE      32
+#define TIDESDB_FK_KEY_BUF_SIZE          1024
+#define TIDESDB_FK_KEY_RESERVE           100
+#define TIDESDB_FK_COL_META_SIZE         9
+#define TIDESDB_FT_PREFIX_BUF_SIZE       258
+#define TIDESDB_FT_MAX_MATCHES           10000
+#define TIDESDB_FT_SMALL_SET_THRESHOLD   16
+#define TIDESDB_FT_HASH_ENTRY_LEN_SIZE   4
+#define TIDESDB_INITIAL_KEY_BUF_CAPACITY 256
+#define TIDESDB_BLOB_LEN_PREFIX_SIZE     4
+#define TIDESDB_PACK_BUFFER_MIN_CAPACITY 4096
+#define TIDESDB_FT_WORD_BUF_SIZE         256
+#define TIDESDB_FT_MAX_QUERY_WORDS_CAP   256
+#define TIDESDB_ASCII_CASE_OFFSET        32
+
+/* Spatial/geometry constants */
+#define TIDESDB_ZORDER_BITS             32
+#define TIDESDB_ZORDER_MAX_VALUE        0xFFFFFFFF
+#define TIDESDB_ZORDER_KEY_SIZE         8
+#define TIDESDB_MIN_WKB_POINT_WITH_SRID 25
+#define TIDESDB_WKB_SRID_OFFSET         4
+#define TIDESDB_WKB_SRID_SIZE           4
+#define TIDESDB_WKB_BYTE_ORDER_OFFSET   0
+#define TIDESDB_WKB_BYTE_ORDER_SIZE     1
+#define TIDESDB_WKB_TYPE_SIZE           4
+#define TIDESDB_WKB_HEADER_SIZE         5
+#define TIDESDB_WKB_X_OFFSET            5
+#define TIDESDB_WKB_Y_OFFSET            13
+#define TIDESDB_WKB_COORD_SIZE          8
+#define TIDESDB_WKB_POINT_SIZE          16
+#define TIDESDB_WKB_NUM_POINTS_SIZE     4
+#define TIDESDB_WKB_MIN_LINESTRING_LEN  9
+#define TIDESDB_WKB_TYPE_POINT          1
+#define TIDESDB_WKB_TYPE_LINESTRING     2
+#define TIDESDB_WKB_TYPE_POLYGON        3
+#define TIDESDB_WKB_TYPE_MULTIPOINT     4
+#define TIDESDB_WKB_TYPE_MASK           0xFF
+#define TIDESDB_WKB_LITTLE_ENDIAN       1
+
+/* Vlog threshold constants */
+#define TIDESDB_VLOG_LARGE_VALUE_THRESHOLD  512
+#define TIDESDB_VLOG_MEDIUM_VALUE_THRESHOLD 256
+#define TIDESDB_VLOG_OVERHEAD_LARGE         1.3
+#define TIDESDB_VLOG_OVERHEAD_MEDIUM        1.1
+#define TIDESDB_VLOG_FACTOR_LARGE           1.4
+#define TIDESDB_VLOG_FACTOR_MEDIUM          1.15
+
+/* Cost model constants */
+#define TIDESDB_BLOCK_SIZE                  65536.0
+#define TIDESDB_MIN_AVG_ROW_SIZE            50
+#define TIDESDB_MERGE_OVERHEAD_FACTOR       0.05
+#define TIDESDB_CACHE_EFFECTIVENESS_FACTOR  0.9
+#define TIDESDB_MIN_CACHE_FACTOR            0.1
+#define TIDESDB_BTREE_FORMAT_OVERHEAD       1.02
+#define TIDESDB_CPU_COST_PER_KEY            0.001
+#define TIDESDB_FALLBACK_ROW_ESTIMATE       100
+#define TIDESDB_FALLBACK_RECORD_COUNT       1000
+#define TIDESDB_FALLBACK_DATA_FILE_LENGTH   (1024 * 1024)
+#define TIDESDB_MIN_IO_COST                 1.0
+#define TIDESDB_READ_TIME_BASE_IO           0.1
+#define TIDESDB_SEEK_COST_BASE              0.2
+#define TIDESDB_BTREE_HEIGHT_COST_BASE      0.2
+#define TIDESDB_BTREE_HEIGHT_COST_PER_LEVEL 0.15
+#define TIDESDB_BTREE_MAX_FORMAT_FACTOR     0.8
+#define TIDESDB_BTREE_DEFAULT_FORMAT_FACTOR 0.5
+#define TIDESDB_BLOOM_BENEFIT_BASE          0.3
+#define TIDESDB_SECONDARY_IDX_FACTOR        2.0
+#define TIDESDB_FALLBACK_RANGE_COST         0.4
+#define TIDESDB_FALLBACK_ROW_COST           0.02
+#define TIDESDB_SELECTIVITY_CAP             0.1
+#define TIDESDB_SELECTIVITY_DIVISOR         10.0
+#define TIDESDB_RANGE_FACTOR                5.0
+#define TIDESDB_RANGE_MAX_PERCENT           30
+
+/* Configuration defaults */
+#define TIDESDB_DEFAULT_FLUSH_THREADS            2
+#define TIDESDB_DEFAULT_COMPACTION_THREADS       2
+#define TIDESDB_DEFAULT_BLOCK_CACHE_SIZE         (256ULL * 1024 * 1024)
+#define TIDESDB_DEFAULT_WRITE_BUFFER_SIZE        (64ULL * 1024 * 1024)
+#define TIDESDB_DEFAULT_COMPRESSION_ALGO         2
+#define TIDESDB_DEFAULT_SYNC_MODE                2
+#define TIDESDB_DEFAULT_SYNC_INTERVAL_US         128000
+#define TIDESDB_DEFAULT_BLOOM_FPR                0.01
+#define TIDESDB_DEFAULT_ENCRYPTION_KEY_ID        1
+#define TIDESDB_DEFAULT_CHANGE_BUFFER_SIZE       1024
+#define TIDESDB_DEFAULT_ISOLATION                1
+#define TIDESDB_DEFAULT_LEVEL_SIZE_RATIO         10
+#define TIDESDB_DEFAULT_SKIP_LIST_MAX_LEVEL      12
+#define TIDESDB_DEFAULT_INDEX_SAMPLE_RATIO       1
+#define TIDESDB_DEFAULT_TTL                      0
+#define TIDESDB_DEFAULT_LOG_LEVEL                1
+#define TIDESDB_DEFAULT_MIN_LEVELS               5
+#define TIDESDB_DEFAULT_DIVIDING_LEVEL_OFFSET    2
+#define TIDESDB_DEFAULT_SKIP_LIST_PROBABILITY    0.25
+#define TIDESDB_DEFAULT_BLOCK_INDEX_PREFIX_LEN   16
+#define TIDESDB_DEFAULT_KLOG_VALUE_THRESHOLD     512
+#define TIDESDB_DEFAULT_MIN_DISK_SPACE           (100ULL * 1024 * 1024)
+#define TIDESDB_DEFAULT_L1_FILE_COUNT_TRIGGER    4
+#define TIDESDB_DEFAULT_L0_QUEUE_STALL_THRESHOLD 20
+#define TIDESDB_DEFAULT_MAX_OPEN_SSTABLES        256
+#define TIDESDB_DEFAULT_LOG_TRUNCATION_AT        (24ULL * 1024 * 1024)
+#define TIDESDB_DEFAULT_ACTIVE_TXN_BUFFER_SIZE   (64ULL * 1024)
+
+/* Fulltext search defaults */
+#define TIDESDB_DEFAULT_FT_MIN_WORD_LEN    4
+#define TIDESDB_DEFAULT_FT_MAX_WORD_LEN    84
+#define TIDESDB_DEFAULT_FT_MAX_QUERY_WORDS 32
+
+/* Encryption constants */
+#define TIDESDB_ENCRYPTION_KEY_VERSION_LEN 4
+#define TIDESDB_ENCRYPTION_IV_LEN          16
+#define TIDESDB_ENCRYPTION_KEY_LEN         32
+#define TIDESDB_ENCRYPTION_MIN_SRC_LEN     20
+
+/* Primary key / Hidden PK constants */
+#define TIDESDB_HIDDEN_PK_LEN              8
+#define TIDESDB_HIDDEN_PK_PERSIST_INTERVAL 100
+#define TIDESDB_HIDDEN_PK_META_KEY         "\x00__hidden_pk_max__"
+#define TIDESDB_HIDDEN_PK_META_KEY_LEN     19
+#define TIDESDB_AUTO_INC_META_KEY          "\x00__auto_inc_max__"
+#define TIDESDB_AUTO_INC_META_KEY_LEN      17
+
+/* Row packing constants */
+#define TIDESDB_BLOB_LENGTH_PREFIX    4
+#define TIDESDB_PACK_BUFFER_THRESHOLD 4096
+#define TIDESDB_MB_DIVISOR            (1024.0 * 1024.0)
+
+/* Optimizer cost model constants */
+#define TIDESDB_KEY_LOOKUP_COST_BTREE 0.0008
+#define TIDESDB_KEY_LOOKUP_COST_BLOCK 0.0020
+#define TIDESDB_ROW_LOOKUP_COST_BTREE 0.0010
+#define TIDESDB_ROW_LOOKUP_COST_BLOCK 0.0025
+#define TIDESDB_KEY_NEXT_FIND_COST    0.00012
+#define TIDESDB_ROW_NEXT_FIND_COST    0.00015
+#define TIDESDB_KEY_COPY_COST         0.000015
+#define TIDESDB_ROW_COPY_COST         0.000060
+#define TIDESDB_DISK_READ_COST        0.000875
+#define TIDESDB_DISK_READ_RATIO       0.20
+#define TIDESDB_INDEX_BLOCK_COPY_COST 0.000030
+#define TIDESDB_KEY_CMP_COST          0.000011
+#define TIDESDB_ROWID_CMP_COST        0.000006
+#define TIDESDB_ROWID_COPY_COST       0.000012
+
+/* Spatial/Geometry constants */
+#define TIDESDB_MIN_WKB_POINT_SIZE    25
+#define TIDESDB_WKB_SRID_LEN          4
+#define TIDESDB_MIN_WKB_POINT_NO_SRID 21
+#define TIDESDB_WGS84_LON_MAX         180.0
+#define TIDESDB_WGS84_LAT_MAX         90.0
+#define TIDESDB_ZORDER_BITS           32
+
+/* FK rule constants */
+#define TIDESDB_FK_RULE_RESTRICT  0
+#define TIDESDB_FK_RULE_CASCADE   1
+#define TIDESDB_FK_RULE_SET_NULL  2
+#define TIDESDB_FK_RULE_NO_ACTION 3
+
+/* Miscellaneous constants */
+#define TIDESDB_OPEN_TABLES_HASH_SIZE     32
+#define TIDESDB_DEFAULT_ROW_ESTIMATE      1000
+#define TIDESDB_DEFAULT_DATA_FILE_LENGTH  (1024ULL * 1024)
+#define TIDESDB_FLUSH_WAIT_MAX_ITERATIONS 1000
+#define TIDESDB_FLUSH_WAIT_SLEEP_US       1000
+#define TIDESDB_RENAME_RETRY_COUNT        3
+#define TIDESDB_RENAME_RETRY_SLEEP_US     50000
+#define TIDESDB_AUTO_INC_PERSIST_INTERVAL 1000
+#define TIDESDB_INDEX_REBUILD_BATCH_SIZE  1000
+#define TIDESDB_BLOCK_SIZE                65536.0
+
 /* Foreign key constraint structure */
 typedef struct st_tidesdb_fk
 {
-    char fk_name[128];           /* FK constraint name */
-    char ref_db[128];            /* Referenced database */
-    char ref_table[128];         /* Referenced table */
-    uint num_cols;               /* Number of columns in FK */
-    uint fk_col_idx[16];         /* Column indices in this table */
-    char ref_col_names[16][128]; /* Referenced column names */
-    int delete_rule;             /* 0=RESTRICT, 1=CASCADE, 2=SET NULL, 3=NO ACTION */
-    int update_rule;             /* 0=RESTRICT, 1=CASCADE, 2=SET NULL, 3=NO ACTION */
+    char fk_name[TIDESDB_FK_NAME_MAX_LEN];   /* FK constraint name */
+    char ref_db[TIDESDB_FK_NAME_MAX_LEN];    /* Referenced database */
+    char ref_table[TIDESDB_FK_NAME_MAX_LEN]; /* Referenced table */
+    uint num_cols;                           /* Number of columns in FK */
+    uint fk_col_idx[TIDESDB_FK_MAX_COLS];    /* Column indices in this table */
+    char ref_col_names[TIDESDB_FK_MAX_COLS][TIDESDB_FK_NAME_MAX_LEN]; /* Referenced column names */
+    int delete_rule; /* TIDESDB_FK_RULE_RESTRICT, CASCADE, SET_NULL, NO_ACTION */
+    int update_rule; /* TIDESDB_FK_RULE_RESTRICT, CASCADE, SET_NULL, NO_ACTION */
 } TIDESDB_FK;
 
 /**
   Shared table metadata structure.
 
-  Note on locking: The mutex and THR_LOCK here are for MariaDB's internal
-  table management (open/close coordination), NOT for row-level locking.
+  Note on locking -- The mutex and THR_LOCK here are for MariaDB's internal
+  table management (open/close coordination), not for row-level locking.
   TidesDB uses MVCC and is fundamentally lock-free for data access.
 */
 typedef struct st_tidesdb_share
@@ -82,8 +282,8 @@ typedef struct st_tidesdb_share
     char *table_name;
     uint table_name_length;
     uint use_count;
-    pthread_mutex_t mutex; /* For use_count and metadata updates only */
-    THR_LOCK lock;         /* Required by MariaDB, not used for data locking */
+    pthread_mutex_t mutex;
+    THR_LOCK lock;
 
     /* TidesDB column family for this table (primary data) */
     tidesdb_column_family_t *cf;
@@ -127,12 +327,15 @@ typedef struct st_tidesdb_share
     uint num_fk;
 
     /* Tables that reference this table (parent FKs) -- for DELETE/UPDATE checks */
-    char referencing_tables[TIDESDB_MAX_FK][256];      /* "db.table" format */
-    int referencing_fk_rules[TIDESDB_MAX_FK];          /* delete_rule for each referencing FK */
-    uint referencing_fk_cols[TIDESDB_MAX_FK][16];      /* FK column indices in child table */
-    uint referencing_fk_col_count[TIDESDB_MAX_FK];     /* Number of FK columns per reference */
-    size_t referencing_fk_offsets[TIDESDB_MAX_FK][16]; /* Byte offset of each FK col in child row */
-    size_t referencing_fk_lengths[TIDESDB_MAX_FK][16]; /* Byte length of each FK column */
+    char referencing_tables[TIDESDB_MAX_FK][TIDESDB_TABLE_NAME_MAX_LEN]; /* "db.table" format */
+    int referencing_fk_rules[TIDESDB_MAX_FK]; /* delete_rule for each referencing FK */
+    uint referencing_fk_cols[TIDESDB_MAX_FK]
+                            [TIDESDB_FK_MAX_COLS]; /* FK column indices in child table */
+    uint referencing_fk_col_count[TIDESDB_MAX_FK]; /* Number of FK columns per reference */
+    size_t referencing_fk_offsets[TIDESDB_MAX_FK][TIDESDB_FK_MAX_COLS]; /* Byte offset of each FK
+                                                                           col in child row */
+    size_t referencing_fk_lengths[TIDESDB_MAX_FK]
+                                 [TIDESDB_FK_MAX_COLS]; /* Byte length of each FK column */
 
     /* Change buffer for secondary index updates */
     struct
@@ -155,9 +358,9 @@ class ha_tidesdb : public handler
     /**
       THR_LOCK_DATA is required by the MariaDB handler interface.
       However, TidesDB uses MVCC and is fundamentally lock-free:
-      - Reads never block (snapshot isolation)
-      - Writes use optimistic concurrency (conflict detection at commit)
-      - No row-level or table-level locking
+      -- Reads never block (snapshot isolation)
+      -- Writes use optimistic concurrency (conflict detection at commit)
+      -- No row-level or table-level locking
       This lock structure is only used for MariaDB's internal bookkeeping.
     */
     THR_LOCK_DATA lock;
@@ -183,7 +386,7 @@ class ha_tidesdb : public handler
     /* Current row position (for rnd_pos) -- pre-allocated buffer */
     uchar *current_key;
     size_t current_key_len;
-    size_t current_key_capacity; /* Pre-allocated capacity to avoid per-row malloc */
+    size_t current_key_capacity;
 
     /* Bulk insert state */
     bool bulk_insert_active;
@@ -233,6 +436,10 @@ class ha_tidesdb : public handler
     /* Buffer for saved old key in update_row */
     uchar *saved_key_buffer;
     size_t saved_key_buffer_capacity;
+
+    /* SCALABILITY FIX: Buffer pooling for insert_index_entry() PK value */
+    uchar *idx_pk_buffer;
+    size_t idx_pk_buffer_capacity;
 
     /* Helper methods */
     int pack_row(const uchar *buf, uchar **packed, size_t *packed_len);
@@ -373,7 +580,7 @@ class ha_tidesdb : public handler
     }
     uint max_supported_key_length() const
     {
-        return 3072;
+        return TIDESDB_MAX_KEY_LENGTH;
     }
 
     /** @brief
@@ -391,12 +598,12 @@ class ha_tidesdb : public handler
     ha_rows records() override;
 
     /** @brief
-      Truncate table - faster than delete_all_rows.
+      Truncate table -- faster than delete_all_rows.
     */
     int truncate() override;
 
     /** @brief
-      Release row lock after read (MVCC - no-op for TidesDB).
+      Release row lock after read (MVCC -- no-op for TidesDB).
     */
     void unlock_row() override
     {
@@ -416,8 +623,8 @@ class ha_tidesdb : public handler
       Cost estimates for the optimizer.
 
       LSM-tree cost model considerations:
-      -- Point lookups: memtable check + bloom filter checks + level lookups
-      -- Range scans: merge across multiple levels (more expensive than B-tree)
+      -- Point lookups -- memtable check + bloom filter checks + level lookups
+      -- Range scans -- merge across multiple levels (more expensive than B-tree)
       -- Block cache hits are much faster than disk reads
     */
     virtual IO_AND_CPU_COST scan_time() override;

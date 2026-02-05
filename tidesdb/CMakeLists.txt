@@ -27,32 +27,56 @@ FIND_LIBRARY(TIDESDB_LIB
     /usr/lib
     /usr/lib/x86_64-linux-gnu
     /opt/local/lib
+    /opt/homebrew/lib
+    "C:/Program Files/tidesdb/lib"
+    "C:/Program Files (x86)/tidesdb/lib"
+  PATH_SUFFIXES lib
 )
 
-# Find compression libraries -- always use FIND_LIBRARY to get full paths.
-# We cannot use pkg-config because it returns library names like "zstd" which
-# conflict with MariaDB's own "zstd" MODULE target (provider_zstd plugin).
+############# Find compression libraries -- always use FIND_LIBRARY to get full paths.    #############
+############# We cannot use pkg-config because it returns library names like "zstd" which #############
+############# conflict with MariaDB's own "zstd" MODULE target (provider_zstd plugin).    #############
 FIND_LIBRARY(ZSTD_LIBRARY
-  NAMES zstd
-  HINTS ENV LIBRARY_PATH
-  PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu /opt/homebrew/lib
+  NAMES zstd zstd_static
+  HINTS ENV LIBRARY_PATH ENV VCPKG_INSTALLED_DIR
+  PATHS 
+    /usr/local/lib 
+    /usr/lib 
+    /usr/lib/x86_64-linux-gnu 
+    /opt/homebrew/lib
+    "C:/vcpkg/installed/x64-windows/lib"
+    "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/lib"
 )
 
 FIND_LIBRARY(LZ4_LIBRARY
   NAMES lz4
-  HINTS ENV LIBRARY_PATH
-  PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu /opt/homebrew/lib
+  HINTS ENV LIBRARY_PATH ENV VCPKG_INSTALLED_DIR
+  PATHS 
+    /usr/local/lib 
+    /usr/lib 
+    /usr/lib/x86_64-linux-gnu 
+    /opt/homebrew/lib
+    "C:/vcpkg/installed/x64-windows/lib"
+    "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/lib"
 )
 
 FIND_LIBRARY(SNAPPY_LIBRARY
   NAMES snappy
-  HINTS ENV LIBRARY_PATH
-  PATHS /usr/local/lib /usr/lib /usr/lib/x86_64-linux-gnu /opt/homebrew/lib
+  HINTS ENV LIBRARY_PATH ENV VCPKG_INSTALLED_DIR
+  PATHS 
+    /usr/local/lib 
+    /usr/lib 
+    /usr/lib/x86_64-linux-gnu 
+    /opt/homebrew/lib
+    "C:/vcpkg/installed/x64-windows/lib"
+    "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/lib"
 )
 
-# Find include directories
+############# Find include directories #############
+# Look for tidesdb/db.h to get the parent include directory
+# The code uses #include <tidesdb/db.h> so we need the parent of the tidesdb folder
 FIND_PATH(TIDESDB_INCLUDE_DIR
-  NAMES tidesdb.h
+  NAMES tidesdb/db.h
   HINTS
     ENV TIDESDB_ROOT
     ENV CPATH
@@ -60,9 +84,13 @@ FIND_PATH(TIDESDB_INCLUDE_DIR
     /usr/local/include
     /usr/include
     /opt/local/include
+    /opt/homebrew/include
+    "C:/tidesdb/include"
+    "C:/Program Files/tidesdb/include"
+    "C:/Program Files (x86)/tidesdb/include"
 )
 
-# Validate required dependencies
+############# Validate required dependencies #############
 IF(NOT TIDESDB_LIB)
   MESSAGE(STATUS "TidesDB: library not found - plugin will not be built. Install TidesDB or set TIDESDB_ROOT.")
   RETURN()
@@ -78,17 +106,31 @@ IF(NOT LZ4_LIBRARY)
   RETURN()
 ENDIF()
 
-# Add include directories
+############# Add include directories #############
 IF(TIDESDB_INCLUDE_DIR)
   INCLUDE_DIRECTORIES(${TIDESDB_INCLUDE_DIR})
 ENDIF()
 
-# Build list of libraries to link - use full paths from FIND_LIBRARY
+############# Build list of libraries to link -- use full paths from FIND_LIBRARY ############
 SET(TIDESDB_LIBS ${TIDESDB_LIB} ${ZSTD_LIBRARY} ${LZ4_LIBRARY})
 
 IF(SNAPPY_LIBRARY)
   LIST(APPEND TIDESDB_LIBS ${SNAPPY_LIBRARY})
 ENDIF()
 
-# Define the storage engine using MariaDB's MYSQL_ADD_PLUGIN macro
+############# On Windows, we need pthreads library ############
+IF(WIN32)
+  FIND_LIBRARY(PTHREADS_LIBRARY
+    NAMES pthreadVC3 pthreadVC2 pthread pthreads
+    HINTS ENV LIBRARY_PATH ENV VCPKG_INSTALLED_DIR
+    PATHS
+      "C:/vcpkg/installed/x64-windows/lib"
+      "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/lib"
+  )
+  IF(PTHREADS_LIBRARY)
+    LIST(APPEND TIDESDB_LIBS ${PTHREADS_LIBRARY})
+  ENDIF()
+ENDIF()
+
+############# Define the storage engine using MariaDB's MYSQL_ADD_PLUGIN macro #############
 MYSQL_ADD_PLUGIN(tidesdb ha_tidesdb.cc STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS})

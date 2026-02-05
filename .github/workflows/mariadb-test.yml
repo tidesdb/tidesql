@@ -16,7 +16,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
     
     steps:
-    - name: Checkout TidesQL
+    - name: Checkout TideSQL
       uses: actions/checkout@v4
       with:
         path: tidesql
@@ -28,6 +28,7 @@ jobs:
         sudo apt-get install -y \
           build-essential \
           cmake \
+          ninja-build \
           git \
           libncurses5-dev \
           libssl-dev \
@@ -43,28 +44,84 @@ jobs:
           libboost-dev \
           libpcre2-dev \
           libpmem-dev \
-          libjemalloc-dev
+          libjemalloc-dev \
+          ccache
 
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
       run: |
         brew install \
-          llvm \
-          cmake \
-          openssl@3 \
-          lz4 \
-          zstd \
-          snappy \
           bison \
-          boost \
-          pcre2 \
-          libevent \
-          jemalloc \
+          byacc \
+          cmake \
+          git \
           gnutls \
           libxml2 \
-          zlib
-        echo "$(brew --prefix bison)/bin" >> $GITHUB_PATH
-        echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+          m4 \
+          openssl@3 \
+          pcre \
+          pcre2 \
+          zlib \
+          zstd \
+          ninja \
+          ncurses \
+          snappy \
+          lz4 \
+          ccache
+        
+        if [ $(uname -m) = "x86_64" ]; then
+          HOMEBREW_BASE_DIR="/usr/local"
+        else
+          HOMEBREW_BASE_DIR="/opt/homebrew"
+        fi
+        echo "HOMEBREW_BASE_DIR=${HOMEBREW_BASE_DIR}" >> $GITHUB_ENV
+        
+        echo "${HOMEBREW_BASE_DIR}/opt/bison/bin" >> $GITHUB_PATH
+
+    - name: Setup vcpkg binary cache (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $env:VCPKG_DEFAULT_BINARY_CACHE = "$env:GITHUB_WORKSPACE\vcpkg_cache"
+        New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE
+        echo "VCPKG_DEFAULT_BINARY_CACHE=$env:VCPKG_DEFAULT_BINARY_CACHE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Cache vcpkg packages (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: vcpkg_cache
+        key: vcpkg-windows-x64-${{ hashFiles('**/CMakeLists.txt') }}
+        restore-keys: |
+          vcpkg-windows-x64-
+
+    - name: Cache TidesDB library
+      uses: actions/cache@v4
+      with:
+        path: |
+          tidesdb-lib/build
+          /usr/local/lib/libtidesdb*
+          /usr/local/include/tidesdb*
+          C:/tidesdb
+        key: tidesdb-${{ runner.os }}-${{ hashFiles('tidesql/tidesdb/**') }}
+        restore-keys: |
+          tidesdb-${{ runner.os }}-
+
+    - name: Cache ccache
+      if: runner.os != 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        key: ccache-${{ runner.os }}-${{ github.sha }}
+        restore-keys: |
+          ccache-${{ runner.os }}-
+
+    - name: Configure ccache
+      if: runner.os != 'Windows'
+      run: |
+        ccache --set-config=max_size=500M
+        ccache --set-config=compression=true
+        ccache -z
 
     - name: Install dependencies (Windows)
       if: runner.os == 'Windows'
@@ -72,30 +129,75 @@ jobs:
       run: |
         choco install -y cmake --installargs 'ADD_CMAKE_TO_PATH=System'
         choco install -y strawberryperl
-        choco install -y winflexbison3
-        vcpkg install zstd:x64-windows lz4:x64-windows snappy:x64-windows
+        choco install -y diffutils
+        
+        $wfbZip = "$env:TEMP\winflexbison.zip"
+        $wfbDir = "C:\GnuWin32"
+        New-Item -ItemType Directory -Force -Path $wfbDir | Out-Null
+        Invoke-WebRequest -Uri "https://github.com/lexxmark/winflexbison/releases/download/v2.5.25/win_flex_bison-2.5.25.zip" -OutFile $wfbZip
+        Expand-Archive -Path $wfbZip -DestinationPath $wfbDir -Force
+        
+        Copy-Item "$wfbDir\win_bison.exe" "$wfbDir\bison.exe"
+        Copy-Item "$wfbDir\win_flex.exe" "$wfbDir\flex.exe"
+        
+        echo "C:\GnuWin32" >> $env:GITHUB_PATH
+        
+        cd $env:VCPKG_INSTALLATION_ROOT
+        git pull
+        .\vcpkg.exe install zstd:x64-windows lz4:x64-windows snappy:x64-windows pthreads:x64-windows
+        
         echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+        echo "TIDESDB_ROOT=C:/tidesdb" >> $env:GITHUB_ENV
 
     - name: Get latest MariaDB release tag
       id: mariadb-release
       shell: bash
       run: |
-        LATEST_TAG=$(curl -s https://api.github.com/repos/MariaDB/server/releases/latest | jq -r '.tag_name')
-        echo "tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
-        echo "Latest MariaDB release: ${LATEST_TAG}"
+        for i in 1 2 3; do
+          LATEST_TAG=$(curl -s https://api.github.com/repos/MariaDB/server/releases/latest | jq -r '.tag_name')
+          if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "null" ]; then
+            echo "tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+            echo "Latest MariaDB release: ${LATEST_TAG}"
+            exit 0
+          fi
+          echo "Attempt $i: Failed to get tag (got: $LATEST_TAG), retrying in 5s..."
+          sleep 5
+        done
+        echo "Failed to get MariaDB release tag after 3 attempts, using fallback"
+        echo "tag=mariadb-11.4.5" >> $GITHUB_OUTPUT
 
     - name: Clone MariaDB server
       shell: bash
       run: |
-        git clone --depth 1 --branch ${{ steps.mariadb-release.outputs.tag }} https://github.com/MariaDB/server.git mariadb-server
-        cd mariadb-server
-        git submodule update --init --recursive --depth 1
+        MAX_RETRIES=3
+        for i in $(seq 1 $MAX_RETRIES); do
+          echo "Attempt $i of $MAX_RETRIES: Cloning MariaDB server..."
+          if git clone --depth 1 --branch ${{ steps.mariadb-release.outputs.tag }} https://github.com/MariaDB/server.git mariadb-server; then
+            cd mariadb-server
+            git submodule update --init --recursive --depth 1
+            exit 0
+          fi
+          echo "Clone failed, retrying in 10s..."
+          rm -rf mariadb-server
+          sleep 10
+        done
+        echo "Failed to clone after $MAX_RETRIES attempts"
+        exit 1
 
     - name: Install TidesDB library (Ubuntu)
       if: runner.os == 'Linux'
       run: |
-        git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
+        for i in 1 2 3; do
+          if git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+            break
+          fi
+          echo "Clone failed (attempt $i), retrying in 10s..."
+          rm -rf tidesdb-lib
+          sleep 10
+        done
         cd tidesdb-lib
+        echo "TidesDB commit: $(git rev-parse HEAD)"
+        git log -1 --oneline
         mkdir build && cd build
         cmake ..
         make -j$(nproc)
@@ -104,28 +206,48 @@ jobs:
 
     - name: Install TidesDB library (macOS)
       if: runner.os == 'macOS'
-      env:
-        CC: /opt/homebrew/opt/llvm/bin/clang
-        CXX: /opt/homebrew/opt/llvm/bin/clang++
       run: |
-        git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
+        sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+        export SDKROOT=$(xcrun --show-sdk-path)
+        
+        for i in 1 2 3; do
+          if git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+            break
+          fi
+          echo "Clone failed (attempt $i), retrying in 10s..."
+          rm -rf tidesdb-lib
+          sleep 10
+        done
         cd tidesdb-lib
+        echo "TidesDB commit: $(git rev-parse HEAD)"
+        git log -1 --oneline
         mkdir build && cd build
-        cmake .. -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
+        cmake .. -DCMAKE_OSX_SYSROOT=${SDKROOT} -DOPENSSL_ROOT_DIR=${HOMEBREW_BASE_DIR}/opt/openssl@3
         make -j$(sysctl -n hw.ncpu)
         sudo make install
 
     - name: Install TidesDB library (Windows)
       if: runner.os == 'Windows'
-      shell: cmd
+      shell: bash
       run: |
-        git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
+        for i in 1 2 3; do
+          if git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+            break
+          fi
+          echo "Clone failed (attempt $i), retrying in 10s..."
+          rm -rf tidesdb-lib
+          sleep 10
+        done
         cd tidesdb-lib
+        echo "TidesDB commit: $(git rev-parse HEAD)"
+        git log -1 --oneline
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake -DCMAKE_INSTALL_PREFIX=C:/tidesdb
         cmake --build . --config Release
         cmake --install . --config Release
+        ls -la C:/tidesdb
+        ls -la C:/tidesdb/include
 
     - name: Copy TidesDB storage engine to MariaDB (Unix)
       if: runner.os != 'Windows'
@@ -146,53 +268,90 @@ jobs:
       run: |
         mkdir -p build && cd build
         cmake .. \
+          -G Ninja \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
           -DPLUGIN_TIDESDB=DYNAMIC \
           -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-          -DPLUGIN_ROCKSDB=NO \
-          -DPLUGIN_MROONGA=NO \
-          -DPLUGIN_SPIDER=NO \
-          -DPLUGIN_COLUMNSTORE=NO \
-          -DWITH_UNIT_TESTS=OFF
-        make -j$(nproc)
-
-    - name: Build MariaDB with TidesDB plugin (macOS)
-      if: runner.os == 'macOS'
-      working-directory: mariadb-server
-      env:
-        CC: /opt/homebrew/opt/llvm/bin/clang
-        CXX: /opt/homebrew/opt/llvm/bin/clang++
-        LDFLAGS: "-L/opt/homebrew/opt/llvm/lib/c++ -Wl,-rpath,/opt/homebrew/opt/llvm/lib/c++ -L/opt/homebrew/opt/llvm/lib -L/opt/homebrew/opt/llvm/lib/unwind -lunwind"
-        CPPFLAGS: "-I/opt/homebrew/opt/llvm/include"
-      run: |
-        mkdir -p build && cd build
-        cmake .. \
-          -DCMAKE_C_COMPILER=/opt/homebrew/opt/llvm/bin/clang \
-          -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm/bin/clang++ \
-          -DPLUGIN_TIDESDB=DYNAMIC \
-          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-          -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) \
-          -DWITH_SSL=$(brew --prefix openssl@3) \
           -DPLUGIN_ROCKSDB=NO \
           -DPLUGIN_MROONGA=NO \
           -DPLUGIN_SPIDER=NO \
           -DPLUGIN_COLUMNSTORE=NO \
           -DPLUGIN_CONNECT=NO \
-          -DWITH_UNIT_TESTS=OFF
-        make -j$(sysctl -n hw.ncpu)
+          -DPLUGIN_OQGRAPH=NO \
+          -DPLUGIN_TOKUDB=NO \
+          -DPLUGIN_ARCHIVE=NO \
+          -DWITH_UNIT_TESTS=OFF \
+          -DCONC_WITH_UNITTEST=OFF \
+          -DWITH_MARIABACKUP=OFF \
+          -DWITH_EMBEDDED_SERVER=OFF
+        ninja -j$(nproc)
+        ccache -s
+
+    - name: Build MariaDB with TidesDB plugin (macOS)
+      if: runner.os == 'macOS'
+      working-directory: mariadb-server
+      run: |
+        sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+        
+        sudo rm -rf /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk
+        
+        export SDKROOT=$(xcrun --show-sdk-path)
+        export CC=$(xcrun -find clang)
+        export CXX=$(xcrun -find clang++)
+        
+        mkdir -p mariadb-build && cd mariadb-build
+        cmake .. \
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_C_COMPILER=${CC} \
+          -DCMAKE_CXX_COMPILER=${CXX} \
+          -DCMAKE_OSX_SYSROOT=${SDKROOT} \
+          -DCMAKE_C_FLAGS="-Wno-nullability-completeness" \
+          -DCMAKE_CXX_FLAGS="-Wno-nullability-completeness" \
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+          -DMYSQL_MAINTAINER_MODE=OFF \
+          -DPLUGIN_TIDESDB=DYNAMIC \
+          -DPLUGIN_ARCHIVE=NO \
+          -DPLUGIN_MROONGA=NO \
+          -DPLUGIN_CONNECT=NO \
+          -DPLUGIN_SPIDER=NO \
+          -DPLUGIN_ROCKSDB=NO \
+          -DPLUGIN_OQGRAPH=NO \
+          -DPLUGIN_TOKUDB=NO \
+          -DPLUGIN_COLUMNSTORE=NO \
+          -DWITH_UNIT_TESTS=OFF \
+          -DCONC_WITH_UNITTEST=OFF \
+          -DWITH_MARIABACKUP=OFF \
+          -DWITH_EMBEDDED_SERVER=OFF \
+          -DWITH_SSL=bundled \
+          -DWITH_PCRE=bundled \
+          -G Ninja
+        cmake --build . --parallel $(sysctl -n hw.ncpu)
+        ccache -s
 
     - name: Build MariaDB with TidesDB plugin (Windows)
       if: runner.os == 'Windows'
       shell: cmd
       working-directory: mariadb-server
+      env:
+        TIDESDB_ROOT: C:/tidesdb
       run: |
         mkdir build
         cd build
-        cmake .. -G "Visual Studio 17 2022" -A x64 -DPLUGIN_TIDESDB=DYNAMIC -DPLUGIN_ROCKSDB=NO -DPLUGIN_MROONGA=NO -DPLUGIN_SPIDER=NO -DPLUGIN_COLUMNSTORE=NO -DWITH_UNIT_TESTS=OFF
+        cmake .. -G "Visual Studio 17 2022" -A x64 -DPLUGIN_TIDESDB=DYNAMIC -DPLUGIN_ROCKSDB=NO -DPLUGIN_MROONGA=NO -DPLUGIN_SPIDER=NO -DPLUGIN_COLUMNSTORE=NO -DPLUGIN_CONNECT=NO -DWITH_UNIT_TESTS=OFF -DCMAKE_PREFIX_PATH="C:/tidesdb;%VCPKG_INSTALLATION_ROOT%/installed/x64-windows" -DCMAKE_INCLUDE_PATH="C:/tidesdb/include"
         cmake --build . --config RelWithDebInfo --parallel
 
-    - name: Run TidesDB test suite (Unix)
-      if: runner.os != 'Windows'
+    - name: Run TidesDB test suite (Linux)
+      if: runner.os == 'Linux'
       working-directory: mariadb-server/build
+      run: |
+        ./mysql-test/mtr --suite=tidesdb --parallel=4 --force --retry=1
+
+    - name: Run TidesDB test suite (macOS)
+      if: runner.os == 'macOS'
+      working-directory: mariadb-server/mariadb-build
       run: |
         ./mysql-test/mtr --suite=tidesdb --parallel=4 --force --retry=1
 
@@ -201,4 +360,14 @@ jobs:
       shell: cmd
       working-directory: mariadb-server/build
       run: |
-        perl mysql-test\mysql-test-run.pl --suite=tidesdb --parallel=4 --force --retry=1
+        set PATH=%VCPKG_INSTALLATION_ROOT%\installed\x64-windows\bin;C:\tidesdb\bin;%PATH%
+        perl mysql-test\mysql-test-run.pl --suite=tidesdb --parallel=1 --force --retry=1
+        if %ERRORLEVEL% NEQ 0 (
+          echo === TidesDB Error Logs ===
+          if exist mysql-test\var\log\mysqld.1.err type mysql-test\var\log\mysqld.1.err
+          echo === Test Reject Files ===
+          for /r mysql-test\var\log %%f in (*.reject) do (
+            echo === %%f ===
+            type "%%f"
+          )
+        )

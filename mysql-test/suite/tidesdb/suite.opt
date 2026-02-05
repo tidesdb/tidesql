@@ -1,1 +1,1 @@
---plugin-load-add=ha_tidesdb.so
+--plugin-load-add=$HA_TIDESDB_SO
