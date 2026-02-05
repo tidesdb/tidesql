@@ -7823,6 +7823,14 @@ int ha_tidesdb::optimize(THD *thd, HA_CHECK_OPT *check_opt)
         sql_print_warning("TidesDB: Memtable flush returned: %d", ret);
     }
 
+    /* Wait for async flush to complete before triggering compaction */
+    int wait_count = 0;
+    while (tidesdb_is_flushing(share->cf) && wait_count < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
+    {
+        my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
+        wait_count++;
+    }
+
     /* Now we trigger compaction */
     ret = tidesdb_compact(share->cf);
     if (ret != TDB_SUCCESS)
@@ -8885,6 +8893,14 @@ int ha_tidesdb::repair(THD *thd, HA_CHECK_OPT *check_opt)
         sql_print_warning("TidesDB: Memtable flush returned: %d", ret);
     }
 
+    /* Wait for async flush to complete before triggering compaction */
+    int wait_count = 0;
+    while (tidesdb_is_flushing(share->cf) && wait_count < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
+    {
+        my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
+        wait_count++;
+    }
+
     ret = tidesdb_compact(share->cf);
     if (ret != TDB_SUCCESS)
     {
@@ -8942,6 +8958,14 @@ int ha_tidesdb::discard_or_import_tablespace(my_bool discard)
             if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
             {
                 sql_print_warning("TidesDB: Flush returned: %d", ret);
+            }
+
+            /* Wait for async flush to complete before dropping CF */
+            int wait_count = 0;
+            while (tidesdb_is_flushing(share->cf) && wait_count < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
+            {
+                my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
+                wait_count++;
             }
         }
 
