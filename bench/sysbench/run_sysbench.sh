@@ -16,27 +16,28 @@
 #   ./run_sysbench.sh
 #
 # Environment variables:
-#   DATA_DIR        - Base data directory for MariaDB (will start server automatically)
-#   INNODB_DATA_DIR - Custom InnoDB data/tablespace directory (for fast disk)
-#   TIDESDB_DATA_DIR- Custom TidesDB data directory (for fast disk)
-#   SOCKET          - MySQL socket path (default: MTR socket or DATA_DIR/mysqld.sock)
-#   TABLE_SIZES     - Space-separated list of table sizes (default: "10000")
-#   THREAD_COUNTS   - Space-separated list of thread counts (default: "1")
-#   TIME            - Benchmark duration in seconds (default: 60)
-#   WARMUP          - Warmup duration in seconds before measurement (default: 10)
-#   ENGINES         - Space-separated list of engines to test (default: "InnoDB TidesDB")
-#   WORKLOADS       - Space-separated list of workloads (default: all OLTP workloads)
+#   DATA_DIR              -- Base data directory for MariaDB (will start server automatically)
+#   INNODB_DATA_DIR       -- Custom InnoDB data/tablespace directory (for fast disk)
+#   TIDESDB_DATA_DIR      -- Custom TidesDB data directory (for fast disk)
+#   TIDESDB_USE_BTREE     -- Use B+tree SSTable format (default: ON, set OFF for block layout)
+#   SOCKET                -- MySQL socket path (default: MTR socket or DATA_DIR/mysqld.sock)
+#   TABLE_SIZES           -- Space-separated list of table sizes (default: "10000")
+#   THREAD_COUNTS         -- Space-separated list of thread counts (default: "1")
+#   TIME                  -- Benchmark duration in seconds (default: 60)
+#   WARMUP                -- Warmup duration in seconds before measurement (default: 10)
+#   ENGINES               -- Space-separated list of engines to test (default: "InnoDB TidesDB")
+#   WORKLOADS             -- Space-separated list of workloads (default: all OLTP workloads)
 #
 # Available workloads:
-#   oltp_read_only      - Read-only transactions (point selects + range scans)
-#   oltp_write_only     - Write-only transactions (inserts, updates, deletes)
-#   oltp_read_write     - Mixed read-write transactions
-#   oltp_point_select   - Pure point lookups (tests bloom filters)
-#   oltp_insert         - Pure inserts (LSM-tree strength)
-#   oltp_update_index   - Updates on indexed columns
-#   oltp_update_non_index - Updates on non-indexed columns
-#   oltp_delete         - Delete operations
-#   select_random_ranges - Range scans (tests LSM merge overhead)
+#   oltp_read_only        -- Read-only transactions (point selects + range scans)
+#   oltp_write_only       -- Write-only transactions (inserts, updates, deletes)
+#   oltp_read_write       -- Mixed read-write transactions
+#   oltp_point_select     -- Pure point lookups (tests bloom filters)
+#   oltp_insert           -- Pure inserts (LSM-tree strength)
+#   oltp_update_index     -- Updates on indexed columns
+#   oltp_update_non_index -- Updates on non-indexed columns
+#   oltp_delete           -- Delete operations
+#   select_random_ranges  -- Range scans (tests LSM merge overhead)
 #
 # Example with custom I/O directories on fast NVMe:
 #   INNODB_DATA_DIR=/mnt/nvme/innodb TIDESDB_DATA_DIR=/mnt/nvme/tidesdb ./run_sysbench.sh
@@ -251,6 +252,7 @@ if [ -n "$DATA_DIR" ]; then
             --plugin-maturity=alpha \
             --plugin-load-add=ha_tidesdb.so \
             --loose-tidesdb_data_dir="$TIDESDB_DIR" \
+            --loose-tidesdb_use_btree="${TIDESDB_USE_BTREE:-ON}" \
             --innodb=ON \
             --innodb-data-home-dir="$INNODB_DIR" \
             --innodb-log-group-home-dir="$INNODB_DIR" \
@@ -366,3 +368,4 @@ echo "To analyze results:"
 echo "  # Compare engines by workload"
 echo "  cat $SUMMARY_CSV | column -t -s','"
 echo ""
+echo "  # Plot with gnuplot or import to spreadsheet for charts"
