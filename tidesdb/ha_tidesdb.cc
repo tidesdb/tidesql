@@ -6941,6 +6941,13 @@ int ha_tidesdb::extra(enum ha_extra_function operation)
             if (share && share->cf)
             {
                 tidesdb_flush_memtable(share->cf);
+                int flush_wait = 0;
+                while (tidesdb_is_flushing(share->cf) &&
+                       flush_wait < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
+                {
+                    my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
+                    flush_wait++;
+                }
             }
             break;
 
@@ -7005,6 +7012,13 @@ int ha_tidesdb::extra(enum ha_extra_function operation)
             if (share && share->cf)
             {
                 tidesdb_flush_memtable(share->cf);
+                int rename_wait = 0;
+                while (tidesdb_is_flushing(share->cf) &&
+                       rename_wait < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
+                {
+                    my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
+                    rename_wait++;
+                }
             }
             break;
 
@@ -7025,6 +7039,13 @@ int ha_tidesdb::extra(enum ha_extra_function operation)
             if (share && share->cf)
             {
                 tidesdb_flush_memtable(share->cf);
+                int alter_wait = 0;
+                while (tidesdb_is_flushing(share->cf) &&
+                       alter_wait < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
+                {
+                    my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
+                    alter_wait++;
+                }
             }
             break;
 
@@ -8202,6 +8223,14 @@ int ha_tidesdb::optimize(THD *thd, HA_CHECK_OPT *check_opt)
     {
         sql_print_warning("TidesDB: Compaction returned: %d (non-fatal)", ret);
         /* Don't fail -- compaction is best-effort */
+    }
+
+    /* Wait for compaction to complete before returning */
+    wait_count = 0;
+    while (tidesdb_is_compacting(share->cf) && wait_count < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
+    {
+        my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
+        wait_count++;
     }
 
     sql_print_information("TidesDB: OPTIMIZE TABLE completed");
@@ -9436,6 +9465,14 @@ int ha_tidesdb::repair(THD *thd, HA_CHECK_OPT *check_opt)
         sql_print_warning("TidesDB: Repair (compaction) returned: %d (non-fatal)", ret);
     }
 
+    /* Wait for compaction to complete before returning */
+    wait_count = 0;
+    while (tidesdb_is_compacting(share->cf) && wait_count < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
+    {
+        my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
+        wait_count++;
+    }
+
     sql_print_information("TidesDB: Table repair completed");
 
     DBUG_RETURN(HA_ADMIN_OK);
@@ -9492,6 +9529,15 @@ int ha_tidesdb::discard_or_import_tablespace(my_bool discard)
             /* We wait for async flush to complete before dropping CF */
             int wait_count = 0;
             while (tidesdb_is_flushing(share->cf) && wait_count < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
+            {
+                my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
+                wait_count++;
+            }
+
+            /* Wait for any in-progress compaction to complete */
+            wait_count = 0;
+            while (tidesdb_is_compacting(share->cf) &&
+                   wait_count < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
             {
                 my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US);
                 wait_count++;
