@@ -1,0 +1,215 @@
+#
+# TidesDB Per-Table Column Family Configuration Options
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Create table with custom compression
+CREATE TABLE t_zstd (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB COMPRESSION='zstd';
+SHOW CREATE TABLE t_zstd;
+Table	Create Table
+t_zstd	CREATE TABLE `t_zstd` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `COMPRESSION`='zstd'
+INSERT INTO t_zstd VALUES (1, 'zstd compressed row');
+SELECT * FROM t_zstd;
+id	data
+1	zstd compressed row
+# Test 2: Create table with custom bloom filter settings
+CREATE TABLE t_bloom (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB BLOOM_FILTER=1 BLOOM_FPR=10;
+SHOW CREATE TABLE t_bloom;
+Table	Create Table
+t_bloom	CREATE TABLE `t_bloom` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `BLOOM_FILTER`=1 `BLOOM_FPR`=10
+INSERT INTO t_bloom VALUES (1, 'bloom filter test');
+SELECT * FROM t_bloom;
+id	data
+1	bloom filter test
+# Test 3: Create table with no bloom filter
+CREATE TABLE t_nobloom (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB BLOOM_FILTER=0;
+SHOW CREATE TABLE t_nobloom;
+Table	Create Table
+t_nobloom	CREATE TABLE `t_nobloom` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `BLOOM_FILTER`=0
+INSERT INTO t_nobloom VALUES (1, 'no bloom filter');
+SELECT * FROM t_nobloom;
+id	data
+1	no bloom filter
+# Test 4: Create table with custom write buffer size (128MB)
+CREATE TABLE t_wbuf (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB WRITE_BUFFER_SIZE=134217728;
+SHOW CREATE TABLE t_wbuf;
+Table	Create Table
+t_wbuf	CREATE TABLE `t_wbuf` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `WRITE_BUFFER_SIZE`=134217728
+INSERT INTO t_wbuf VALUES (1, 'large write buffer');
+SELECT * FROM t_wbuf;
+id	data
+1	large write buffer
+# Test 5: Create table with B+tree disabled (skip list SSTables)
+CREATE TABLE t_skiplist (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB USE_BTREE=0;
+SHOW CREATE TABLE t_skiplist;
+Table	Create Table
+t_skiplist	CREATE TABLE `t_skiplist` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `USE_BTREE`=0
+INSERT INTO t_skiplist VALUES (1, 'skip list sstable');
+SELECT * FROM t_skiplist;
+id	data
+1	skip list sstable
+# Test 6: Create table with custom LSM compaction settings
+CREATE TABLE t_lsm (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB LEVEL_SIZE_RATIO=8 MIN_LEVELS=3 L1_FILE_COUNT_TRIGGER=8;
+SHOW CREATE TABLE t_lsm;
+Table	Create Table
+t_lsm	CREATE TABLE `t_lsm` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `LEVEL_SIZE_RATIO`=8 `MIN_LEVELS`=3 `L1_FILE_COUNT_TRIGGER`=8
+INSERT INTO t_lsm VALUES (1, 'custom lsm');
+SELECT * FROM t_lsm;
+id	data
+1	custom lsm
+# Test 7: Create table with custom sync mode
+CREATE TABLE t_sync (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB SYNC_MODE='interval' SYNC_INTERVAL_US=256000;
+SHOW CREATE TABLE t_sync;
+Table	Create Table
+t_sync	CREATE TABLE `t_sync` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `SYNC_MODE`='interval' `SYNC_INTERVAL_US`=256000
+INSERT INTO t_sync VALUES (1, 'interval sync');
+SELECT * FROM t_sync;
+id	data
+1	interval sync
+# Test 8: Create table with TTL
+CREATE TABLE t_ttl_opt (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB TTL=3600;
+SHOW CREATE TABLE t_ttl_opt;
+Table	Create Table
+t_ttl_opt	CREATE TABLE `t_ttl_opt` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `TTL`=3600
+INSERT INTO t_ttl_opt VALUES (1, 'ttl row');
+SELECT * FROM t_ttl_opt;
+id	data
+1	ttl row
+# Test 9: Create table with custom isolation level
+CREATE TABLE t_iso (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB ISOLATION_LEVEL='snapshot';
+SHOW CREATE TABLE t_iso;
+Table	Create Table
+t_iso	CREATE TABLE `t_iso` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `ISOLATION_LEVEL`='snapshot'
+INSERT INTO t_iso VALUES (1, 'snapshot isolation');
+SELECT * FROM t_iso;
+id	data
+1	snapshot isolation
+# Test 10: Create table with multiple options combined
+CREATE TABLE t_multi (
+id INT PRIMARY KEY,
+name VARCHAR(100),
+INDEX idx_name (name)
+) ENGINE=TidesDB
+COMPRESSION='lz4'
+  BLOOM_FILTER=1
+BLOOM_FPR=50
+WRITE_BUFFER_SIZE=33554432
+USE_BTREE=1
+LEVEL_SIZE_RATIO=8
+SKIP_LIST_MAX_LEVEL=16;
+Warnings:
+Note	1071	Specified key was too long; max key length is 255 bytes
+SHOW CREATE TABLE t_multi;
+Table	Create Table
+t_multi	CREATE TABLE `t_multi` (
+  `id` int(11) NOT NULL,
+  `name` varchar(100) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_name` (`name`(63))
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `COMPRESSION`='lz4' `BLOOM_FILTER`=1 `BLOOM_FPR`=50 `WRITE_BUFFER_SIZE`=33554432 `USE_BTREE`=1 `LEVEL_SIZE_RATIO`=8 `SKIP_LIST_MAX_LEVEL`=16
+SELECT COUNT(*) FROM t_multi;
+COUNT(*)
+50
+SELECT * FROM t_multi WHERE name = 'name_25';
+id	name
+25	name_25
+# Test 11: Create table with block index settings
+CREATE TABLE t_bidx (
+id INT PRIMARY KEY,
+data VARCHAR(255)
+) ENGINE=TidesDB BLOCK_INDEXES=1 INDEX_SAMPLE_RATIO=4 BLOCK_INDEX_PREFIX_LEN=32;
+SHOW CREATE TABLE t_bidx;
+Table	Create Table
+t_bidx	CREATE TABLE `t_bidx` (
+  `id` int(11) NOT NULL,
+  `data` varchar(255) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `BLOCK_INDEXES`=1 `INDEX_SAMPLE_RATIO`=4 `BLOCK_INDEX_PREFIX_LEN`=32
+INSERT INTO t_bidx VALUES (1, 'block index test');
+SELECT * FROM t_bidx;
+id	data
+1	block index test
+# Test 12: Create table with klog value threshold
+CREATE TABLE t_klog (
+id INT PRIMARY KEY,
+data TEXT
+) ENGINE=TidesDB KLOG_VALUE_THRESHOLD=256;
+SHOW CREATE TABLE t_klog;
+Table	Create Table
+t_klog	CREATE TABLE `t_klog` (
+  `id` int(11) NOT NULL,
+  `data` text DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `KLOG_VALUE_THRESHOLD`=256
+INSERT INTO t_klog VALUES (1, REPEAT('x', 1000));
+SELECT id, LENGTH(data) FROM t_klog;
+id	LENGTH(data)
+1	1000
+# Cleanup
+DROP TABLE t_zstd, t_bloom, t_nobloom, t_wbuf, t_skiplist;
+DROP TABLE t_lsm, t_sync, t_ttl_opt, t_iso, t_multi, t_bidx, t_klog;
+#
+# Per-table options tests completed!
+#

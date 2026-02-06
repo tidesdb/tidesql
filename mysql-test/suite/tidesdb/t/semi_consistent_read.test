@@ -1,0 +1,81 @@
+--echo #
+--echo # TidesDB Semi-Consistent Read Tests
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Basic semi-consistent read under READ COMMITTED
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  val INT
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+
+--echo # Under READ COMMITTED, UPDATE should use semi-consistent reads
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+START TRANSACTION;
+UPDATE t1 SET val = val + 1 WHERE val > 20;
+SELECT * FROM t1 ORDER BY id;
+COMMIT;
+
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 2: Semi-consistent read not used under REPEATABLE READ
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+START TRANSACTION;
+UPDATE t1 SET val = val + 1 WHERE val > 30;
+SELECT * FROM t1 ORDER BY id;
+COMMIT;
+
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 3: DELETE with semi-consistent read under READ COMMITTED
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+START TRANSACTION;
+DELETE FROM t1 WHERE val < 25;
+SELECT * FROM t1 ORDER BY id;
+COMMIT;
+
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 4: Semi-consistent read with secondary index
+CREATE TABLE t2 (
+  id INT PRIMARY KEY,
+  name VARCHAR(100),
+  val INT,
+  INDEX idx_val (val)
+) ENGINE=TidesDB;
+
+INSERT INTO t2 VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30);
+
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+START TRANSACTION;
+UPDATE t2 SET name = 'updated' WHERE val >= 20;
+SELECT * FROM t2 ORDER BY id;
+COMMIT;
+
+SELECT * FROM t2 ORDER BY id;
+
+--echo # Reset isolation level
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+--echo # Cleanup
+DROP TABLE t1, t2;
+
+--echo #
+--echo # Semi-consistent read tests completed!
+--echo #

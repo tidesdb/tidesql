@@ -69,6 +69,10 @@ extern "C"
 /* Max supported key length */
 #define TIDESDB_MAX_KEY_LENGTH 3072
 
+/* TTL column name detection */
+#define TIDESDB_TTL_COLUMN_NAME     "TTL"
+#define TIDESDB_TTL_COLUMN_NAME_ALT "_ttl"
+
 /* Platform-specific path separator */
 #ifdef _WIN32
 #define TIDESDB_PATH_SEP     '\\'
@@ -82,6 +86,15 @@ extern "C"
 #define TIDESDB_CF_NAME_BUF_SIZE         256
 #define TIDESDB_CF_DROPPING_SUFFIX       "__dropping_%lu"
 #define TIDESDB_CF_TRUNCATING_SUFFIX     "__truncating_%lu"
+#define TIDESDB_CF_IDX_FMT               "%s_idx_%u"
+#define TIDESDB_CF_FT_FMT                "%s_ft_%u"
+#define TIDESDB_CF_SPATIAL_FMT           "%s_spatial_%u"
+#define TIDESDB_CF_IDX_NAME_FMT          "%s_idx_%s"
+#define TIDESDB_CF_FKIDX_FMT             "%s_fkidx"
+#define TIDESDB_CF_PARENT_FMT            "%s_%s"
+#define TIDESDB_FK_META_CF_NAME          "_fk_metadata"
+#define TIDESDB_FK_CHILD_KEY_FMT         "child:%s"
+#define TIDESDB_FK_PARENT_KEY_FMT        "parent:%s"
 #define TIDESDB_IDX_CF_NAME_BUF_SIZE     512
 #define TIDESDB_STATUS_BUF_SIZE          16384
 #define TIDESDB_SAVEPOINT_NAME_LEN       64
@@ -102,6 +115,7 @@ extern "C"
 #define TIDESDB_FT_WORD_BUF_SIZE         256
 #define TIDESDB_FT_MAX_QUERY_WORDS_CAP   256
 #define TIDESDB_ASCII_CASE_OFFSET        32
+#define TIDESDB_ROW_ESTIMATE_MARGIN      100
 
 /* Spatial/geometry constants */
 #define TIDESDB_ZORDER_BITS             32
@@ -161,6 +175,9 @@ extern "C"
 #define TIDESDB_SELECTIVITY_DIVISOR         10.0
 #define TIDESDB_RANGE_FACTOR                5.0
 #define TIDESDB_RANGE_MAX_PERCENT           30
+#define TIDESDB_PERCENT_DENOMINATOR         100
+#define TIDESDB_NONUNIQUE_MAX_FRACTION      10
+#define TIDESDB_MIN_RANGE_CAP               10
 
 /* Configuration defaults */
 #define TIDESDB_DEFAULT_FLUSH_THREADS            2
@@ -258,6 +275,67 @@ extern "C"
 #define TIDESDB_AUTO_INC_PERSIST_INTERVAL 1000
 #define TIDESDB_INDEX_REBUILD_BATCH_SIZE  1000
 #define TIDESDB_BLOCK_SIZE                65536.0
+
+/**
+  Per-table configuration options.
+
+  Users can specify these in CREATE TABLE ... ENGINE=TidesDB:
+    CREATE TABLE t1 (id INT PRIMARY KEY) ENGINE=TidesDB
+      COMPRESSION='zstd' BLOOM_FILTER=1 BLOOM_FPR=100
+      WRITE_BUFFER_SIZE=134217728 TTL=3600 USE_BTREE=1;
+
+  All fields in tidesdb_column_family_config_t that are meaningful
+  as per-table overrides are exposed here. When a value is 0 (or
+  empty string for COMPRESSION), the global system variable default
+  is used instead.
+
+  The structure name must be ha_table_option_struct for MariaDB's
+  table option framework to recognize it.
+*/
+struct ha_table_option_struct
+{
+    /* Storage format */
+    const char *compression; /* Compression algorithm: none, snappy, lz4, zstd, lz4_fast */
+    bool use_btree;          /* Use B+tree SSTable format (faster point lookups) */
+
+    /* Memory / write path */
+    ulonglong write_buffer_size;     /* Memtable size in bytes (0 = use global default) */
+    ulonglong skip_list_max_level;   /* Skip list max level for memtable (0 = global) */
+    ulonglong skip_list_probability; /* Skip list probability x10000 (2500 = 0.25, 0 = global) */
+
+    /* Bloom filter */
+    bool bloom_filter;   /* Enable/disable bloom filter */
+    ulonglong bloom_fpr; /* FPR in parts per 10000 (100 = 1%, 10 = 0.1%, 0 = global) */
+
+    /* Block indexes */
+    bool block_indexes;               /* Enable compact block indexes */
+    ulonglong index_sample_ratio;     /* Block index sampling ratio (0 = global) */
+    ulonglong block_index_prefix_len; /* Block index prefix length in bytes (0 = global) */
+
+    /* LSM compaction */
+    ulonglong level_size_ratio;         /* Ratio of level sizes (0 = global) */
+    ulonglong min_levels;               /* Minimum number of LSM levels (0 = global) */
+    ulonglong dividing_level_offset;    /* Compaction dividing level offset (0 = global) */
+    ulonglong l1_file_count_trigger;    /* L1 file count trigger for compaction (0 = global) */
+    ulonglong l0_queue_stall_threshold; /* L0 queue stall threshold (0 = global) */
+
+    /* Durability */
+    const char *sync_mode;      /* Sync mode: none, interval, full (NULL = global) */
+    ulonglong sync_interval_us; /* Sync interval in microseconds (0 = global) */
+
+    /* Value log */
+    ulonglong klog_value_threshold; /* Values > threshold go to vlog (0 = global) */
+
+    /* Disk space */
+    ulonglong min_disk_space; /* Minimum free disk space in bytes (0 = global) */
+
+    /* Isolation */
+    const char
+        *isolation_level; /* Default isolation: read_uncommitted..serializable (NULL = global) */
+
+    /* TTL */
+    ulonglong ttl; /* Default TTL in seconds for rows (0 = no expiry) */
+};
 
 /* Foreign key constraint structure */
 typedef struct st_tidesdb_fk
@@ -397,6 +475,13 @@ class ha_tidesdb : public handler
     ha_rows bulk_insert_count;                          /* Rows inserted in current batch */
     static const ha_rows BULK_COMMIT_THRESHOLD = 10000; /* Commit every N rows */
 
+    /* Disable/enable indexes state for bulk load */
+    bool indexes_disabled;
+
+    /* Sequential scan prefetch state */
+    bool prefetch_active;
+    static const uint PREFETCH_BATCH_SIZE = 64; /* Number of KV pairs to prefetch */
+
     /* Skip redundant duplicate key check */
     bool skip_dup_check;
 
@@ -416,6 +501,10 @@ class ha_tidesdb : public handler
 
     /* Track if current transaction is read-only (skip commit overhead) */
     bool txn_read_only;
+
+    /* Semi-consistent read state */
+    bool semi_consistent_read_enabled;
+    bool did_semi_consistent_read;
 
     /* Buffer pooling for build_index_key() */
     uchar *idx_key_buffer;
@@ -616,6 +705,15 @@ class ha_tidesdb : public handler
     }
 
     /** @brief
+      Semi-consistent read support.
+      Under READ COMMITTED, if a row is locked by another transaction,
+      read the last committed version and let the SQL layer re-evaluate
+      the WHERE clause. If the row no longer matches, skip it.
+    */
+    bool was_semi_consistent_read() override;
+    void try_semi_consistent_read(bool yes) override;
+
+    /** @brief
       Statement-level transaction handling.
     */
     int start_stmt(THD *thd, thr_lock_type lock_type) override;
@@ -711,6 +809,19 @@ class ha_tidesdb : public handler
     /* Bulk insert optimization */
     void start_bulk_insert(ha_rows rows, uint flags) override;
     int end_bulk_insert();
+
+    /* Disable/enable indexes for bulk load */
+    int disable_indexes(key_map map, bool persist) override;
+    int enable_indexes(key_map map, bool persist) override;
+    int indexes_are_disabled(void) override;
+
+    /* Upper bound row estimate for optimizer */
+    ha_rows estimate_rows_upper_bound() override;
+
+    /* Query cache registration for transactional tables */
+    my_bool register_query_cache_table(THD *thd, const char *table_key, uint key_length,
+                                       qc_engine_callback *callback,
+                                       ulonglong *engine_data) override;
 
     /* Tablespace support */
     int discard_or_import_tablespace(my_bool discard);

@@ -1,0 +1,160 @@
+--echo #
+--echo # TidesDB Per-Table Column Family Configuration Options
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Create table with custom compression
+CREATE TABLE t_zstd (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB COMPRESSION='zstd';
+
+SHOW CREATE TABLE t_zstd;
+INSERT INTO t_zstd VALUES (1, 'zstd compressed row');
+SELECT * FROM t_zstd;
+
+--echo # Test 2: Create table with custom bloom filter settings
+CREATE TABLE t_bloom (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB BLOOM_FILTER=1 BLOOM_FPR=10;
+
+SHOW CREATE TABLE t_bloom;
+INSERT INTO t_bloom VALUES (1, 'bloom filter test');
+SELECT * FROM t_bloom;
+
+--echo # Test 3: Create table with no bloom filter
+CREATE TABLE t_nobloom (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB BLOOM_FILTER=0;
+
+SHOW CREATE TABLE t_nobloom;
+INSERT INTO t_nobloom VALUES (1, 'no bloom filter');
+SELECT * FROM t_nobloom;
+
+--echo # Test 4: Create table with custom write buffer size (128MB)
+CREATE TABLE t_wbuf (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB WRITE_BUFFER_SIZE=134217728;
+
+SHOW CREATE TABLE t_wbuf;
+INSERT INTO t_wbuf VALUES (1, 'large write buffer');
+SELECT * FROM t_wbuf;
+
+--echo # Test 5: Create table with B+tree disabled (skip list SSTables)
+CREATE TABLE t_skiplist (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB USE_BTREE=0;
+
+SHOW CREATE TABLE t_skiplist;
+INSERT INTO t_skiplist VALUES (1, 'skip list sstable');
+SELECT * FROM t_skiplist;
+
+--echo # Test 6: Create table with custom LSM compaction settings
+CREATE TABLE t_lsm (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB LEVEL_SIZE_RATIO=8 MIN_LEVELS=3 L1_FILE_COUNT_TRIGGER=8;
+
+SHOW CREATE TABLE t_lsm;
+INSERT INTO t_lsm VALUES (1, 'custom lsm');
+SELECT * FROM t_lsm;
+
+--echo # Test 7: Create table with custom sync mode
+CREATE TABLE t_sync (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB SYNC_MODE='interval' SYNC_INTERVAL_US=256000;
+
+SHOW CREATE TABLE t_sync;
+INSERT INTO t_sync VALUES (1, 'interval sync');
+SELECT * FROM t_sync;
+
+--echo # Test 8: Create table with TTL
+CREATE TABLE t_ttl_opt (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB TTL=3600;
+
+SHOW CREATE TABLE t_ttl_opt;
+INSERT INTO t_ttl_opt VALUES (1, 'ttl row');
+SELECT * FROM t_ttl_opt;
+
+--echo # Test 9: Create table with custom isolation level
+CREATE TABLE t_iso (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB ISOLATION_LEVEL='snapshot';
+
+SHOW CREATE TABLE t_iso;
+INSERT INTO t_iso VALUES (1, 'snapshot isolation');
+SELECT * FROM t_iso;
+
+--echo # Test 10: Create table with multiple options combined
+CREATE TABLE t_multi (
+  id INT PRIMARY KEY,
+  name VARCHAR(100),
+  INDEX idx_name (name)
+) ENGINE=TidesDB
+  COMPRESSION='lz4'
+  BLOOM_FILTER=1
+  BLOOM_FPR=50
+  WRITE_BUFFER_SIZE=33554432
+  USE_BTREE=1
+  LEVEL_SIZE_RATIO=8
+  SKIP_LIST_MAX_LEVEL=16;
+
+SHOW CREATE TABLE t_multi;
+
+--disable_query_log
+let $i = 1;
+while ($i <= 50)
+{
+  eval INSERT INTO t_multi VALUES ($i, CONCAT('name_', $i));
+  inc $i;
+}
+--enable_query_log
+
+SELECT COUNT(*) FROM t_multi;
+SELECT * FROM t_multi WHERE name = 'name_25';
+
+--echo # Test 11: Create table with block index settings
+CREATE TABLE t_bidx (
+  id INT PRIMARY KEY,
+  data VARCHAR(255)
+) ENGINE=TidesDB BLOCK_INDEXES=1 INDEX_SAMPLE_RATIO=4 BLOCK_INDEX_PREFIX_LEN=32;
+
+SHOW CREATE TABLE t_bidx;
+INSERT INTO t_bidx VALUES (1, 'block index test');
+SELECT * FROM t_bidx;
+
+--echo # Test 12: Create table with klog value threshold
+CREATE TABLE t_klog (
+  id INT PRIMARY KEY,
+  data TEXT
+) ENGINE=TidesDB KLOG_VALUE_THRESHOLD=256;
+
+SHOW CREATE TABLE t_klog;
+INSERT INTO t_klog VALUES (1, REPEAT('x', 1000));
+SELECT id, LENGTH(data) FROM t_klog;
+
+--echo # Cleanup
+DROP TABLE t_zstd, t_bloom, t_nobloom, t_wbuf, t_skiplist;
+DROP TABLE t_lsm, t_sync, t_ttl_opt, t_iso, t_multi, t_bidx, t_klog;
+
+--echo #
+--echo # Per-table options tests completed!
+--echo #

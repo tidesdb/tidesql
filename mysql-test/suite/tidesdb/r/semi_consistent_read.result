@@ -1,0 +1,94 @@
+#
+# TidesDB Semi-Consistent Read Tests
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: Basic semi-consistent read under READ COMMITTED
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+val INT
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+# Under READ COMMITTED, UPDATE should use semi-consistent reads
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+START TRANSACTION;
+UPDATE t1 SET val = val + 1 WHERE val > 20;
+SELECT * FROM t1 ORDER BY id;
+id	val
+1	10
+2	20
+3	30
+4	40
+5	50
+COMMIT;
+SELECT * FROM t1 ORDER BY id;
+id	val
+1	10
+2	20
+3	31
+4	41
+5	51
+# Test 2: Semi-consistent read not used under REPEATABLE READ
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+START TRANSACTION;
+UPDATE t1 SET val = val + 1 WHERE val > 30;
+SELECT * FROM t1 ORDER BY id;
+id	val
+1	10
+2	20
+3	31
+4	41
+5	51
+COMMIT;
+SELECT * FROM t1 ORDER BY id;
+id	val
+1	10
+2	20
+3	32
+4	42
+5	52
+# Test 3: DELETE with semi-consistent read under READ COMMITTED
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+START TRANSACTION;
+DELETE FROM t1 WHERE val < 25;
+SELECT * FROM t1 ORDER BY id;
+id	val
+1	10
+2	20
+3	32
+4	42
+5	52
+COMMIT;
+SELECT * FROM t1 ORDER BY id;
+id	val
+3	32
+4	42
+5	52
+# Test 4: Semi-consistent read with secondary index
+CREATE TABLE t2 (
+id INT PRIMARY KEY,
+name VARCHAR(100),
+val INT,
+INDEX idx_val (val)
+) ENGINE=TidesDB;
+INSERT INTO t2 VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30);
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+START TRANSACTION;
+UPDATE t2 SET name = 'updated' WHERE val >= 20;
+SELECT * FROM t2 ORDER BY id;
+id	name	val
+1	a	10
+2	b	20
+3	c	30
+COMMIT;
+SELECT * FROM t2 ORDER BY id;
+id	name	val
+1	a	10
+2	updated	20
+3	updated	30
+# Reset isolation level
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+# Cleanup
+DROP TABLE t1, t2;
+#
+# Semi-consistent read tests completed!
+#
