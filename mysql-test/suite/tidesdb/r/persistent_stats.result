@@ -27,7 +27,7 @@ test.t1	X	X	X
 # Test 3: Verify row count is accurate after ANALYZE
 SELECT COUNT(*) AS actual_count FROM t1;
 actual_count
-6
+5
 # Test 4: FLUSH TABLES forces table close, then reopen
 FLUSH TABLES t1;
 # Test 5: After reopen, stats should still be available
@@ -51,7 +51,7 @@ test.t1	X	X	X
 test.t1	X	X	X
 SELECT COUNT(*) AS updated_count FROM t1;
 updated_count
-8
+7
 # Cleanup
 DROP TABLE t1;
 #

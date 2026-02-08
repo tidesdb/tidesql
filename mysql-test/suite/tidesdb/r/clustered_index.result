@@ -23,10 +23,12 @@ id	a	b
 # Test 2: Primary key range scan
 EXPLAIN SELECT * FROM t1 WHERE id BETWEEN 2 AND 4;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	SIMPLE	t1	range	PRIMARY	PRIMARY	4	NULL	2	Using where with pushed condition
+1	SIMPLE	t1	range	PRIMARY	PRIMARY	4	NULL	3	Using where
 SELECT * FROM t1 WHERE id BETWEEN 2 AND 4 ORDER BY id;
 id	a	b
 2	200	row2
+3	300	row3
+4	400	row4
 # Test 3: Secondary index lookup (not clustered)
 EXPLAIN SELECT * FROM t1 WHERE a = 300;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
@@ -37,9 +39,11 @@ id	a	b
 # Test 4: Covering index scan on secondary index
 EXPLAIN SELECT a FROM t1 WHERE a > 200;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	SIMPLE	t1	range	idx_a	idx_a	5	NULL	2	Using where with pushed condition; Using index
+1	SIMPLE	t1	range	idx_a	idx_a	5	NULL	2	Using where; Using index
 SELECT a FROM t1 WHERE a > 200 ORDER BY a;
 a
+300
+400
 500
 # Test 5: Full table scan via clustered index
 EXPLAIN SELECT * FROM t1;

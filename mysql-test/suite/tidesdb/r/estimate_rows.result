@@ -23,7 +23,7 @@ COUNT(*)
 DELETE FROM t1 WHERE id > 50;
 SELECT COUNT(*) FROM t1;
 COUNT(*)
-100
+50
 # Test 4: Row estimate with secondary index
 CREATE TABLE t2 (
 id INT PRIMARY KEY,

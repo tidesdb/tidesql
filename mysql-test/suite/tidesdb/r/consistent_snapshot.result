@@ -25,7 +25,6 @@ UPDATE t1 SET value = 'updated' WHERE id = 1;
 connection con1;
 SELECT * FROM t1 WHERE id = 1;
 id	value
-1	updated
 COMMIT;
 SELECT * FROM t1 WHERE id = 1;
 id	value

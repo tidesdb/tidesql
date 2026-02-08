@@ -63,6 +63,7 @@ COMMIT;
 SELECT * FROM t1 WHERE id >= 10 ORDER BY id;
 id	name	secret_data	amount
 10	Trans1	Transaction data 1	100.00
+11	Trans2	Transaction data 2	200.00
 START TRANSACTION;
 INSERT INTO t1 VALUES (12, 'Trans3', 'Transaction data 3', 300.00);
 ROLLBACK;

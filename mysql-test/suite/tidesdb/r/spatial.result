@@ -47,6 +47,7 @@ WHERE a.id < b.id
 ORDER BY a.id, b.id;
 city1	city2	distance
 New York	Los Angeles	44.7363
+New York	Chicago	13.6735
 Los Angeles	Chicago	31.5983
 # Test 5: GEOMETRY column type
 CREATE TABLE t3 (
@@ -101,7 +102,7 @@ id	name	ST_AsText(location)
 DELETE FROM t1 WHERE id = 3;
 SELECT COUNT(*) FROM t1;
 COUNT(*)
-3
+2
 # Cleanup
 DROP TABLE t1, t2, t3, t4, t5;
 #

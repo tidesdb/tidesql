@@ -42,6 +42,8 @@ INSERT INTO routes VALUES
 (1, 'Route A', ST_GeomFromText('LINESTRING(0 0, 10 10, 20 0)')),
 (2, 'Route B', ST_GeomFromText('LINESTRING(5 5, 15 15, 25 5)')),
 (3, 'Route C', ST_GeomFromText('LINESTRING(-10 -10, 0 0, 10 -10)'));
+Warnings:
+Warning	4202	3 values were longer than max_sort_length. Sorting used only the first 1024 bytes
 SELECT id, name, ST_AsText(path) FROM routes ORDER BY id;
 id	name	ST_AsText(path)
 1	Route A	LINESTRING(0 0,10 10,20 0)
@@ -61,6 +63,8 @@ INSERT INTO regions VALUES
 (1, 'Square', ST_GeomFromText('POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))')),
 (2, 'Triangle', ST_GeomFromText('POLYGON((20 0, 30 10, 20 10, 20 0))')),
 (3, 'Rectangle', ST_GeomFromText('POLYGON((40 0, 60 0, 60 20, 40 20, 40 0))'));
+Warnings:
+Warning	4202	3 values were longer than max_sort_length. Sorting used only the first 1024 bytes
 SELECT id, name, ST_AsText(boundary) FROM regions ORDER BY id;
 id	name	ST_AsText(boundary)
 1	Square	POLYGON((0 0,10 0,10 10,0 10,0 0))
@@ -79,6 +83,8 @@ INSERT INTO geo_data VALUES
 (1, ST_GeomFromText('POINT(5 5)')),
 (2, ST_GeomFromText('LINESTRING(0 0, 10 10)')),
 (3, ST_GeomFromText('POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))'));
+Warnings:
+Warning	4202	2 values were longer than max_sort_length. Sorting used only the first 1024 bytes
 SELECT id, ST_GeometryType(geom), ST_AsText(geom) FROM geo_data ORDER BY id;
 id	ST_GeometryType(geom)	ST_AsText(geom)
 1	POINT	POINT(5 5)

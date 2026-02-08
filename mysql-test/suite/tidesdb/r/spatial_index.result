@@ -37,7 +37,7 @@ id	name	ST_AsText(coords)
 DELETE FROM locations WHERE id = 5;
 SELECT COUNT(*) FROM locations;
 COUNT(*)
-5
+4
 # Test 7: Multiple spatial indexes
 CREATE TABLE geo_data (
 id INT PRIMARY KEY,

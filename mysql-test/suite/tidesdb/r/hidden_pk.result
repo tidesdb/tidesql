@@ -41,7 +41,7 @@ Charlie	300
 # Test 5: Table scan works correctly
 SELECT COUNT(*) FROM t1;
 COUNT(*)
-4
+3
 SELECT * FROM t1 WHERE value > 100 ORDER BY value;
 name	value
 Alice	150

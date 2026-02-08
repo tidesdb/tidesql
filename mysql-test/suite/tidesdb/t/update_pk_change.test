@@ -1,0 +1,92 @@
+--echo #
+--echo # TidesDB UPDATE that changes primary key test
+--echo # Tests the complex PK change path in update_row()
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Test 1: Simple PK change
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  val VARCHAR(100)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 'one'), (2, 'two'), (3, 'three');
+
+UPDATE t1 SET id = 10 WHERE id = 1;
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Old key should not exist
+SELECT * FROM t1 WHERE id = 1;
+
+--echo # Test 2: PK change with secondary index
+CREATE TABLE t2 (
+  id INT PRIMARY KEY,
+  name VARCHAR(50),
+  val INT,
+  KEY idx_name (name),
+  KEY idx_val (val)
+) ENGINE=TidesDB;
+
+INSERT INTO t2 VALUES (1, 'alice', 100), (2, 'bob', 200), (3, 'charlie', 300);
+
+--echo # Change PK - should update secondary indexes too
+UPDATE t2 SET id = 20 WHERE id = 2;
+SELECT * FROM t2 ORDER BY id;
+
+--echo # Secondary index should find the row at new PK
+SELECT * FROM t2 WHERE name = 'bob';
+SELECT * FROM t2 WHERE val = 200;
+
+--echo # Test 3: PK change with composite primary key
+CREATE TABLE t3 (
+  a INT,
+  b INT,
+  val VARCHAR(50),
+  PRIMARY KEY (a, b)
+) ENGINE=TidesDB;
+
+INSERT INTO t3 VALUES (1, 1, 'one-one'), (1, 2, 'one-two'), (2, 1, 'two-one');
+
+UPDATE t3 SET a = 3 WHERE a = 1 AND b = 1;
+SELECT * FROM t3 ORDER BY a, b;
+
+--echo # Test 4: PK change within a transaction
+START TRANSACTION;
+UPDATE t2 SET id = 30 WHERE id = 20;
+SELECT * FROM t2 WHERE name = 'bob';
+ROLLBACK;
+
+--echo # After rollback, old PK should still exist
+SELECT * FROM t2 WHERE id = 20;
+
+--echo # Test 5: PK change with hidden PK table
+CREATE TABLE t4 (
+  name VARCHAR(50),
+  val INT,
+  KEY idx_name (name)
+) ENGINE=TidesDB;
+
+INSERT INTO t4 VALUES ('x', 1), ('y', 2), ('z', 3);
+UPDATE t4 SET val = 99 WHERE name = 'y';
+SELECT * FROM t4 WHERE name = 'y';
+SELECT * FROM t4 ORDER BY val;
+
+--echo # Test 6: Multiple PK changes in one statement
+UPDATE t2 SET id = id + 100 WHERE id > 1;
+SELECT * FROM t2 ORDER BY id;
+
+--echo # Cleanup
+DROP TABLE t4;
+DROP TABLE t3;
+DROP TABLE t2;
+DROP TABLE t1;

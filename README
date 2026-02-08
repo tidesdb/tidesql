@@ -343,7 +343,7 @@ Available tests (40 total):
   spatial_geometry    - Geometry functions
   spatial_index       - Spatial indexing
   table_operations    - Table operations
-  tablespace          - Tablespace operations
+  tablespace          - Tablespacef operations
   transactions        - Transaction commit/rollback
   ttl                 - Time-to-live expiration
   virtual_columns     - Generated columns

@@ -86,12 +86,12 @@ INDEX idx_composite (col1, col2)
 ) ENGINE=TidesDB;
 SHOW INDEX FROM t4;
 Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
-t4	0	PRIMARY	1	id	A	NULL	NULL	NULL		LSMB+			NO
-t4	1	idx1	1	col1	A	NULL	NULL	NULL	YES	LSMB+			NO
-t4	1	idx2	1	col2	A	NULL	NULL	NULL	YES	LSMB+			NO
-t4	1	idx3	1	col3	A	NULL	NULL	NULL	YES	LSMB+			NO
-t4	1	idx_composite	1	col1	A	NULL	NULL	NULL	YES	LSMB+			NO
-t4	1	idx_composite	2	col2	A	NULL	NULL	NULL	YES	LSMB+			NO
+t4	0	PRIMARY	1	id	A	0	NULL	NULL		LSMB+			NO
+t4	1	idx1	1	col1	A	0	NULL	NULL	YES	LSMB+			NO
+t4	1	idx2	1	col2	A	0	NULL	NULL	YES	LSMB+			NO
+t4	1	idx3	1	col3	A	0	NULL	NULL	YES	LSMB+			NO
+t4	1	idx_composite	1	col1	A	0	NULL	NULL	YES	LSMB+			NO
+t4	1	idx_composite	2	col2	A	0	NULL	NULL	YES	LSMB+			NO
 # Test 8: CREATE TABLE IF NOT EXISTS
 CREATE TABLE IF NOT EXISTS t4 (id INT);
 Warnings:

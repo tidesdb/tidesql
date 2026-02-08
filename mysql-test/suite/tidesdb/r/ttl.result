@@ -35,7 +35,7 @@ id	data	created_at
 DELETE FROM t1 WHERE id = 3;
 SELECT COUNT(*) FROM t1;
 COUNT(*)
-3
+2
 # Test 7: Table with timestamp for manual TTL tracking
 CREATE TABLE t2 (
 id INT PRIMARY KEY,
@@ -54,6 +54,7 @@ id	data
 # Query for expired data (would be cleaned up by application)
 SELECT id, data FROM t2 WHERE expires_at <= NOW() ORDER BY id;
 id	data
+3	expired data
 # Test 8: Bulk insert with timestamps
 CREATE TABLE t3 (
 id INT AUTO_INCREMENT PRIMARY KEY,
