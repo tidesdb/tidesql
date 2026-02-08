@@ -54,6 +54,7 @@ static ulong tidesdb_ft_max_query_words = TIDESDB_DEFAULT_FT_MAX_QUERY_WORDS;
 
 /* Portable case-insensitive string comparison */
 #ifdef _WIN32
+#include <direct.h> /* rmdir */
 #define tidesdb_strcasecmp _stricmp
 #else
 #define tidesdb_strcasecmp strcasecmp
@@ -1707,7 +1708,7 @@ int ha_tidesdb::unpack_row(uchar *buf, const uchar *packed, size_t packed_len)
             if (row_buffer) my_free(row_buffer);
             row_buffer = (uchar *)my_malloc(PSI_INSTRUMENT_ME, total_blob_size, MYF(MY_WME));
             if (!row_buffer) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-            row_buffer_len = total_blob_size;
+            row_buffer_len = (uint)total_blob_size;
         }
     }
 
@@ -2424,7 +2425,7 @@ int ha_tidesdb::build_index_key(uint idx, const uchar *buf, uchar **key, size_t 
     if (table->s->primary_key != MAX_KEY)
     {
         KEY *pk = &table->key_info[table->s->primary_key];
-        key_copy(idx_key_buffer + offset, (uchar *)buf, pk, pk_len);
+        key_copy(idx_key_buffer + offset, (uchar *)buf, pk, (uint)pk_len);
     }
     else
     {
@@ -2543,7 +2544,7 @@ int ha_tidesdb::insert_index_entry(uint idx, const uchar *buf, tidesdb_txn_t *tx
     if (table->s->primary_key != MAX_KEY)
     {
         KEY *pk = &table->key_info[table->s->primary_key];
-        key_copy(idx_pk_buffer, (uchar *)buf, pk, pk_len);
+        key_copy(idx_pk_buffer, (uchar *)buf, pk, (uint)pk_len);
     }
     else
     {
@@ -7446,7 +7447,7 @@ int ha_tidesdb::info(uint flag)
                     if (distinct < 1) distinct = 1;
                     /* Each additional part roughly doubles selectivity */
                     for (uint k = 0; k < j; k++)
-                        distinct = distinct * 2 > total ? total : distinct * 2;
+                        distinct = (ulong)(distinct * 2 > total ? total : distinct * 2);
 
                     key->rec_per_key[j] = (ulong)(total / distinct);
                     if (key->rec_per_key[j] < 1) key->rec_per_key[j] = 1;
