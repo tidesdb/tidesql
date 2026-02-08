@@ -135,8 +135,8 @@ WINDOWS
    git clone --depth 1 --branch mariadb-11.4 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
-   xcopy /E /I path\to\tidesdb\tidesdb storage\tidesdb
-   xcopy /E /I path\to\tidesdb\mysql-test\suite\tidesdb mysql-test\suite\tidesdb
+   xcopy /E /I path\to\tidesql\tidesdb storage\tidesdb
+   xcopy /E /I path\to\tidesql\mysql-test\suite\tidesdb mysql-test\suite\tidesdb
 
 5. Build MariaDB:
 
