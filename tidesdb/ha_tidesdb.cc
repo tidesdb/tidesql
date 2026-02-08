@@ -518,7 +518,7 @@ static void tidesdb_update_optimizer_costs(OPTIMIZER_COSTS *costs)
 */
 static ha_create_table_option tidesdb_table_option_list[] = {
     /* Storage format */
-    HA_TOPTION_STRING("COMPRESSION", compression), HA_TOPTION_BOOL("USE_BTREE", use_btree, 1),
+    HA_TOPTION_STRING("COMPRESSION", compression), HA_TOPTION_BOOL("USE_BTREE", use_btree, 0),
 
     /* Memory / write path */
     HA_TOPTION_NUMBER("WRITE_BUFFER_SIZE", write_buffer_size, 0, 0, ULLONG_MAX, 0),
@@ -558,6 +558,46 @@ static ha_create_table_option tidesdb_table_option_list[] = {
     HA_TOPTION_NUMBER("TTL", ttl, 0, 0, ULLONG_MAX, 0),
 
     HA_TOPTION_END};
+
+/**
+  @brief
+  Build a column family config from current global system variable values.
+
+  This ensures all CF creation paths use consistent settings.
+  Call tidesdb_default_column_family_config() first to get library defaults,
+  then override every field with the plugin's sysvar values.
+*/
+static tidesdb_column_family_config_t build_cf_config_from_sysvars()
+{
+    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
+
+    cf_config.write_buffer_size = tidesdb_write_buffer_size;
+    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
+    cf_config.bloom_fpr = tidesdb_bloom_fpr;
+    cf_config.level_size_ratio = tidesdb_level_size_ratio;
+    cf_config.skip_list_max_level = tidesdb_skip_list_max_level;
+    cf_config.skip_list_probability = (float)tidesdb_skip_list_probability;
+    cf_config.enable_block_indexes = tidesdb_enable_block_indexes ? 1 : 0;
+    cf_config.index_sample_ratio = tidesdb_index_sample_ratio;
+    cf_config.block_index_prefix_len = tidesdb_block_index_prefix_len;
+    cf_config.sync_mode = tidesdb_sync_mode;
+    cf_config.sync_interval_us = tidesdb_sync_interval_us;
+    cf_config.default_isolation_level = (tidesdb_isolation_level_t)tidesdb_default_isolation;
+    cf_config.min_levels = tidesdb_min_levels;
+    cf_config.dividing_level_offset = tidesdb_dividing_level_offset;
+    cf_config.klog_value_threshold = tidesdb_klog_value_threshold;
+    cf_config.min_disk_space = tidesdb_min_disk_space;
+    cf_config.l1_file_count_trigger = tidesdb_l1_file_count_trigger;
+    cf_config.l0_queue_stall_threshold = tidesdb_l0_queue_stall_threshold;
+    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
+
+    if (tidesdb_enable_compression)
+        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
+    else
+        cf_config.compression_algorithm = TDB_COMPRESS_NONE;
+
+    return cf_config;
+}
 
 /**
   @brief
@@ -2660,16 +2700,7 @@ int ha_tidesdb::create_secondary_indexes(const char *table_name)
     char idx_cf_name[TIDESDB_IDX_CF_NAME_BUF_SIZE];
     get_cf_name(table_name, cf_name, sizeof(cf_name));
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
-    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-    cf_config.bloom_fpr = tidesdb_bloom_fpr;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    }
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
     for (uint i = 0; i < table->s->keys; i++)
     {
@@ -2759,16 +2790,9 @@ int ha_tidesdb::create_fulltext_indexes(const char *table_name)
     char ft_cf_name[TIDESDB_IDX_CF_NAME_BUF_SIZE];
     get_cf_name(table_name, cf_name, sizeof(cf_name));
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
     cf_config.enable_bloom_filter = 1;
     cf_config.bloom_fpr = TIDESDB_DEFAULT_BLOOM_FPR;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    }
 
     uint ft_count = 0;
     for (uint i = 0; i < table->s->keys && ft_count < TIDESDB_MAX_FT_INDEXES; i++)
@@ -4197,11 +4221,9 @@ int ha_tidesdb::create_spatial_index(const char *table_name, uint key_nr)
 
     snprintf(spatial_cf_name, sizeof(spatial_cf_name), TIDESDB_CF_SPATIAL_FMT, cf_name, key_nr);
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
     cf_config.enable_bloom_filter = 1;
     cf_config.bloom_fpr = TIDESDB_DEFAULT_BLOOM_FPR;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
 
     int ret = tidesdb_create_column_family(tidesdb_instance, spatial_cf_name, &cf_config);
     if (ret != TDB_SUCCESS && ret != TDB_ERR_EXISTS)
@@ -4768,35 +4790,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
     char cf_name[TIDESDB_CF_NAME_BUF_SIZE];
     get_cf_name(name, cf_name, sizeof(cf_name));
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
-    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-    cf_config.bloom_fpr = tidesdb_bloom_fpr;
-    cf_config.level_size_ratio = tidesdb_level_size_ratio;
-    cf_config.skip_list_max_level = tidesdb_skip_list_max_level;
-    cf_config.skip_list_probability = (float)tidesdb_skip_list_probability;
-    cf_config.enable_block_indexes = tidesdb_enable_block_indexes ? 1 : 0;
-    cf_config.index_sample_ratio = tidesdb_index_sample_ratio;
-    cf_config.block_index_prefix_len = tidesdb_block_index_prefix_len;
-    cf_config.sync_mode = tidesdb_sync_mode;
-    cf_config.sync_interval_us = tidesdb_sync_interval_us;
-    cf_config.default_isolation_level = (tidesdb_isolation_level_t)tidesdb_default_isolation;
-    cf_config.min_levels = tidesdb_min_levels;
-    cf_config.dividing_level_offset = tidesdb_dividing_level_offset;
-    cf_config.klog_value_threshold = tidesdb_klog_value_threshold;
-    cf_config.min_disk_space = tidesdb_min_disk_space;
-    cf_config.l1_file_count_trigger = tidesdb_l1_file_count_trigger;
-    cf_config.l0_queue_stall_threshold = tidesdb_l0_queue_stall_threshold;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    }
-    else
-    {
-        cf_config.compression_algorithm = TDB_COMPRESS_NONE;
-    }
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
     /*
       Apply per-table CREATE TABLE options if specified.
@@ -7866,15 +7860,7 @@ int ha_tidesdb::delete_all_rows()
     char cf_name[TIDESDB_CF_NAME_BUF_SIZE];
     get_cf_name(share->table_name, cf_name, sizeof(cf_name));
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
-    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    else
-        cf_config.compression_algorithm = TDB_COMPRESS_NONE;
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
     int ret;
 
@@ -10274,20 +10260,7 @@ int ha_tidesdb::discard_or_import_tablespace(my_bool discard)
 
         sql_print_information("TidesDB: Importing tablespace for %s", cf_name);
 
-        tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-        cf_config.write_buffer_size = tidesdb_write_buffer_size;
-        cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-        cf_config.bloom_fpr = tidesdb_bloom_fpr;
-        cf_config.level_size_ratio = tidesdb_level_size_ratio;
-        cf_config.skip_list_max_level = tidesdb_skip_list_max_level;
-        cf_config.enable_block_indexes = tidesdb_enable_block_indexes ? 1 : 0;
-        cf_config.sync_mode = tidesdb_sync_mode;
-        cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-        if (tidesdb_enable_compression)
-            cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-        else
-            cf_config.compression_algorithm = TDB_COMPRESS_NONE;
+        tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
         int ret = tidesdb_create_column_family(tidesdb_instance, cf_name, &cf_config);
         if (ret != TDB_SUCCESS && ret != TDB_ERR_EXISTS)
@@ -11009,21 +10982,7 @@ int ha_tidesdb::add_index_inplace(TABLE *altered_table, Alter_inplace_info *ha_a
     char cf_name[TIDESDB_CF_NAME_BUF_SIZE];
     get_cf_name(share->table_name, cf_name, sizeof(cf_name));
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
-    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-    cf_config.bloom_fpr = tidesdb_bloom_fpr;
-    cf_config.sync_mode = tidesdb_sync_mode;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    }
-    else
-    {
-        cf_config.compression_algorithm = TDB_COMPRESS_NONE;
-    }
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
     for (uint i = 0; i < ha_alter_info->index_add_count; i++)
     {
