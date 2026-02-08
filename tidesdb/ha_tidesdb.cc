@@ -8740,10 +8740,37 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
 THR_LOCK_DATA **ha_tidesdb::store_lock(THD *thd, THR_LOCK_DATA **to, enum thr_lock_type lock_type)
 {
     /*
-      TidesDB MVCC -- We accept any lock type but don't actually lock.
-      The lock.type is used by MariaDB for query planning, not actual locking.
+      TidesDB uses MVCC -- reads see a consistent snapshot and writes use
+      optimistic concurrency control with conflict detection at commit time.
+      No row-level or table-level locks are needed.
+
+      We must downgrade exclusive write locks to TL_WRITE_ALLOW_WRITE so that
+      MariaDB's THR_LOCK manager allows multiple concurrent writers.  Without
+      this, THR_LOCK serializes all write operations to the same table,
+      destroying multi-threaded write throughput.
+
+      Similarly, downgrade TL_READ_NO_INSERT to TL_READ so that INSERT...SELECT
+      from a table does not block concurrent inserts into that table.
+
+      This matches the approach used by InnoDB and MyRocks.
     */
-    if (lock_type != TL_IGNORE && lock.type == TL_UNLOCK) lock.type = lock_type;
+    if (lock_type != TL_IGNORE && lock.type == TL_UNLOCK)
+    {
+        /* Allow concurrent writers -- don't hold exclusive table-level locks */
+        if (lock_type >= TL_WRITE_CONCURRENT_INSERT && lock_type <= TL_WRITE &&
+            !thd_in_lock_tables(thd) && !thd_tablespace_op(thd))
+        {
+            lock_type = TL_WRITE_ALLOW_WRITE;
+        }
+
+        /* Allow concurrent inserts during INSERT...SELECT */
+        if (lock_type == TL_READ_NO_INSERT && !thd_in_lock_tables(thd))
+        {
+            lock_type = TL_READ;
+        }
+
+        lock.type = lock_type;
+    }
     *to++ = &lock;
     return to;
 }
