@@ -1,0 +1,80 @@
+#
+# TidesDB BLOB/TEXT with secondary index test
+# Tests large values with vlog indirection + index maintenance
+#
+DROP TABLE IF EXISTS tidesdb_check;
+# Test 1: TEXT column with secondary index on other columns
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+title VARCHAR(100),
+body TEXT,
+KEY idx_title (title)
+) ENGINE=TidesDB;
+Warnings:
+Note	1071	Specified key was too long; max key length is 255 bytes
+INSERT INTO t1 VALUES (1, 'first', REPEAT('a', 10000));
+INSERT INTO t1 VALUES (2, 'second', REPEAT('b', 50000));
+INSERT INTO t1 VALUES (3, 'first', REPEAT('c', 60000));
+# Index scan should work with large TEXT values
+SELECT id, title, LENGTH(body) FROM t1 WHERE title = 'first' ORDER BY id;
+id	title	LENGTH(body)
+1	first	10000
+3	first	60000
+# Test 2: Update large value
+UPDATE t1 SET body = REPEAT('x', 60000) WHERE id = 2;
+SELECT id, LENGTH(body) FROM t1 WHERE id = 2;
+id	LENGTH(body)
+2	60000
+# Test 3: Delete row with large value
+DELETE FROM t1 WHERE id = 1;
+SELECT id, title FROM t1 ORDER BY id;
+id	title
+2	second
+3	first
+# Test 4: BLOB column
+CREATE TABLE t2 (
+id INT PRIMARY KEY,
+data BLOB,
+tag VARCHAR(50),
+KEY idx_tag (tag)
+) ENGINE=TidesDB;
+INSERT INTO t2 VALUES (1, REPEAT(x'DE', 5000), 'binary1');
+INSERT INTO t2 VALUES (2, REPEAT(x'CA', 10000), 'binary2');
+INSERT INTO t2 VALUES (3, REPEAT(x'DE', 5000), 'binary1');
+SELECT id, LENGTH(data), tag FROM t2 WHERE tag = 'binary1' ORDER BY id;
+id	LENGTH(data)	tag
+1	5000	binary1
+3	5000	binary1
+# Test 5: Multiple TEXT/BLOB columns
+CREATE TABLE t3 (
+id INT PRIMARY KEY,
+col1 TEXT,
+col2 TEXT,
+col3 BLOB,
+name VARCHAR(50),
+KEY idx_name (name)
+) ENGINE=TidesDB;
+INSERT INTO t3 VALUES (1, REPEAT('a', 1000), REPEAT('b', 5000), REPEAT(x'FF', 2000), 'row1');
+INSERT INTO t3 VALUES (2, REPEAT('c', 2000), REPEAT('d', 10000), REPEAT(x'01', 3000), 'row2');
+SELECT id, LENGTH(col1), LENGTH(col2), LENGTH(col3), name FROM t3 ORDER BY id;
+id	LENGTH(col1)	LENGTH(col2)	LENGTH(col3)	name
+1	1000	5000	2000	row1
+2	2000	10000	3000	row2
+# Test 6: Bulk insert with large values
+CREATE TABLE t4 (
+id INT PRIMARY KEY,
+val TEXT
+) ENGINE=TidesDB;
+SELECT COUNT(*) FROM t4;
+COUNT(*)
+100
+SELECT id, LENGTH(val) FROM t4 WHERE id IN (1, 50, 100) ORDER BY id;
+id	LENGTH(val)
+1	5100
+50	10000
+100	15000
+# Cleanup
+DROP TABLE t4;
+DROP TABLE t3;
+DROP TABLE t2;
+DROP TABLE t1;

@@ -16,9 +16,9 @@ SELECT * FROM t1 ORDER BY id;
 id	val
 1	10
 2	20
-3	30
-4	40
-5	50
+3	31
+4	41
+5	51
 COMMIT;
 SELECT * FROM t1 ORDER BY id;
 id	val
@@ -35,9 +35,9 @@ SELECT * FROM t1 ORDER BY id;
 id	val
 1	10
 2	20
-3	31
-4	41
-5	51
+3	32
+4	42
+5	52
 COMMIT;
 SELECT * FROM t1 ORDER BY id;
 id	val
@@ -52,8 +52,6 @@ START TRANSACTION;
 DELETE FROM t1 WHERE val < 25;
 SELECT * FROM t1 ORDER BY id;
 id	val
-1	10
-2	20
 3	32
 4	42
 5	52
@@ -77,8 +75,8 @@ UPDATE t2 SET name = 'updated' WHERE val >= 20;
 SELECT * FROM t2 ORDER BY id;
 id	name	val
 1	a	10
-2	b	20
-3	c	30
+2	updated	20
+3	updated	30
 COMMIT;
 SELECT * FROM t2 ORDER BY id;
 id	name	val

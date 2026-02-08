@@ -29,8 +29,8 @@ id	name
 2	row2
 3	row3
 4	row4
-5	after100
 100	explicit100
+101	after100
 # Test 4: Auto-increment after DELETE
 DELETE FROM t1 WHERE id = 100;
 INSERT INTO t1 (name) VALUES ('afterDelete');
@@ -40,8 +40,8 @@ id	name
 2	row2
 3	row3
 4	row4
-5	after100
-6	afterDelete
+101	after100
+102	afterDelete
 # Test 5: Auto-increment with TRUNCATE (bug fix test)
 TRUNCATE TABLE t1;
 INSERT INTO t1 (name) VALUES ('afterTruncate1');

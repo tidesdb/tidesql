@@ -38,14 +38,17 @@ INSERT INTO t2 VALUES (1, 'charlie'), (2, 'alice'), (3, 'bob'), (4, 'david'), (5
 # Should return rows in name order using index
 SELECT id, name FROM t2 ORDER BY name;
 id	name
-1	charlie
+2	alice
 3	bob
+1	charlie
 4	david
 5	eve
 # Range scan on secondary index
 SELECT id, name FROM t2 WHERE name >= 'bob' AND name <= 'david' ORDER BY name;
 id	name
 3	bob
+1	charlie
+4	david
 DROP TABLE t2;
 #
 # Test 3: Index scan with LIMIT
@@ -59,14 +62,14 @@ INSERT INTO t3 VALUES (1, 100), (2, 50), (3, 75), (4, 25), (5, 90);
 # Top 3 scores
 SELECT id, score FROM t3 ORDER BY score DESC LIMIT 3;
 id	score
+1	100
 5	90
-4	25
 3	75
 # Bottom 2 scores
 SELECT id, score FROM t3 ORDER BY score LIMIT 2;
 id	score
-1	100
-3	75
+4	25
+2	50
 DROP TABLE t3;
 #
 # Test 4: Composite index scan
@@ -92,10 +95,11 @@ id	category	price
 # All items ordered by category, then price
 SELECT id, category, price FROM t4 ORDER BY category, price;
 id	category	price
-1	electronics	299.99
 3	books	19.99
 4	books	29.99
+2	electronics	99.99
 5	electronics	199.99
+1	electronics	299.99
 DROP TABLE t4;
 #
 # Test 5: Index scan after updates
@@ -110,11 +114,13 @@ INSERT INTO t5 VALUES (1, 10), (2, 20), (3, 30);
 SELECT * FROM t5 ORDER BY val;
 id	val
 1	10
+2	20
 3	30
 UPDATE t5 SET val = 25 WHERE id = 1;
 # After update - order should change
 SELECT * FROM t5 ORDER BY val;
 id	val
+2	20
 1	25
 3	30
 DROP TABLE t5;

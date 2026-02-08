@@ -19,7 +19,9 @@
 #   DATA_DIR              -- Base data directory for MariaDB (will start server automatically)
 #   INNODB_DATA_DIR       -- Custom InnoDB data/tablespace directory (for fast disk)
 #   TIDESDB_DATA_DIR      -- Custom TidesDB data directory (for fast disk)
-#   TIDESDB_USE_BTREE     -- Use B+tree SSTable format (default: ON, set OFF for block layout)
+#   TIDESDB_USE_BTREE     -- Use B+tree SSTable format (default: OFF, set ON for B+tree layout)
+#   TIDESDB_SYNC_MODE     -- Sync mode: none, interval, full (default: none for benchmarking)
+#   INNODB_FLUSH          -- InnoDB flush_log_at_trx_commit value (default: 0 for benchmarking)
 #   SOCKET                -- MySQL socket path (default: MTR socket or DATA_DIR/mysqld.sock)
 #   TABLE_SIZES           -- Space-separated list of table sizes (default: "10000")
 #   THREAD_COUNTS         -- Space-separated list of thread counts (default: "1")
@@ -92,18 +94,18 @@ run_sysbench_test() {
     local test=$2
     local threads=$3
     local table_size=$4
-
+    
     # Extract just the test name for display and filenames
     local test_name=$(basename "$test" .lua)
-
+    
     echo ""
     echo "═══════════════════════════════════════════════════════════════════"
     echo "  $engine - $test_name (threads=$threads, table_size=$table_size)"
     echo "═══════════════════════════════════════════════════════════════════"
-
+    
     # Cleanup
     $MYSQL_BIN -S "$SOCKET" -u "$USER" -e "DROP TABLE IF EXISTS sbtest1" "$DB" 2>/dev/null || true
-
+    
     # Prepare
     echo "▶ Preparing table with $table_size rows..."
     if ! sysbench "$test" \
@@ -118,7 +120,7 @@ run_sysbench_test() {
         echo "  ✗ Prepare failed for $engine $test_name"
         return 1
     fi
-
+    
     # Warmup phase (if configured)
     if [ "$WARMUP" -gt 0 ]; then
         echo "▶ Warming up for ${WARMUP}s..."
@@ -134,11 +136,11 @@ run_sysbench_test() {
             --mysql-ignore-errors=1213,1020,1205,1180 \
             run > /dev/null 2>&1 || true
     fi
-
+    
     # Run and capture output
     echo "▶ Running benchmark for ${TIME}s with $threads threads..."
     local output_file="$OUTPUT_DIR/${engine}_${test_name}_t${threads}_s${table_size}_${TIMESTAMP}.txt"
-
+    
     sysbench "$test" \
         --mysql-socket="$SOCKET" \
         --mysql-user="$USER" \
@@ -150,10 +152,10 @@ run_sysbench_test() {
         --mysql-storage-engine="$engine" \
         --report-interval="$REPORT_INTERVAL" \
         --histogram=on \
-        --percentile=99 \
+        --percentile=95 \
         --mysql-ignore-errors=1213,1020,1205,1180 \
         run 2>&1 | tee "$output_file"
-
+    
     # Parse results - extended metrics
     local tps=$(grep "transactions:" "$output_file" | awk '{print $2}' | sed 's/(//g')
     local qps=$(grep "queries:" "$output_file" | head -1 | awk '{print $2}' | sed 's/(//g')
@@ -161,21 +163,21 @@ run_sysbench_test() {
     local writes=$(grep "write:" "$output_file" | head -1 | awk '{print $2}')
     local lat_avg=$(grep "avg:" "$output_file" | tail -1 | awk '{print $2}')
     local lat_min=$(grep "min:" "$output_file" | tail -1 | awk '{print $2}')
-    local lat_p50=$(grep "50th percentile:" "$output_file" | awk '{print $3}' || echo "0")
-    local lat_p95=$(grep "95th percentile:" "$output_file" | awk '{print $3}')
-    local lat_p99=$(grep "99th percentile:" "$output_file" | awk '{print $3}' || echo "0")
+    local lat_p50="0"
+    local lat_p95=$(grep "95th percentile:" "$output_file" | awk '{print $3}' || echo "0")
+    local lat_p99="0"
     local lat_max=$(grep "max:" "$output_file" | tail -1 | awk '{print $2}')
     local errors=$(grep "errors:" "$output_file" | head -1 | awk '{print $2}' || echo "0")
     local reconnects=$(grep "reconnects:" "$output_file" | head -1 | awk '{print $2}' || echo "0")
     local total_time=$(grep "total time:" "$output_file" | awk '{print $3}' | sed 's/s//g')
-
+    
     # Calculate reads/writes per second
     local reads_per_sec=$(echo "scale=2; ${reads:-0} / ${total_time:-1}" | bc 2>/dev/null || echo "0")
     local writes_per_sec=$(echo "scale=2; ${writes:-0} / ${total_time:-1}" | bc 2>/dev/null || echo "0")
-
+    
     # Write to summary CSV with extended metrics
     echo "$engine,$test_name,$threads,$table_size,$tps,$qps,$reads_per_sec,$writes_per_sec,$lat_avg,$lat_min,$lat_p50,$lat_p95,$lat_p99,$lat_max,$errors,$reconnects,$total_time,$WARMUP" >> "$SUMMARY_CSV"
-
+    
     # Parse interval reports for detail CSV
     grep "thds:" "$output_file" | while read line; do
         local time_s=$(echo "$line" | awk -F'[\\[\\]]' '{print $2}' | sed 's/s//g')
@@ -185,19 +187,19 @@ run_sysbench_test() {
         local int_p95=$(echo "$line" | awk '{print $11}' 2>/dev/null || echo "0")
         echo "$engine,$test_name,$threads,$table_size,$time_s,$int_tps,$int_qps,$int_lat,$int_p95" >> "$DETAIL_CSV"
     done
-
+    
     # Parse histogram for latency distribution CSV
     if grep -q "Latency histogram" "$output_file"; then
-        grep -A 100 "Latency histogram" "$output_file" | grep "ms$" | while read line; do
+        sed -n '/Latency histogram/,/^$/p' "$output_file" | grep "|" | while read line; do
             local pct=$(echo "$line" | awk '{print $1}')
             local lat=$(echo "$line" | awk '{print $2}' | sed 's/ms//g')
             echo "$engine,$test_name,$threads,$table_size,$pct,$lat" >> "$LATENCY_CSV"
         done
     fi
-
+    
     echo ""
-    echo "✓ $engine $test_name: TPS=$tps, QPS=$qps, Latency avg=${lat_avg}ms p95=${lat_p95}ms p99=${lat_p99}ms"
-
+    echo "✓ $engine $test_name: TPS=$tps, QPS=$qps, Latency avg=${lat_avg}ms p95=${lat_p95}ms max=${lat_max}ms"
+    
     # Cleanup
     sysbench "$test" \
         --mysql-socket="$SOCKET" \
@@ -215,18 +217,18 @@ if [ -n "$DATA_DIR" ]; then
     # INNODB_DATA_DIR: Where InnoDB stores its tablespace files
     TIDESDB_DIR="${TIDESDB_DATA_DIR:-${DATA_DIR}/tidesdb}"
     INNODB_DIR="${INNODB_DATA_DIR:-${DATA_DIR}}"
-
+    
     PID_FILE="${DATA_DIR}/mysqld.pid"
     ERROR_LOG="${DATA_DIR}/mysqld.err"
     MYSQLD="${BUILD_DIR}/sql/mariadbd"
-
+    
     # Check if server is already running
     if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
         echo "Server already running (PID: $(cat $PID_FILE))"
     else
         # Create directories
         mkdir -p "$DATA_DIR" "$TIDESDB_DIR" "$INNODB_DIR"
-
+        
         # Initialize data directory if needed
         if [ ! -d "$DATA_DIR/mysql" ]; then
             echo "Initializing data directory: $DATA_DIR"
@@ -235,12 +237,12 @@ if [ -n "$DATA_DIR" ]; then
                 --datadir="$DATA_DIR" \
                 --user=$(whoami) 2>&1 | tail -3
         fi
-
+        
         echo "Starting MariaDB server with custom data directories..."
         echo "  MariaDB data:  $DATA_DIR"
         echo "  InnoDB data:   $INNODB_DIR"
         echo "  TidesDB data:  $TIDESDB_DIR"
-
+        
         "$MYSQLD" \
             --no-defaults \
             --basedir="${BUILD_DIR}" \
@@ -252,17 +254,18 @@ if [ -n "$DATA_DIR" ]; then
             --plugin-maturity=alpha \
             --plugin-load-add=ha_tidesdb.so \
             --loose-tidesdb_data_dir="$TIDESDB_DIR" \
-            --loose-tidesdb_use_btree="${TIDESDB_USE_BTREE:-ON}" \
+            --loose-tidesdb_use_btree="${TIDESDB_USE_BTREE:-OFF}" \
+            --loose-tidesdb_sync_mode="${TIDESDB_SYNC_MODE:-none}" \
             --innodb=ON \
             --innodb-data-home-dir="$INNODB_DIR" \
             --innodb-log-group-home-dir="$INNODB_DIR" \
             --innodb-buffer-pool-size=256M \
             --innodb-log-file-size=64M \
-            --innodb-flush-log-at-trx-commit=1 \
+            --innodb-flush-log-at-trx-commit=${INNODB_FLUSH:-0} \
             --skip-grant-tables \
             --skip-networking \
             &
-
+        
         # Wait for server to start
         echo -n "Waiting for server"
         for i in {1..30}; do
@@ -274,14 +277,14 @@ if [ -n "$DATA_DIR" ]; then
             echo -n "."
             sleep 1
         done
-
+        
         if [ $SERVER_STARTED -eq 0 ]; then
             echo " FAILED"
             echo "Check error log: $ERROR_LOG"
             tail -20 "$ERROR_LOG"
             exit 1
         fi
-
+        
         # Create test database if it doesn't exist
         echo "Creating test database..."
         "$MYSQL_BIN" -S "$SOCKET" -u root -e "CREATE DATABASE IF NOT EXISTS $DB" 2>/dev/null || true
@@ -331,7 +334,7 @@ for table_size in $TABLE_SIZES; do
                 current_test=$((current_test + 1))
                 echo ""
                 echo "▓▓▓ Test $current_test of $total_tests ▓▓▓"
-
+                
                 # Check for batched version first (reduces conflicts for MVCC)
                 batched_script="$SCRIPT_DIR/${workload}_batched.lua"
                 if [ -f "$batched_script" ]; then

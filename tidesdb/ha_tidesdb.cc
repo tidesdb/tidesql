@@ -37,12 +37,14 @@
 #include "ha_tidesdb.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <my_global.h>
 #include <mysql/plugin.h>
 #include <mysql/service_encryption.h>
 #include <tidesdb/tidesdb_version.h>
 
 #include "key.h"
+#include "myisampack.h"
 #include "sql_class.h"
 
 /* Fulltext search configuration */
@@ -52,6 +54,7 @@ static ulong tidesdb_ft_max_query_words = TIDESDB_DEFAULT_FT_MAX_QUERY_WORDS;
 
 /* Portable case-insensitive string comparison */
 #ifdef _WIN32
+#include <direct.h> /* rmdir */
 #define tidesdb_strcasecmp _stricmp
 #else
 #define tidesdb_strcasecmp strcasecmp
@@ -149,14 +152,9 @@ static double tidesdb_bloom_fpr = TIDESDB_DEFAULT_BLOOM_FPR; /* 1% default */
 static my_bool tidesdb_enable_encryption = FALSE;
 static ulong tidesdb_encryption_key_id = TIDESDB_DEFAULT_ENCRYPTION_KEY_ID; /* Default key ID */
 
-/* Change buffer settings for secondary indexes */
-static my_bool tidesdb_enable_change_buffer = TRUE;
-static ulong tidesdb_change_buffer_max_size =
-    TIDESDB_DEFAULT_CHANGE_BUFFER_SIZE; /* Max pending entries before flush */
-
 /* Default isolation level -- 0=read_uncommitted, 1=read_committed, 2=repeatable_read, 3=snapshot,
  * 4=serializable */
-static ulong tidesdb_default_isolation = TIDESDB_DEFAULT_ISOLATION; /* read_committed default */
+static ulong tidesdb_default_isolation = TIDESDB_DEFAULT_ISOLATION; /* repeatable_read default */
 static const char *tidesdb_isolation_names[] = {
     "read_uncommitted", "read_committed", "repeatable_read", "snapshot", "serializable", NullS};
 static TYPELIB tidesdb_isolation_typelib = {array_elements(tidesdb_isolation_names) - 1,
@@ -277,6 +275,8 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
     share->row_count = 0;
     share->row_count_valid = false;
     share->hidden_pk_value = 0;
+    share->cached_stats = NULL; /* unused -- stats fetched realtime */
+    share->cached_stats_time = 0;
     share->tablespace_discarded = false;
 
     if (my_hash_insert(&tidesdb_open_tables, (uchar *)share)) goto error;
@@ -284,10 +284,6 @@ static TIDESDB_SHARE *get_share(const char *table_name, TABLE *table)
     pthread_mutex_init(&share->mutex, MY_MUTEX_INIT_FAST);
     pthread_mutex_init(&share->auto_inc_mutex, MY_MUTEX_INIT_FAST);
     pthread_mutex_init(&share->hidden_pk_mutex, MY_MUTEX_INIT_FAST);
-    pthread_mutex_init(&share->change_buffer.mutex, MY_MUTEX_INIT_FAST);
-    share->change_buffer.enabled = tidesdb_enable_change_buffer;
-    share->change_buffer.pending_count = 0;
-
     mysql_rwlock_unlock(&tidesdb_rwlock);
     return share;
 
@@ -295,7 +291,6 @@ error:
     pthread_mutex_destroy(&share->mutex);
     pthread_mutex_destroy(&share->auto_inc_mutex);
     pthread_mutex_destroy(&share->hidden_pk_mutex);
-    pthread_mutex_destroy(&share->change_buffer.mutex);
     my_free(share);
     mysql_rwlock_unlock(&tidesdb_rwlock);
     return NULL;
@@ -324,12 +319,34 @@ static int free_share(TIDESDB_SHARE *share)
         pthread_mutex_destroy(&share->mutex);
         pthread_mutex_destroy(&share->auto_inc_mutex);
         pthread_mutex_destroy(&share->hidden_pk_mutex);
-        pthread_mutex_destroy(&share->change_buffer.mutex);
-        my_free(share);
+        if (share->cached_stats)
+        {
+            tidesdb_free_stats(share->cached_stats);
+            share->cached_stats = NULL;
+        }
+        my_free(share); /* cached_stats kept for ABI compat but unused */
     }
 
     mysql_rwlock_unlock(&tidesdb_rwlock);
     return 0;
+}
+
+/**
+  @brief
+  Get realtime stats from TidesDB.  No caching -- TidesDB provides
+  stats cheaply and caching causes stale counts that break the optimizer
+  (e.g. reporting 0 rows when uncommitted txn ops exist).
+
+  Caller must call tidesdb_free_stats() on the returned pointer.
+  Returns NULL on failure.
+*/
+static tidesdb_stats_t *get_realtime_stats(TIDESDB_SHARE *share)
+{
+    if (!share || !share->cf) return NULL;
+
+    tidesdb_stats_t *stats = NULL;
+    if (tidesdb_get_stats(share->cf, &stats) == TDB_SUCCESS) return stats;
+    return NULL;
 }
 
 /**
@@ -501,7 +518,7 @@ static void tidesdb_update_optimizer_costs(OPTIMIZER_COSTS *costs)
 */
 static ha_create_table_option tidesdb_table_option_list[] = {
     /* Storage format */
-    HA_TOPTION_STRING("COMPRESSION", compression), HA_TOPTION_BOOL("USE_BTREE", use_btree, 1),
+    HA_TOPTION_STRING("COMPRESSION", compression), HA_TOPTION_BOOL("USE_BTREE", use_btree, 0),
 
     /* Memory / write path */
     HA_TOPTION_NUMBER("WRITE_BUFFER_SIZE", write_buffer_size, 0, 0, ULLONG_MAX, 0),
@@ -541,6 +558,46 @@ static ha_create_table_option tidesdb_table_option_list[] = {
     HA_TOPTION_NUMBER("TTL", ttl, 0, 0, ULLONG_MAX, 0),
 
     HA_TOPTION_END};
+
+/**
+  @brief
+  Build a column family config from current global system variable values.
+
+  This ensures all CF creation paths use consistent settings.
+  Call tidesdb_default_column_family_config() first to get library defaults,
+  then override every field with the plugin's sysvar values.
+*/
+static tidesdb_column_family_config_t build_cf_config_from_sysvars()
+{
+    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
+
+    cf_config.write_buffer_size = tidesdb_write_buffer_size;
+    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
+    cf_config.bloom_fpr = tidesdb_bloom_fpr;
+    cf_config.level_size_ratio = tidesdb_level_size_ratio;
+    cf_config.skip_list_max_level = tidesdb_skip_list_max_level;
+    cf_config.skip_list_probability = (float)tidesdb_skip_list_probability;
+    cf_config.enable_block_indexes = tidesdb_enable_block_indexes ? 1 : 0;
+    cf_config.index_sample_ratio = tidesdb_index_sample_ratio;
+    cf_config.block_index_prefix_len = tidesdb_block_index_prefix_len;
+    cf_config.sync_mode = tidesdb_sync_mode;
+    cf_config.sync_interval_us = tidesdb_sync_interval_us;
+    cf_config.default_isolation_level = (tidesdb_isolation_level_t)tidesdb_default_isolation;
+    cf_config.min_levels = tidesdb_min_levels;
+    cf_config.dividing_level_offset = tidesdb_dividing_level_offset;
+    cf_config.klog_value_threshold = tidesdb_klog_value_threshold;
+    cf_config.min_disk_space = tidesdb_min_disk_space;
+    cf_config.l1_file_count_trigger = tidesdb_l1_file_count_trigger;
+    cf_config.l0_queue_stall_threshold = tidesdb_l0_queue_stall_threshold;
+    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
+
+    if (tidesdb_enable_compression)
+        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
+    else
+        cf_config.compression_algorithm = TDB_COMPRESS_NONE;
+
+    return cf_config;
+}
 
 /**
   @brief
@@ -705,6 +762,40 @@ static void set_thd_txn(THD *thd, handlerton *hton, tidesdb_txn_t *txn)
     thd_set_ha_data(thd, hton, txn);
 }
 
+/* Forward declaration -- defined later near external_lock */
+static int map_isolation_level(enum_tx_isolation mysql_iso);
+
+/**
+  @brief
+  Map TidesDB error codes to MariaDB handler error codes.
+
+  Critical for correctness: TDB_ERR_CONFLICT must map to HA_ERR_LOCK_DEADLOCK
+  so MariaDB's SQL layer can automatically retry the statement.
+*/
+static int map_tidesdb_error(int tdb_err)
+{
+    switch (tdb_err)
+    {
+        case TDB_SUCCESS:
+            return 0;
+        case TDB_ERR_CONFLICT:
+            return HA_ERR_LOCK_DEADLOCK;
+        case TDB_ERR_NOT_FOUND:
+            return HA_ERR_KEY_NOT_FOUND;
+        case TDB_ERR_EXISTS:
+            return HA_ERR_FOUND_DUPP_KEY;
+        case TDB_ERR_MEMORY:
+        case TDB_ERR_MEMORY_LIMIT:
+            return HA_ERR_OUT_OF_MEM;
+        case TDB_ERR_CORRUPTION:
+            return HA_ERR_CRASHED;
+        case TDB_ERR_TOO_LARGE:
+            return HA_ERR_TO_BIG_ROW;
+        default:
+            return HA_ERR_GENERIC;
+    }
+}
+
 /**
   @brief
   Commit a transaction.
@@ -719,22 +810,29 @@ static int tidesdb_commit(THD *thd, bool all)
 
     tidesdb_txn_t *txn = get_thd_txn(thd, tidesdb_hton);
 
-    if (txn && all)
+    if (!txn) DBUG_RETURN(0);
+
+    /*
+      Determine whether this call should actually commit:
+      -- all=true  -> always commit (explicit COMMIT or final commit)
+      -- all=false -> commit only when NOT inside any form of transaction.
+         This handles autocommit=1 single statements (the only case where
+         all=false is the real commit).  For autocommit=0 or explicit BEGIN,
+         all=false is a statement-end no-op; the real commit comes with
+         all=true from COMMIT.
+    */
+    bool do_commit = all || !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+
+    if (do_commit)
     {
-        /* We commit the THD-level transaction */
         int ret = tidesdb_txn_commit(txn);
         tidesdb_txn_free(txn);
         set_thd_txn(thd, tidesdb_hton, NULL);
 
         if (ret != TDB_SUCCESS)
         {
-            if (ret == TDB_ERR_CONFLICT)
-            {
-                /* Transaction conflict -- tell system to retry */
-                DBUG_RETURN(HA_ERR_LOCK_DEADLOCK);
-            }
             sql_print_error("TidesDB: Failed to commit transaction: %d", ret);
-            DBUG_RETURN(HA_ERR_GENERIC);
+            DBUG_RETURN(map_tidesdb_error(ret));
         }
         DBUG_PRINT("info", ("TidesDB: Transaction committed"));
     }
@@ -755,9 +853,14 @@ static int tidesdb_rollback(THD *thd, bool all)
 
     tidesdb_txn_t *txn = get_thd_txn(thd, tidesdb_hton);
 
-    if (txn && all)
+    if (!txn) DBUG_RETURN(0);
+
+    /* Same logic as tidesdb_commit: rollback when all=true or when
+       not inside any form of transaction (autocommit=1 single statement). */
+    bool do_rollback = all || !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+
+    if (do_rollback)
     {
-        /* We rollback the THD-level transaction */
         int ret = tidesdb_txn_rollback(txn);
         tidesdb_txn_free(txn);
         set_thd_txn(thd, tidesdb_hton, NULL);
@@ -796,8 +899,11 @@ static int tidesdb_start_consistent_snapshot(THD *thd)
         DBUG_RETURN(0);
     }
 
-    /* We begin a new transaction with snapshot isolation for consistent reads */
-    int ret = tidesdb_txn_begin(tidesdb_instance, &txn);
+    /* We begin a new transaction with REPEATABLE_READ for true snapshot isolation.
+       tidesdb_txn_begin() defaults to READ_COMMITTED which refreshes snapshot
+       on each read -- that breaks START TRANSACTION WITH CONSISTENT SNAPSHOT. */
+    int ret =
+        tidesdb_txn_begin_with_isolation(tidesdb_instance, TDB_ISOLATION_REPEATABLE_READ, &txn);
     if (ret != TDB_SUCCESS)
     {
         sql_print_error("TidesDB: Failed to begin consistent snapshot transaction: %d", ret);
@@ -813,17 +919,6 @@ static int tidesdb_start_consistent_snapshot(THD *thd)
     DBUG_PRINT("info", ("TidesDB: Consistent snapshot started"));
     DBUG_RETURN(0);
 }
-
-/*
-  XA Transaction Support
-
-  TidesDB supports XA (eXtended Architecture) distributed transactions
-  for 2-phase commit protocol. This allows TidesDB to participate in
-  distributed transactions coordinated by an external transaction manager.
-
-  *** tidesdb_xa_txn_t, tidesdb_prepared_xids, and tidesdb_xa_mutex
-  are defined at the top of the file for use in shutdown cleanup.
-*/
 
 /**
   @brief
@@ -951,7 +1046,7 @@ static int tidesdb_commit_by_xid(XID *xid)
     {
         if (memcmp(&xa_txn->xid, xid, sizeof(XID)) == 0)
         {
-            /* We found the transaction -- remove from list */
+            /* We found the transaction -- we remove from list */
             if (prev)
                 prev->next = xa_txn->next;
             else
@@ -1010,7 +1105,7 @@ static int tidesdb_rollback_by_xid(XID *xid)
     {
         if (memcmp(&xa_txn->xid, xid, sizeof(XID)) == 0)
         {
-            /* We found the transaction -- remove from list */
+            /* We found the transaction -- we remove from list */
             if (prev)
                 prev->next = xa_txn->next;
             else
@@ -1158,7 +1253,7 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *stat_
         DBUG_RETURN(FALSE);
     }
 
-    const size_t buf_size = 16384;
+    const size_t buf_size = TIDESDB_STATUS_BUF_SIZE;
     char *buf = (char *)my_malloc(PSI_INSTRUMENT_ME, buf_size, MYF(MY_WME));
     if (!buf) DBUG_RETURN(TRUE);
 
@@ -1469,6 +1564,7 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
       pushed_cond(NULL),
       keyread_only(false),
       txn_read_only(false),
+      cached_now(0),
       semi_consistent_read_enabled(false),
       did_semi_consistent_read(false),
       idx_key_buffer(NULL),
@@ -1592,7 +1688,7 @@ int ha_tidesdb::pack_row(const uchar *buf, uchar **packed, size_t *packed_len)
             }
             else
             {
-                /* NULL blob -- store 0 length */
+                /* NULL blob -- we store 0 length */
                 int4store(pack_buffer + blob_offset, 0);
                 blob_offset += TIDESDB_BLOB_LEN_PREFIX_SIZE;
             }
@@ -1652,7 +1748,7 @@ int ha_tidesdb::unpack_row(uchar *buf, const uchar *packed, size_t packed_len)
             if (row_buffer) my_free(row_buffer);
             row_buffer = (uchar *)my_malloc(PSI_INSTRUMENT_ME, total_blob_size, MYF(MY_WME));
             if (!row_buffer) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-            row_buffer_len = total_blob_size;
+            row_buffer_len = (uint)total_blob_size;
         }
     }
 
@@ -1834,7 +1930,7 @@ static int tidesdb_decrypt_data(const uchar *src, size_t src_len, uchar **dst, s
     }
 
     if (src_len < TIDESDB_ENCRYPTION_VERSION_SIZE +
-                      TIDESDB_ENCRYPTION_IV_SIZE) /* Minimum: 4 (version) + 16 (IV) */
+                      TIDESDB_ENCRYPTION_IV_SIZE) /* Minimum -- 4 (version) + 16 (IV) */
     {
         sql_print_error("TidesDB: Encrypted data too short");
         return HA_ERR_GENERIC;
@@ -2122,7 +2218,7 @@ void ha_tidesdb::load_auto_increment_value()
   key in the primary column family. This allows statistics to survive server
   restarts without requiring a full table scan or ANALYZE TABLE.
 
-  Format: [8-byte row_count][8-byte data_file_length][4-byte mean_rec_length]
+  Format -- [8-byte row_count][8-byte data_file_length][4-byte mean_rec_length]
 */
 void ha_tidesdb::persist_table_stats()
 {
@@ -2172,7 +2268,6 @@ void ha_tidesdb::load_table_stats()
         {
             share->row_count = (ha_rows)uint8korr(value);
             share->row_count_valid = true;
-            /* data_file_length and mean_rec_length are loaded on demand in info() */
             free(value);
         }
 
@@ -2200,7 +2295,6 @@ void ha_tidesdb::load_hidden_pk_value()
      */
     pthread_mutex_lock(&share->hidden_pk_mutex);
 
-    /* Double-check after acquiring lock */
     if (share->hidden_pk_value > 0)
     {
         pthread_mutex_unlock(&share->hidden_pk_mutex);
@@ -2277,6 +2371,23 @@ void ha_tidesdb::load_hidden_pk_value()
 }
 
 /**
+  Compute the sort-key length for a secondary index (excluding PK suffix).
+  Sort keys use make_sort_key() per field, which omits the 2-byte VARCHAR
+  length prefix that key_copy() includes.  This makes the key memcmp-able.
+*/
+static uint compute_sort_key_length(const KEY *key_info)
+{
+    uint len = 0;
+    for (uint i = 0; i < key_info->user_defined_key_parts; i++)
+    {
+        const KEY_PART_INFO *kp = &key_info->key_part[i];
+        if (kp->null_bit) len += 1;
+        len += kp->length;
+    }
+    return len;
+}
+
+/**
   @brief
   Build a secondary index key from the row buffer.
 
@@ -2291,7 +2402,9 @@ int ha_tidesdb::build_index_key(uint idx, const uchar *buf, uchar **key, size_t 
     if (idx >= table->s->keys) DBUG_RETURN(HA_ERR_WRONG_INDEX);
 
     KEY *key_info = &table->key_info[idx];
-    uint idx_key_len = key_info->key_length;
+
+    /* Sort-key length (no VARCHAR length prefixes) */
+    uint sort_key_len = compute_sort_key_length(key_info);
 
     /* We calculate primary key length */
     size_t pk_len;
@@ -2305,7 +2418,7 @@ int ha_tidesdb::build_index_key(uint idx, const uchar *buf, uchar **key, size_t 
     }
 
     /* We reuse pre-allocated buffer when possible */
-    size_t total_len = idx_key_len + pk_len;
+    size_t total_len = sort_key_len + pk_len;
     if (total_len > idx_key_buffer_capacity)
     {
         size_t new_capacity = total_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
@@ -2322,26 +2435,47 @@ int ha_tidesdb::build_index_key(uint idx, const uchar *buf, uchar **key, size_t 
         idx_key_buffer_capacity = new_capacity;
     }
 
-    key_copy(idx_key_buffer, (uchar *)buf, key_info, idx_key_len);
+    /*
+      Build sort key per-part using field->make_sort_key_part().
+      This writes:  [null_ind?] [sort_string(length)]
+        -- nullable NULL          0x00 + length zero bytes   (length+1 total)
+        -- nullable NOT NULL      0x01 + sort data           (length+1 total)
+        -- non-nullable           sort data only             (length total)
 
-    /* We append primary key to ensure uniqueness */
+           Note -- make_sort_key_part's null polarity is OPPOSITE of key_copy's:
+                   key_copy: 0=NOT NULL, 1=NULL  |  make_sort_key_part: 0=NULL, 1=NOT NULL
+    */
+    my_ptrdiff_t rec_offset = buf - table->record[0];
+    uint offset = 0;
+
+    for (uint i = 0; i < key_info->user_defined_key_parts; i++)
+    {
+        KEY_PART_INFO *kp = &key_info->key_part[i];
+        Field *field = kp->field;
+
+        field->move_field_offset(rec_offset);
+        field->make_sort_key_part(idx_key_buffer + offset, kp->length);
+        field->move_field_offset(-rec_offset);
+
+        offset += kp->length;
+        if (field->maybe_null()) offset += 1;
+    }
+
+    /* We append primary key to ensure uniqueness (key_copy is fine for PK) */
     if (table->s->primary_key != MAX_KEY)
     {
         KEY *pk = &table->key_info[table->s->primary_key];
-        key_copy(idx_key_buffer + idx_key_len, (uchar *)buf, pk, pk_len);
+        key_copy(idx_key_buffer + offset, (uchar *)buf, pk, (uint)pk_len);
     }
     else
     {
-        /* For hidden PK, we need to use the current hidden_pk_value */
-        /* This is tricky -- for existing rows we need to extract from current_key */
         if (current_key && current_key_len == 8)
         {
-            memcpy(idx_key_buffer + idx_key_len, current_key, 8);
+            memcpy(idx_key_buffer + offset, current_key, 8);
         }
         else
         {
-            /* We use zeros (shouldn't happen in normal operation) */
-            memset(idx_key_buffer + idx_key_len, 0, 8);
+            memset(idx_key_buffer + offset, 0, 8);
         }
     }
 
@@ -2349,6 +2483,50 @@ int ha_tidesdb::build_index_key(uint idx, const uchar *buf, uchar **key, size_t 
     *key_len = total_len;
 
     DBUG_RETURN(0);
+}
+
+/**
+  Transform a search key from key_copy() format to the sort-key format
+  used by build_index_key().
+
+  Strategy: key_restore() the search key into table->record[1], then
+  call field->make_sort_key_part() for each provided key part.
+  This guarantees bit-identical output for ALL field types (INT,
+  VARCHAR, DECIMAL, DATE, etc.) regardless of internal encoding
+  differences between key_copy and sort_string.
+
+  @param table      TABLE object (needs record[1] as scratch)
+  @param key_info   Index definition
+  @param src        Search key in key_copy() format
+  @param src_len    Length of search key (may be partial)
+  @param dst        Output buffer (must be >= compute_sort_key_length)
+  @return           Length of transformed sort key
+*/
+static uint transform_search_key_to_sort_key(TABLE *table, const KEY *key_info, const uchar *src,
+                                             uint src_len, uchar *dst)
+{
+    key_restore(table->record[1], src, const_cast<KEY *>(key_info), src_len);
+
+    my_ptrdiff_t rec_offset = table->record[1] - table->record[0];
+    uint off_in = 0, off_out = 0;
+
+    for (uint i = 0; i < key_info->user_defined_key_parts; i++)
+    {
+        if (off_in >= src_len) break;
+
+        const KEY_PART_INFO *kp = &key_info->key_part[i];
+        Field *field = kp->field;
+
+        field->move_field_offset(rec_offset);
+        field->make_sort_key_part(dst + off_out, kp->length);
+        field->move_field_offset(-rec_offset);
+
+        off_out += kp->length;
+        if (field->maybe_null()) off_out += 1;
+        off_in += kp->store_length;
+    }
+
+    return off_out;
 }
 
 /**
@@ -2406,7 +2584,7 @@ int ha_tidesdb::insert_index_entry(uint idx, const uchar *buf, tidesdb_txn_t *tx
     if (table->s->primary_key != MAX_KEY)
     {
         KEY *pk = &table->key_info[table->s->primary_key];
-        key_copy(idx_pk_buffer, (uchar *)buf, pk, pk_len);
+        key_copy(idx_pk_buffer, (uchar *)buf, pk, (uint)pk_len);
     }
     else
     {
@@ -2421,6 +2599,26 @@ int ha_tidesdb::insert_index_entry(uint idx, const uchar *buf, tidesdb_txn_t *tx
         }
     }
 
+    /* For UNIQUE indexes, check for duplicate key before insert */
+    KEY *key_info = &table->key_info[idx];
+    if ((key_info->flags & HA_NOSAME) && !skip_dup_check)
+    {
+        uint8_t *existing_pk = NULL;
+        size_t existing_pk_len = 0;
+        int dup_ret = tidesdb_txn_get(txn, share->index_cf[idx], idx_key, idx_key_len, &existing_pk,
+                                      &existing_pk_len);
+        if (dup_ret == TDB_SUCCESS && existing_pk)
+        {
+            /* Entry exists -- we check if it points to a different PK (true duplicate) */
+            if (existing_pk_len != pk_len || memcmp(existing_pk, idx_pk_buffer, pk_len) != 0)
+            {
+                tidesdb_free(existing_pk);
+                DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
+            }
+            tidesdb_free(existing_pk);
+        }
+    }
+
     /* We insert into index CF -- index_key -> primary_key */
     ret =
         tidesdb_txn_put(txn, share->index_cf[idx], idx_key, idx_key_len, idx_pk_buffer, pk_len, -1);
@@ -2429,12 +2627,6 @@ int ha_tidesdb::insert_index_entry(uint idx, const uchar *buf, tidesdb_txn_t *tx
     {
         sql_print_error("TidesDB: Failed to insert index entry: %d", ret);
         DBUG_RETURN(HA_ERR_GENERIC);
-    }
-
-    if (share->change_buffer.enabled)
-    {
-        my_atomic_add32_explicit((volatile int32 *)&share->change_buffer.pending_count, 1,
-                                 MY_MEMORY_ORDER_RELAXED);
     }
 
     DBUG_RETURN(0);
@@ -2508,16 +2700,7 @@ int ha_tidesdb::create_secondary_indexes(const char *table_name)
     char idx_cf_name[TIDESDB_IDX_CF_NAME_BUF_SIZE];
     get_cf_name(table_name, cf_name, sizeof(cf_name));
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
-    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-    cf_config.bloom_fpr = tidesdb_bloom_fpr;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    }
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
     for (uint i = 0; i < table->s->keys; i++)
     {
@@ -2596,7 +2779,7 @@ int ha_tidesdb::open_secondary_indexes(const char *table_name)
   Create column families for fulltext indexes during table creation.
 
   Fulltext indexes use an inverted index structure:
-  -- Key -- word (normalized, lowercase)
+  -- Key   -- word (normalized, lowercase)
   -- Value -- list of primary keys containing that word
 */
 int ha_tidesdb::create_fulltext_indexes(const char *table_name)
@@ -2607,16 +2790,9 @@ int ha_tidesdb::create_fulltext_indexes(const char *table_name)
     char ft_cf_name[TIDESDB_IDX_CF_NAME_BUF_SIZE];
     get_cf_name(table_name, cf_name, sizeof(cf_name));
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
     cf_config.enable_bloom_filter = 1;
     cf_config.bloom_fpr = TIDESDB_DEFAULT_BLOOM_FPR;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    }
 
     uint ft_count = 0;
     for (uint i = 0; i < table->s->keys && ft_count < TIDESDB_MAX_FT_INDEXES; i++)
@@ -2738,7 +2914,7 @@ static void ft_insert_word_callback(const char *word, size_t word_len, void *arg
 
     /*
       Inverted index format:
-      Key -- word + '\0' + primary_key
+      Key   -- word + '\0' + primary_key
       Value -- empty (presence indicates match)
     */
     size_t key_len = word_len + 1 + ctx->pk_len;
@@ -2954,7 +3130,7 @@ int ha_tidesdb::parse_foreign_keys()
     if (ret == TDB_SUCCESS && fk_data && fk_data_len > 0)
     {
         /* Parse FK data -- format is "num_fk|fk1_data|fk2_data|..." */
-        /* Each fk_data -- "ref_db\0ref_table\0num_cols|col_idx1|col_idx2|..." */
+        /* Each fk_data  -- "ref_db\0ref_table\0num_cols|col_idx1|col_idx2|..." */
         const char *ptr = (const char *)fk_data;
         const char *end = ptr + fk_data_len;
 
@@ -3172,6 +3348,9 @@ int ha_tidesdb::check_foreign_key_constraints_insert(const uchar *buf, tidesdb_t
 {
     DBUG_ENTER("ha_tidesdb::check_foreign_key_constraints_insert");
 
+    /* Fast path -- no FK constraints on this table */
+    if (share->num_fk == 0) DBUG_RETURN(0);
+
     THD *thd = ha_thd();
 
     /* We check if FK checks are disabled */
@@ -3223,7 +3402,7 @@ int ha_tidesdb::check_foreign_key_constraints_delete(const uchar *buf, tidesdb_t
     */
     for (uint i = 0; i < share->num_referencing; i++)
     {
-        /* Get the child table's FK index column family */
+        /* We get the child table's FK index column family */
         char fk_idx_cf_name[TIDESDB_IDX_CF_NAME_BUF_SIZE];
         snprintf(fk_idx_cf_name, sizeof(fk_idx_cf_name), TIDESDB_CF_FKIDX_FMT,
                  share->referencing_tables[i]);
@@ -3313,7 +3492,6 @@ int ha_tidesdb::execute_fk_cascade_delete(const uchar *buf, tidesdb_txn_t *txn)
 
         if (!child_cf) continue;
 
-        /* We ccan the FK index for all entries matching our PK */
         tidesdb_iter_t *iter = NULL;
         ret = tidesdb_iter_new(txn, fk_idx_cf, &iter);
         if (ret != TDB_SUCCESS || !iter) continue;
@@ -3347,6 +3525,141 @@ int ha_tidesdb::execute_fk_cascade_delete(const uchar *buf, tidesdb_txn_t *txn)
 
                 /* We also delete the FK index entry */
                 tidesdb_txn_delete(txn, fk_idx_cf, idx_key, idx_key_len);
+
+                /*
+                  We also need to clean up secondary, FT, and spatial index
+                  entries for the deleted child row.  Look up the child table's
+                  share from the global hash so we can access its index CFs.
+                */
+                const char *child_table_name = share->referencing_tables[i];
+                uint child_name_len = (uint)strlen(child_table_name);
+                TIDESDB_SHARE *child_share = NULL;
+
+                mysql_rwlock_rdlock(&tidesdb_rwlock);
+                child_share = (TIDESDB_SHARE *)my_hash_search(
+                    &tidesdb_open_tables, (uchar *)child_table_name, child_name_len);
+                mysql_rwlock_unlock(&tidesdb_rwlock);
+
+                if (child_share)
+                {
+                    /* Delete secondary index entries for this child PK */
+                    for (uint si = 0; si < child_share->num_indexes; si++)
+                    {
+                        if (child_share->index_cf[si])
+                        {
+                            /*
+                              Secondary index entries have the form:
+                              index_key + child_pk -> child_pk
+                              We cannot reconstruct the full index key without the row
+                              data, so we do a prefix scan for entries whose value
+                              matches this child PK and delete them.
+                            */
+                            tidesdb_iter_t *si_iter = NULL;
+                            if (tidesdb_iter_new(txn, child_share->index_cf[si], &si_iter) ==
+                                    TDB_SUCCESS &&
+                                si_iter)
+                            {
+                                tidesdb_iter_seek_to_first(si_iter);
+                                while (tidesdb_iter_valid(si_iter))
+                                {
+                                    uint8_t *si_val = NULL;
+                                    size_t si_val_len = 0;
+                                    uint8_t *si_key = NULL;
+                                    size_t si_key_len = 0;
+
+                                    if (tidesdb_iter_value(si_iter, &si_val, &si_val_len) ==
+                                            TDB_SUCCESS &&
+                                        si_val_len == child_pk_len &&
+                                        memcmp(si_val, child_pk, child_pk_len) == 0)
+                                    {
+                                        if (tidesdb_iter_key(si_iter, &si_key, &si_key_len) ==
+                                            TDB_SUCCESS)
+                                        {
+                                            tidesdb_txn_delete(txn, child_share->index_cf[si],
+                                                               si_key, si_key_len);
+                                        }
+                                    }
+                                    tidesdb_iter_next(si_iter);
+                                }
+                                tidesdb_iter_free(si_iter);
+                            }
+                        }
+                    }
+
+                    /* We delete FT index entries for this child PK */
+                    for (uint fi = 0; fi < child_share->num_ft_indexes; fi++)
+                    {
+                        if (child_share->ft_cf[fi])
+                        {
+                            tidesdb_iter_t *ft_iter = NULL;
+                            if (tidesdb_iter_new(txn, child_share->ft_cf[fi], &ft_iter) ==
+                                    TDB_SUCCESS &&
+                                ft_iter)
+                            {
+                                tidesdb_iter_seek_to_first(ft_iter);
+                                while (tidesdb_iter_valid(ft_iter))
+                                {
+                                    uint8_t *ft_val = NULL;
+                                    size_t ft_val_len = 0;
+                                    uint8_t *ft_key = NULL;
+                                    size_t ft_key_len = 0;
+
+                                    if (tidesdb_iter_value(ft_iter, &ft_val, &ft_val_len) ==
+                                            TDB_SUCCESS &&
+                                        ft_val_len == child_pk_len &&
+                                        memcmp(ft_val, child_pk, child_pk_len) == 0)
+                                    {
+                                        if (tidesdb_iter_key(ft_iter, &ft_key, &ft_key_len) ==
+                                            TDB_SUCCESS)
+                                        {
+                                            tidesdb_txn_delete(txn, child_share->ft_cf[fi], ft_key,
+                                                               ft_key_len);
+                                        }
+                                    }
+                                    tidesdb_iter_next(ft_iter);
+                                }
+                                tidesdb_iter_free(ft_iter);
+                            }
+                        }
+                    }
+
+                    /* We delete spatial index entries for this child PK */
+                    for (uint spi = 0; spi < child_share->num_spatial_indexes; spi++)
+                    {
+                        if (child_share->spatial_cf[spi])
+                        {
+                            tidesdb_iter_t *sp_iter = NULL;
+                            if (tidesdb_iter_new(txn, child_share->spatial_cf[spi], &sp_iter) ==
+                                    TDB_SUCCESS &&
+                                sp_iter)
+                            {
+                                tidesdb_iter_seek_to_first(sp_iter);
+                                while (tidesdb_iter_valid(sp_iter))
+                                {
+                                    uint8_t *sp_val = NULL;
+                                    size_t sp_val_len = 0;
+                                    uint8_t *sp_key = NULL;
+                                    size_t sp_key_len = 0;
+
+                                    if (tidesdb_iter_value(sp_iter, &sp_val, &sp_val_len) ==
+                                            TDB_SUCCESS &&
+                                        sp_val_len == child_pk_len &&
+                                        memcmp(sp_val, child_pk, child_pk_len) == 0)
+                                    {
+                                        if (tidesdb_iter_key(sp_iter, &sp_key, &sp_key_len) ==
+                                            TDB_SUCCESS)
+                                        {
+                                            tidesdb_txn_delete(txn, child_share->spatial_cf[spi],
+                                                               sp_key, sp_key_len);
+                                        }
+                                    }
+                                    tidesdb_iter_next(sp_iter);
+                                }
+                                tidesdb_iter_free(sp_iter);
+                            }
+                        }
+                    }
+                }
             }
 
             tidesdb_iter_next(iter);
@@ -3460,9 +3773,7 @@ int ha_tidesdb::execute_fk_set_null(const uchar *buf, tidesdb_txn_t *txn)
                           The null bitmap location depends on the table structure.
                           In MySQL's/MariaDB's row format, null flags are stored at the beginning
                           of the record, with each nullable field having a bit.
-                        */
 
-                        /*
                           We get FK column info from the stored metadata.
                           The referencing_fk_cols array stores which columns in the child
                           table are FK columns pointing to this parent.
@@ -3536,6 +3847,9 @@ int ha_tidesdb::check_foreign_key_constraints_update(const uchar *old_buf, const
                                                      tidesdb_txn_t *txn)
 {
     DBUG_ENTER("ha_tidesdb::check_foreign_key_constraints_update");
+
+    /* Fast path: no FK constraints and no referencing tables */
+    if (share->num_fk == 0 && share->num_referencing == 0) DBUG_RETURN(0);
 
     THD *thd = ha_thd();
 
@@ -3848,7 +4162,7 @@ int ha_tidesdb::execute_fk_cascade_update(const uchar *old_buf, const uchar *new
 
   @return 64-bit Z-order encoded value
 */
-uint64_t ha_tidesdb::encode_zorder(double x, double y)
+static uint64_t encode_zorder(double x, double y)
 {
     /* We normalize to 32-bit integer range */
     uint32_t ix = (uint32_t)(x * (double)TIDESDB_ZORDER_MAX_VALUE);
@@ -3907,11 +4221,9 @@ int ha_tidesdb::create_spatial_index(const char *table_name, uint key_nr)
 
     snprintf(spatial_cf_name, sizeof(spatial_cf_name), TIDESDB_CF_SPATIAL_FMT, cf_name, key_nr);
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
     cf_config.enable_bloom_filter = 1;
     cf_config.bloom_fpr = TIDESDB_DEFAULT_BLOOM_FPR;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
 
     int ret = tidesdb_create_column_family(tidesdb_instance, spatial_cf_name, &cf_config);
     if (ret != TDB_SUCCESS && ret != TDB_ERR_EXISTS)
@@ -3928,43 +4240,32 @@ int ha_tidesdb::create_spatial_index(const char *table_name, uint key_nr)
 
 /**
   @brief
-  Insert an entry into a spatial index.
+  Extract Z-order value from a WKB geometry field.
 
-  Extracts geometry from the row, computes bounding box, encodes as Z-order,
-  and stores in the spatial index column family.
+  Parses the geometry to compute its bounding box center, normalizes
+  to WGS84 range, and encodes as a Z-order curve value.
 
-  @param idx  Spatial index number (in share->spatial_cf array)
-  @param buf  Row buffer
-  @param txn  Transaction
+  Supports: POINT (1), LINESTRING (2), POLYGON (3), MULTIPOINT (4).
 
-  @return 0 on success
+  @param geom_field  Geometry field to extract from
+  @param[out] z_out  Computed Z-order value
+
+  @return 0 on success, non-zero on failure (NULL field, unsupported type, etc.)
 */
-int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn)
+static int compute_spatial_zorder(Field *geom_field, uint64_t *z_out)
 {
-    DBUG_ENTER("ha_tidesdb::insert_spatial_entry");
+    if (geom_field->is_null()) return -1;
 
-    if (idx >= share->num_spatial_indexes || !share->spatial_cf[idx]) DBUG_RETURN(0);
-
-    uint key_nr = share->spatial_key_nr[idx];
-    KEY *key = &table->key_info[key_nr];
-
-    /* We get the geometry field */
-    if (key->user_defined_key_parts == 0) DBUG_RETURN(0);
-
-    Field *geom_field = key->key_part[0].field;
-    if (geom_field->is_null()) DBUG_RETURN(0);
-
-    /* We get geometry value */
     String geom_str;
     geom_field->val_str(&geom_str);
 
-    if (geom_str.length() < 25) /* Minimum WKB size for a point */
-        DBUG_RETURN(0);
+    if (geom_str.length() < TIDESDB_MIN_WKB_POINT_WITH_SRID) /* Minimum WKB size for a point */
+        return -1;
 
     /*
       Extract bounding box from WKB geometry.
       Supports -- POINT (1), LINESTRING (2), POLYGON (3), MULTIPOINT (4)
-      Format -- byte_order(1) + type(4) + coordinates...
+      Format   -- byte_order(1) + type(4) + coordinates...
     */
     const uchar *wkb = (const uchar *)geom_str.ptr();
     size_t wkb_len = geom_str.length();
@@ -3977,7 +4278,7 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
     }
 
     if (wkb_len < TIDESDB_MIN_WKB_POINT_NO_SRID) /* Minimum for a point */
-        DBUG_RETURN(0);
+        return -1;
 
     /* We read byte order */
     int byte_order = wkb[TIDESDB_WKB_BYTE_ORDER_OFFSET];
@@ -4025,7 +4326,7 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
         }
         case TIDESDB_WKB_TYPE_LINESTRING: /* LINESTRING */
         {
-            if (wkb_len < TIDESDB_WKB_MIN_LINESTRING_LEN) DBUG_RETURN(0);
+            if (wkb_len < TIDESDB_WKB_MIN_LINESTRING_LEN) return -1;
             uint32_t num_points;
             if (byte_order == TIDESDB_WKB_LITTLE_ENDIAN)
                 num_points = uint4korr(coords);
@@ -4035,7 +4336,7 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
 
             if (num_points == 0 ||
                 wkb_len < TIDESDB_WKB_MIN_LINESTRING_LEN + num_points * TIDESDB_WKB_POINT_SIZE)
-                DBUG_RETURN(0);
+                return -1;
 
             coords += TIDESDB_WKB_NUM_POINTS_SIZE; /* We skip num_points */
             min_x = max_x = read_double(coords);
@@ -4055,7 +4356,7 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
         }
         case TIDESDB_WKB_TYPE_POLYGON: /* POLYGON */
         {
-            if (wkb_len < TIDESDB_WKB_MIN_LINESTRING_LEN) DBUG_RETURN(0);
+            if (wkb_len < TIDESDB_WKB_MIN_LINESTRING_LEN) return -1;
             uint32_t num_rings;
             if (byte_order == TIDESDB_WKB_LITTLE_ENDIAN)
                 num_rings = uint4korr(coords);
@@ -4063,7 +4364,7 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
                 num_rings = ((uint32_t)coords[0] << 24) | ((uint32_t)coords[1] << 16) |
                             ((uint32_t)coords[2] << 8) | (uint32_t)coords[3];
 
-            if (num_rings == 0) DBUG_RETURN(0);
+            if (num_rings == 0) return -1;
 
             coords += TIDESDB_WKB_NUM_POINTS_SIZE; /* Skip num_rings */
 
@@ -4075,7 +4376,7 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
                 num_points = ((uint32_t)coords[0] << 24) | ((uint32_t)coords[1] << 16) |
                              ((uint32_t)coords[2] << 8) | (uint32_t)coords[3];
 
-            if (num_points == 0) DBUG_RETURN(0);
+            if (num_points == 0) return -1;
 
             coords += TIDESDB_WKB_NUM_POINTS_SIZE; /* Skip num_points */
             min_x = max_x = read_double(coords);
@@ -4095,7 +4396,7 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
         }
         case TIDESDB_WKB_TYPE_MULTIPOINT: /* MULTIPOINT */
         {
-            if (wkb_len < TIDESDB_WKB_MIN_LINESTRING_LEN) DBUG_RETURN(0);
+            if (wkb_len < TIDESDB_WKB_MIN_LINESTRING_LEN) return -1;
             uint32_t num_points;
             if (byte_order == TIDESDB_WKB_LITTLE_ENDIAN)
                 num_points = uint4korr(coords);
@@ -4103,7 +4404,7 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
                 num_points = ((uint32_t)coords[0] << 24) | ((uint32_t)coords[1] << 16) |
                              ((uint32_t)coords[2] << 8) | (uint32_t)coords[3];
 
-            if (num_points == 0) DBUG_RETURN(0);
+            if (num_points == 0) return -1;
 
             coords += TIDESDB_WKB_NUM_POINTS_SIZE; /* Skip num_points */
 
@@ -4125,7 +4426,7 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
         }
         default:
             /* Unsupported geometry type */
-            DBUG_RETURN(0);
+            return -1;
     }
 
     /* We use center point for Z-order encoding */
@@ -4143,7 +4444,70 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
     if (norm_y < 0) norm_y = 0;
     if (norm_y > 1) norm_y = 1;
 
-    uint64_t z = encode_zorder(norm_x, norm_y);
+    *z_out = encode_zorder(norm_x, norm_y);
+    return 0;
+}
+
+/**
+  @brief
+  Build a spatial index key from a Z-order value and primary key.
+
+  Stores Z-order in big-endian byte order (using mi_int8store) so that
+  memcmp-based comparison in the LSM tree preserves Z-order proximity.
+
+  @param z                 Z-order value
+  @param pk                Primary key bytes
+  @param pk_len            Primary key length
+  @param[out] out_key      Allocated spatial key (caller must free)
+  @param[out] out_key_len  Length of spatial key
+
+  @return 0 on success
+*/
+static int build_spatial_key(uint64_t z, const uchar *pk, size_t pk_len, uchar **out_key,
+                             size_t *out_key_len)
+{
+    size_t key_len = TIDESDB_ZORDER_KEY_SIZE + pk_len;
+    uchar *spatial_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, key_len, MYF(MY_WME));
+    if (!spatial_key) return HA_ERR_OUT_OF_MEM;
+
+    /* We store Z-order as big-endian for proper sort order in LSM tree */
+    mi_int8store(spatial_key, z);
+    memcpy(spatial_key + TIDESDB_ZORDER_KEY_SIZE, pk, pk_len);
+
+    *out_key = spatial_key;
+    *out_key_len = key_len;
+    return 0;
+}
+
+/**
+  @brief
+  Insert an entry into a spatial index.
+
+  Extracts geometry from the row, computes bounding box, encodes as Z-order,
+  and stores in the spatial index column family.
+
+  @param idx  Spatial index number (in share->spatial_cf array)
+  @param buf  Row buffer
+  @param txn  Transaction
+
+  @return 0 on success
+*/
+int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn)
+{
+    DBUG_ENTER("ha_tidesdb::insert_spatial_entry");
+
+    if (idx >= share->num_spatial_indexes || !share->spatial_cf[idx]) DBUG_RETURN(0);
+
+    uint key_nr = share->spatial_key_nr[idx];
+    KEY *key = &table->key_info[key_nr];
+
+    /* We get the geometry field */
+    if (key->user_defined_key_parts == 0) DBUG_RETURN(0);
+
+    Field *geom_field = key->key_part[0].field;
+
+    uint64_t z;
+    if (compute_spatial_zorder(geom_field, &z) != 0) DBUG_RETURN(0);
 
     /* We build key -- z_order + primary_key */
     uchar *pk = NULL;
@@ -4151,13 +4515,10 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
     int ret = build_primary_key(buf, &pk, &pk_len);
     if (ret) DBUG_RETURN(ret);
 
-    size_t key_len = TIDESDB_ZORDER_KEY_SIZE + pk_len;
-    uchar *spatial_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, key_len, MYF(MY_WME));
-    if (!spatial_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-
-    /* We store Z-order as big-endian for proper sort order */
-    int8store(spatial_key, z);
-    memcpy(spatial_key + TIDESDB_ZORDER_KEY_SIZE, pk, pk_len);
+    uchar *spatial_key = NULL;
+    size_t key_len = 0;
+    ret = build_spatial_key(z, pk, pk_len, &spatial_key, &key_len);
+    if (ret) DBUG_RETURN(ret);
 
     /* We insert into spatial index: z_key -> pk */
     ret = tidesdb_txn_put(txn, share->spatial_cf[idx], spatial_key, key_len, pk, pk_len, -1);
@@ -4177,6 +4538,9 @@ int ha_tidesdb::insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
   @brief
   Delete an entry from a spatial index.
 
+  Uses the same geometry parsing as insert_spatial_entry to compute
+  the Z-order key, then deletes it from the spatial column family.
+
   @param idx  Spatial index number
   @param buf  Row buffer
   @param txn  Transaction
@@ -4195,48 +4559,19 @@ int ha_tidesdb::delete_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *
     if (key->user_defined_key_parts == 0) DBUG_RETURN(0);
 
     Field *geom_field = key->key_part[0].field;
-    if (geom_field->is_null()) DBUG_RETURN(0);
 
-    String geom_str;
-    geom_field->val_str(&geom_str);
-
-    if (geom_str.length() < TIDESDB_MIN_WKB_POINT_WITH_SRID) DBUG_RETURN(0);
-
-    const uchar *wkb = (const uchar *)geom_str.ptr();
-    if (geom_str.length() >= TIDESDB_MIN_WKB_POINT_WITH_SRID) wkb += TIDESDB_WKB_SRID_OFFSET;
-
-    double x, y;
-    int byte_order = wkb[TIDESDB_WKB_BYTE_ORDER_OFFSET];
-    if (byte_order == 1)
-    {
-        memcpy(&x, wkb + TIDESDB_WKB_X_OFFSET, TIDESDB_WKB_COORD_SIZE);
-        memcpy(&y, wkb + TIDESDB_WKB_Y_OFFSET, TIDESDB_WKB_COORD_SIZE);
-    }
-    else
-    {
-        DBUG_RETURN(0);
-    }
-
-    double norm_x = (x + TIDESDB_WGS84_LON_MAX) / (2.0 * TIDESDB_WGS84_LON_MAX);
-    double norm_y = (y + TIDESDB_WGS84_LAT_MAX) / (2.0 * TIDESDB_WGS84_LAT_MAX);
-    if (norm_x < 0) norm_x = 0;
-    if (norm_x > 1) norm_x = 1;
-    if (norm_y < 0) norm_y = 0;
-    if (norm_y > 1) norm_y = 1;
-
-    uint64_t z = encode_zorder(norm_x, norm_y);
+    uint64_t z;
+    if (compute_spatial_zorder(geom_field, &z) != 0) DBUG_RETURN(0);
 
     uchar *pk = NULL;
     size_t pk_len = 0;
     int ret = build_primary_key(buf, &pk, &pk_len);
     if (ret) DBUG_RETURN(ret);
 
-    size_t key_len = TIDESDB_ZORDER_KEY_SIZE + pk_len;
-    uchar *spatial_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, key_len, MYF(MY_WME));
-    if (!spatial_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-
-    int8store(spatial_key, z);
-    memcpy(spatial_key + TIDESDB_ZORDER_KEY_SIZE, pk, pk_len);
+    uchar *spatial_key = NULL;
+    size_t key_len = 0;
+    ret = build_spatial_key(z, pk, pk_len, &spatial_key, &key_len);
+    if (ret) DBUG_RETURN(ret);
 
     ret = tidesdb_txn_delete(txn, share->spatial_cf[idx], spatial_key, key_len);
 
@@ -4272,7 +4607,7 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
         share->cf = tidesdb_get_column_family(tidesdb_instance, cf_name);
         if (!share->cf)
         {
-            /* Column family doesn't exist -- table wasn't created properly */
+            /* The column family doesn't exist -- table wasn't created properly */
             free_share(share);
             DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
         }
@@ -4322,7 +4657,39 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
         load_hidden_pk_value();
     }
 
-    /* Load persisted table statistics if available */
+    /* We pre-allocate key buffers based on max key length to avoid per-row realloc */
+    {
+        size_t max_key_len = ref_length;
+        for (uint i = 0; i < table->s->keys; i++)
+        {
+            if (table->key_info[i].key_length > max_key_len)
+                max_key_len = table->key_info[i].key_length;
+        }
+        /* We add margin for composite key separators and hidden PK suffix */
+        size_t prealloc = max_key_len + TIDESDB_HIDDEN_PK_LEN + TIDESDB_KEY_BUF_PADDING;
+        if (prealloc < TIDESDB_INITIAL_KEY_BUF_CAPACITY)
+            prealloc = TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+
+        if (!current_key || current_key_capacity < prealloc)
+        {
+            if (current_key) my_free(current_key);
+            current_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, prealloc, MYF(MY_WME));
+            current_key_capacity = current_key ? prealloc : 0;
+        }
+        if (!saved_key_buffer || saved_key_buffer_capacity < prealloc)
+        {
+            if (saved_key_buffer) my_free(saved_key_buffer);
+            saved_key_buffer = (uchar *)my_malloc(PSI_INSTRUMENT_ME, prealloc, MYF(MY_WME));
+            saved_key_buffer_capacity = saved_key_buffer ? prealloc : 0;
+        }
+        if (!idx_key_buffer || idx_key_buffer_capacity < prealloc)
+        {
+            if (idx_key_buffer) my_free(idx_key_buffer);
+            idx_key_buffer = (uchar *)my_malloc(PSI_INSTRUMENT_ME, prealloc, MYF(MY_WME));
+            idx_key_buffer_capacity = idx_key_buffer ? prealloc : 0;
+        }
+    }
+
     load_table_stats();
 
     open_secondary_indexes(name);
@@ -4423,35 +4790,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
     char cf_name[TIDESDB_CF_NAME_BUF_SIZE];
     get_cf_name(name, cf_name, sizeof(cf_name));
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
-    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-    cf_config.bloom_fpr = tidesdb_bloom_fpr;
-    cf_config.level_size_ratio = tidesdb_level_size_ratio;
-    cf_config.skip_list_max_level = tidesdb_skip_list_max_level;
-    cf_config.skip_list_probability = (float)tidesdb_skip_list_probability;
-    cf_config.enable_block_indexes = tidesdb_enable_block_indexes ? 1 : 0;
-    cf_config.index_sample_ratio = tidesdb_index_sample_ratio;
-    cf_config.block_index_prefix_len = tidesdb_block_index_prefix_len;
-    cf_config.sync_mode = tidesdb_sync_mode;
-    cf_config.sync_interval_us = tidesdb_sync_interval_us;
-    cf_config.default_isolation_level = (tidesdb_isolation_level_t)tidesdb_default_isolation;
-    cf_config.min_levels = tidesdb_min_levels;
-    cf_config.dividing_level_offset = tidesdb_dividing_level_offset;
-    cf_config.klog_value_threshold = tidesdb_klog_value_threshold;
-    cf_config.min_disk_space = tidesdb_min_disk_space;
-    cf_config.l1_file_count_trigger = tidesdb_l1_file_count_trigger;
-    cf_config.l0_queue_stall_threshold = tidesdb_l0_queue_stall_threshold;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    }
-    else
-    {
-        cf_config.compression_algorithm = TDB_COMPRESS_NONE;
-    }
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
     /*
       Apply per-table CREATE TABLE options if specified.
@@ -4747,7 +5086,6 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
                 sql_print_information(
                     "TidesDB: Rename index CF '%s' to '%s' failed with %d, retrying...", old_idx_cf,
                     new_idx_cf, rename_ret);
-                /* Retry with delay for file system timing issues */
                 for (int retry = 0; retry < TIDESDB_RENAME_RETRY_COUNT && rename_ret != TDB_SUCCESS;
                      retry++)
                 {
@@ -4943,7 +5281,7 @@ int ha_tidesdb::write_row(const uchar *buf)
             longlong ttl_seconds = ttl_field->val_int();
             if (ttl_seconds > 0)
             {
-                ttl = time(NULL) + ttl_seconds;
+                ttl = (cached_now ? cached_now : time(NULL)) + ttl_seconds;
             }
             else if (ttl_seconds == 0)
             {
@@ -4953,7 +5291,7 @@ int ha_tidesdb::write_row(const uchar *buf)
     }
     else
     {
-        /* Check per-table TTL option, then fall back to global default */
+        /* We check per-table TTL option, then fall back to global default */
         ulonglong table_ttl = 0;
         if (table->s->option_struct && table->s->option_struct->ttl > 0)
         {
@@ -4966,7 +5304,7 @@ int ha_tidesdb::write_row(const uchar *buf)
 
         if (table_ttl > 0)
         {
-            ttl = time(NULL) + table_ttl;
+            ttl = (cached_now ? cached_now : time(NULL)) + table_ttl;
         }
     }
 
@@ -4990,21 +5328,21 @@ int ha_tidesdb::write_row(const uchar *buf)
     }
 
     ret = tidesdb_txn_put(txn, share->cf, key, key_len, value, value_len, ttl);
-    if (free_value) my_free(value);
 
     if (ret != TDB_SUCCESS)
     {
+        if (free_value) my_free(value);
         if (own_txn)
         {
             tidesdb_txn_rollback(txn);
             tidesdb_txn_free(txn);
         }
 
-        if (ret == TDB_ERR_EXISTS) DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
-
         sql_print_error("TidesDB: Failed to write row: %d", ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        DBUG_RETURN(map_tidesdb_error(ret));
     }
+
+    if (free_value) my_free(value);
 
     /* We insert secondary index entries (skip if indexes disabled for bulk load) */
     if (!indexes_disabled)
@@ -5064,7 +5402,7 @@ int ha_tidesdb::write_row(const uchar *buf)
         if (ret != TDB_SUCCESS)
         {
             sql_print_error("TidesDB: Failed to commit transaction: %d", ret);
-            DBUG_RETURN(HA_ERR_GENERIC);
+            DBUG_RETURN(map_tidesdb_error(ret));
         }
     }
     else if (bulk_insert_active && bulk_txn)
@@ -5108,6 +5446,35 @@ int ha_tidesdb::write_row(const uchar *buf)
     }
 
     stats.records++;
+
+    /* Online statistics -- we increment shared row count atomically */
+    if (share->row_count_valid)
+        my_atomic_add64_explicit((volatile int64 *)&share->row_count, 1, MY_MEMORY_ORDER_RELAXED);
+
+    /* Bump auto-increment counter when an explicit value exceeds the current max.
+       Without this, INSERT INTO t (id) VALUES (100) followed by INSERT INTO t (name)
+       VALUES ('x') would assign id=5 instead of id=101. */
+    if (table->next_number_field && buf == table->record[0])
+    {
+        ulonglong inserted_val = table->next_number_field->val_int();
+        if (inserted_val > 0)
+        {
+            ulonglong cur_val = my_atomic_load64_explicit(
+                (volatile int64 *)&share->auto_increment_value, MY_MEMORY_ORDER_RELAXED);
+            if (inserted_val >= cur_val)
+            {
+                pthread_mutex_lock(&share->auto_inc_mutex);
+                cur_val = share->auto_increment_value;
+                if (inserted_val >= cur_val)
+                {
+                    my_atomic_store64_explicit((volatile int64 *)&share->auto_increment_value,
+                                               (int64)(inserted_val + 1), MY_MEMORY_ORDER_RELEASE);
+                    persist_auto_increment_value(inserted_val + 1);
+                }
+                pthread_mutex_unlock(&share->auto_inc_mutex);
+            }
+        }
+    }
 
     DBUG_RETURN(0);
 }
@@ -5255,11 +5622,11 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                 tidesdb_txn_free(txn);
             }
             sql_print_error("TidesDB: Failed to delete old row: %d", ret);
-            DBUG_RETURN(HA_ERR_GENERIC);
+            DBUG_RETURN(map_tidesdb_error(ret));
         }
     }
 
-    /* We calculate TTL from _ttl column or use default */
+    /* We calculate TTL from _ttl/TTL column or use per-table/global default */
     time_t ttl = -1;
     if (share->ttl_field_index >= 0)
     {
@@ -5269,28 +5636,48 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
             longlong ttl_seconds = ttl_field->val_int();
             if (ttl_seconds > 0)
             {
-                ttl = time(NULL) + ttl_seconds;
+                ttl = (cached_now ? cached_now : time(NULL)) + ttl_seconds;
+            }
+            else if (ttl_seconds == 0)
+            {
+                ttl = -1;
             }
         }
     }
-    else if (tidesdb_default_ttl > 0)
+    else
     {
-        ttl = time(NULL) + tidesdb_default_ttl;
+        /* We check per-table TTL option, then fall back to global default */
+        ulonglong table_ttl = 0;
+        if (table->s->option_struct && table->s->option_struct->ttl > 0)
+        {
+            table_ttl = table->s->option_struct->ttl;
+        }
+        else if (tidesdb_default_ttl > 0)
+        {
+            table_ttl = tidesdb_default_ttl;
+        }
+
+        if (table_ttl > 0)
+        {
+            ttl = (cached_now ? cached_now : time(NULL)) + table_ttl;
+        }
     }
 
     ret = tidesdb_txn_put(txn, share->cf, new_key, new_key_len, value, value_len, ttl);
-    if (free_value) my_free(value);
 
     if (ret != TDB_SUCCESS)
     {
+        if (free_value) my_free(value);
         if (own_txn)
         {
             tidesdb_txn_rollback(txn);
             tidesdb_txn_free(txn);
         }
         sql_print_error("TidesDB: Failed to update row: %d", ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        DBUG_RETURN(map_tidesdb_error(ret));
     }
+
+    if (free_value) my_free(value);
 
     ret = update_index_entries(old_data, new_data, txn);
     if (ret)
@@ -5362,7 +5749,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
         if (ret != TDB_SUCCESS)
         {
             sql_print_error("TidesDB: Failed to commit transaction: %d", ret);
-            DBUG_RETURN(HA_ERR_GENERIC);
+            DBUG_RETURN(map_tidesdb_error(ret));
         }
     }
 
@@ -5483,7 +5870,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
             tidesdb_txn_free(txn);
         }
         sql_print_error("TidesDB: Failed to delete row: %d", ret);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        DBUG_RETURN(map_tidesdb_error(ret));
     }
 
     if (own_txn)
@@ -5494,11 +5881,36 @@ int ha_tidesdb::delete_row(const uchar *buf)
         if (ret != TDB_SUCCESS)
         {
             sql_print_error("TidesDB: Failed to commit delete transaction: %d", ret);
-            DBUG_RETURN(HA_ERR_GENERIC);
+            DBUG_RETURN(map_tidesdb_error(ret));
         }
     }
 
     stats.records--;
+
+    /* Online statistics -- we decrement shared row count atomically */
+    if (share->row_count_valid && share->row_count > 0)
+        my_atomic_add64_explicit((volatile int64 *)&share->row_count, -1, MY_MEMORY_ORDER_RELAXED);
+    else if (!share->row_count_valid)
+    {
+        /*
+          Deleting from a table whose row_count was never bootstrapped
+          (e.g. opened from disk without any write_row in this session).
+          Fall back to tidesdb_get_stats and bootstrap now.
+        */
+        tidesdb_stats_t *tdb_stats = get_realtime_stats(share);
+        if (tdb_stats)
+        {
+            ha_rows metadata_keys = 0;
+            if (!share->has_primary_key) metadata_keys++;
+            if (table->s->found_next_number_field) metadata_keys++;
+            ha_rows count =
+                tdb_stats->total_keys > metadata_keys ? tdb_stats->total_keys - metadata_keys : 0;
+            tidesdb_free_stats(tdb_stats);
+            /* The stats include the row we just tombstoned, so subtract 1 */
+            share->row_count = count > 0 ? count - 1 : 0;
+            share->row_count_valid = true;
+        }
+    }
 
     DBUG_RETURN(0);
 }
@@ -5519,37 +5931,16 @@ int ha_tidesdb::rnd_init(bool scan)
         scan_iter = NULL;
     }
 
-    scan_txn_owned = false;
+    /* current_txn is always set by external_lock before we get here.
+       If somehow it's not (e.g. internal scan), fall back to THD txn. */
     if (!current_txn)
     {
         THD *thd = ha_thd();
-        tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
-        if (thd_txn)
+        current_txn = get_thd_txn(thd, tidesdb_hton);
+        if (!current_txn)
         {
-            current_txn = thd_txn;
-        }
-        else
-        {
-            /* No transaction available, create one for this scan.
-             * For read-only scans, use READ_UNCOMMITTED for better performance
-             * since we don't need MVCC visibility checks for simple SELECTs. */
-            THD *thd = ha_thd();
-            bool is_read_only = thd &&
-                                !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN) &&
-                                (lock.type == TL_READ || lock.type == TL_READ_NO_INSERT);
-
-            tidesdb_isolation_level_t iso_level =
-                is_read_only ? TDB_ISOLATION_READ_UNCOMMITTED
-                             : (tidesdb_isolation_level_t)tidesdb_default_isolation;
-
-            ret = tidesdb_txn_begin_with_isolation(tidesdb_instance, iso_level, &current_txn);
-            if (ret != TDB_SUCCESS)
-            {
-                sql_print_error("TidesDB: Failed to begin transaction for scan: %d", ret);
-                DBUG_RETURN(HA_ERR_GENERIC);
-            }
-            scan_txn_owned = true;
-            is_read_only_scan = is_read_only;
+            sql_print_error("TidesDB: No transaction available for scan");
+            DBUG_RETURN(HA_ERR_GENERIC);
         }
     }
 
@@ -5581,19 +5972,6 @@ int ha_tidesdb::rnd_end()
     }
     scan_initialized = false;
 
-    if (scan_txn_owned && current_txn)
-    {
-        /*
-          Always call tidesdb_txn_rollback() before tidesdb_txn_free() to ensure
-          proper cleanup of internal transaction state, even for read-only scans.
-        */
-        tidesdb_txn_rollback(current_txn);
-        tidesdb_txn_free(current_txn);
-        current_txn = NULL;
-        scan_txn_owned = false;
-        is_read_only_scan = false;
-    }
-
     DBUG_RETURN(0);
 }
 
@@ -5610,95 +5988,102 @@ int ha_tidesdb::rnd_next(uchar *buf)
 
     if (!scan_iter || !scan_initialized) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-    uint8_t *key = NULL;
-    size_t key_size = 0;
-    uint8_t *value = NULL;
-    size_t value_size = 0;
-
     /*
-      We loop to find the next row that matches the pushed condition.
-      If no condition is pushed, we return the first valid row.
+      The TidesDB iterator natively merges committed data with the
+      transaction's uncommitted write buffer (MERGE_SOURCE_TXN_OPS),
+      so we simply iterate and skip metadata keys.
+
+      IMPORTANT -- tidesdb_iter_key/value return pointers to internal iterator
+      memory that is invalidated by tidesdb_iter_next.  We must copy all
+      data we need BEFORE calling tidesdb_iter_next.
     */
-    while (tidesdb_iter_valid(scan_iter))
+
+    for (;;)
     {
-        ret = tidesdb_iter_key(scan_iter, &key, &key_size);
-        if (ret != TDB_SUCCESS)
-        {
-            DBUG_RETURN(HA_ERR_END_OF_FILE);
-        }
+        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-        /* We skip internal metadata keys (those starting with null byte) */
-        if (key_size > 0 && key[0] == 0)
-        {
-            tidesdb_iter_next(scan_iter);
-            continue;
-        }
-
-        ret = tidesdb_iter_value(scan_iter, &value, &value_size);
+        uint8_t *iter_key_ptr = NULL;
+        size_t iter_key_size = 0;
+        ret = tidesdb_iter_key(scan_iter, &iter_key_ptr, &iter_key_size);
         if (ret != TDB_SUCCESS)
         {
             tidesdb_iter_next(scan_iter);
             continue;
         }
 
-        /* We save current key position */
-        if (key_size > current_key_capacity)
+        /* We skip internal metadata keys (null byte prefix) */
+        if (iter_key_size > 0 && iter_key_ptr[0] == 0)
         {
-            size_t new_capacity = key_size > TIDESDB_INITIAL_KEY_BUF_CAPACITY
-                                      ? key_size * 2
+            tidesdb_iter_next(scan_iter);
+            continue;
+        }
+
+        uint8_t *iter_val_ptr = NULL;
+        size_t iter_val_size = 0;
+        ret = tidesdb_iter_value(scan_iter, &iter_val_ptr, &iter_val_size);
+        if (ret != TDB_SUCCESS)
+        {
+            tidesdb_iter_next(scan_iter);
+            continue;
+        }
+
+        /* We copy key and value before advancing the iterator */
+        size_t klen = iter_key_size;
+        if (klen > current_key_capacity)
+        {
+            size_t new_capacity = klen > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                      ? klen * 2
                                       : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
-            uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
-            if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+            uchar *new_k = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+            if (!new_k) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
             if (current_key) my_free(current_key);
-            current_key = new_key;
+            current_key = new_k;
             current_key_capacity = new_capacity;
         }
-        memcpy(current_key, key, key_size);
-        current_key_len = key_size;
+        memcpy(current_key, iter_key_ptr, klen);
+        current_key_len = klen;
 
-        if (tidesdb_enable_encryption && value_size > 0)
-        {
-            uchar *decrypted = NULL;
-            size_t decrypted_len = 0;
-            ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
-            if (ret)
-            {
-                tidesdb_iter_next(scan_iter);
-                continue;
-            }
-            ret = unpack_row(buf, decrypted, decrypted_len);
-            my_free(decrypted);
-        }
-        else
-        {
-            ret = unpack_row(buf, value, value_size);
-        }
+        const uchar *row_value = iter_val_ptr;
+        size_t row_value_len = iter_val_size;
+        uchar *val_copy = NULL;
 
-        if (ret)
-        {
-            tidesdb_iter_next(scan_iter);
-            continue;
-        }
+        /* We must copy the value since iter_next invalidates it */
+        val_copy = (uchar *)my_malloc(PSI_INSTRUMENT_ME, iter_val_size, MYF(MY_WME));
+        if (!val_copy) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+        memcpy(val_copy, iter_val_ptr, iter_val_size);
+        row_value = val_copy;
+        row_value_len = iter_val_size;
 
-        /*
-          Table Condition Pushdown -- evaluate the pushed condition.
-          If the condition evaluates to FALSE, skip this row and continue.
-          This filters rows at the storage engine level, reducing data
-          transfer to the SQL layer.
-        */
-        if (pushed_cond)
-        {
-            /* val_int() is not const, so we need to cast */
-            if (!const_cast<COND *>(pushed_cond)->val_int())
-            {
-                /* Condition not satisfied, skip this row */
-                tidesdb_iter_next(scan_iter);
-                continue;
-            }
-        }
-
-        /* Row matches --we  advance iterator and return */
         tidesdb_iter_next(scan_iter);
+
+        /* We decrypt and unpack */
+        const uchar *row_data = row_value;
+        size_t row_data_len = row_value_len;
+        uchar *decrypted = NULL;
+
+        if (tidesdb_enable_encryption && row_value_len > 0)
+        {
+            size_t decrypted_len = 0;
+            ret = tidesdb_decrypt_data(row_value, row_value_len, &decrypted, &decrypted_len);
+            my_free(val_copy);
+            val_copy = NULL;
+            if (ret) continue;
+            row_data = decrypted;
+            row_data_len = decrypted_len;
+        }
+
+        ret = unpack_row(buf, row_data, row_data_len);
+        if (decrypted) my_free(decrypted);
+        if (val_copy)
+        {
+            my_free(val_copy);
+            val_copy = NULL;
+        }
+        if (ret) continue;
+
+        /* Table Condition Pushdown */
+        if (pushed_cond && !const_cast<COND *>(pushed_cond)->val_int()) continue;
+
         DBUG_RETURN(0);
     }
 
@@ -5805,8 +6190,10 @@ int ha_tidesdb::index_init(uint idx, bool sorted)
 {
     DBUG_ENTER("ha_tidesdb::index_init");
     active_index = idx;
+    index_txn_owned = false;
 
-    /* Ensure we have a transaction -- we check THD-level transaction if handler doesn't have one */
+    /* We ensure we have a transaction -- we check THD-level transaction if handler doesn't have one
+     */
     if (!current_txn)
     {
         THD *thd = ha_thd();
@@ -5814,6 +6201,22 @@ int ha_tidesdb::index_init(uint idx, bool sorted)
         if (thd_txn)
         {
             current_txn = thd_txn;
+        }
+        else
+        {
+            /* No THD transaction -- we create owned scan transaction (same as rnd_init) */
+            tidesdb_isolation_level_t iso_level =
+                thd ? (tidesdb_isolation_level_t)map_isolation_level(
+                          (enum_tx_isolation)thd->variables.tx_isolation)
+                    : (tidesdb_isolation_level_t)tidesdb_default_isolation;
+
+            int ret = tidesdb_txn_begin_with_isolation(tidesdb_instance, iso_level, &current_txn);
+            if (ret != TDB_SUCCESS)
+            {
+                sql_print_error("TidesDB: Failed to begin transaction for index scan: %d", ret);
+                DBUG_RETURN(HA_ERR_GENERIC);
+            }
+            index_txn_owned = true;
         }
     }
 
@@ -5828,6 +6231,7 @@ int ha_tidesdb::index_end()
 {
     DBUG_ENTER("ha_tidesdb::index_end");
     active_index = MAX_KEY;
+    index_key_len = 0;
 
     if (index_iter)
     {
@@ -5838,7 +6242,17 @@ int ha_tidesdb::index_end()
     {
         my_free(index_key_buf);
         index_key_buf = NULL;
+        index_key_buf_capacity = 0;
         index_key_len = 0;
+    }
+
+    /* Clean up owned transaction created in index_init() */
+    if (index_txn_owned && current_txn)
+    {
+        tidesdb_txn_rollback(current_txn);
+        tidesdb_txn_free(current_txn);
+        current_txn = NULL;
+        index_txn_owned = false;
     }
 
     DBUG_RETURN(0);
@@ -5929,7 +6343,14 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         }
         else
         {
-            /* Partial key prefix or range scan -- we use iterator */
+            /*
+              Partial key prefix or range scan -- we use iterator + merge scan.
+              We create an iterator seeked to the search key AND position the
+              merge cursor in the write buffer, then call rnd_next() to get
+              the first merged row.  This ensures we see uncommitted writes
+              and avoids the duplicate-row bug where index_read_map and the
+              subsequent index_next both return the same iterator position.
+            */
             tidesdb_iter_t *iter = NULL;
             ret = tidesdb_iter_new(current_txn, share->cf, &iter);
             if (ret != TDB_SUCCESS)
@@ -5937,97 +6358,11 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
                 DBUG_RETURN(HA_ERR_GENERIC);
             }
 
-            ret = tidesdb_iter_seek(iter, (uint8_t *)key, key_len);
-            if (ret != TDB_SUCCESS || !tidesdb_iter_valid(iter))
-            {
-                tidesdb_iter_free(iter);
-                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-            }
+            /* Seek iterator; it may land past uncommitted keys or be invalid */
+            tidesdb_iter_seek(iter, (uint8_t *)key, key_len);
 
-            /* We get the found key */
-            uint8_t *found_key = NULL;
-            size_t found_key_len = 0;
-            ret = tidesdb_iter_key(iter, &found_key, &found_key_len);
-            if (ret != TDB_SUCCESS)
-            {
-                tidesdb_iter_free(iter);
-                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-            }
-
-            /* We check if key matches based on find_flag */
-            bool key_matches = false;
-            switch (find_flag)
-            {
-                case HA_READ_KEY_EXACT:
-                case HA_READ_PREFIX:
-                    /* Prefix match required */
-                    key_matches =
-                        (found_key_len >= key_len && memcmp(found_key, key, key_len) == 0);
-                    break;
-                case HA_READ_KEY_OR_NEXT:
-                case HA_READ_AFTER_KEY:
-                    /* Any key >= search key is valid */
-                    key_matches = true;
-                    /* For HA_READ_AFTER_KEY, skip exact prefix matches */
-                    if (find_flag == HA_READ_AFTER_KEY && found_key_len >= key_len &&
-                        memcmp(found_key, key, key_len) == 0)
-                    {
-                        tidesdb_iter_next(iter);
-                        if (!tidesdb_iter_valid(iter))
-                        {
-                            tidesdb_iter_free(iter);
-                            DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-                        }
-                        ret = tidesdb_iter_key(iter, &found_key, &found_key_len);
-                        if (ret != TDB_SUCCESS)
-                        {
-                            tidesdb_iter_free(iter);
-                            DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-                        }
-                    }
-                    break;
-                case HA_READ_PREFIX_LAST:
-                case HA_READ_PREFIX_LAST_OR_PREV:
-                    /* For reverse scans, accept */
-                    key_matches = true;
-                    break;
-                default:
-                    /* Default to prefix match */
-                    key_matches =
-                        (found_key_len >= key_len && memcmp(found_key, key, key_len) == 0);
-                    break;
-            }
-
-            if (!key_matches)
-            {
-                tidesdb_iter_free(iter);
-                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-            }
-
-            /* We save the found key as current key */
-            if (found_key_len > current_key_capacity)
-            {
-                size_t new_capacity = found_key_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
-                                          ? found_key_len * 2
-                                          : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
-                uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
-                if (!new_key)
-                {
-                    tidesdb_iter_free(iter);
-                    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-                }
-                if (current_key) my_free(current_key);
-                current_key = new_key;
-                current_key_capacity = new_capacity;
-            }
-            memcpy(current_key, found_key, found_key_len);
-            current_key_len = found_key_len;
-
-            /* We save iterator for index_next */
-            if (scan_iter)
-            {
-                tidesdb_iter_free(scan_iter);
-            }
+            /* We install as the scan iterator for rnd_next */
+            if (scan_iter) tidesdb_iter_free(scan_iter);
             scan_iter = iter;
             scan_initialized = true;
 
@@ -6052,16 +6387,51 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
             if (index_key_buf)
             {
                 memcpy(index_key_buf, key, key_len);
-                index_key_len = key_len;
+                /*
+                  We only enable the prefix boundary check for actual prefix scans
+                  (partial composite PK).  Range scans (>=, >) must iterate
+                  until EOF -- setting index_key_len would cause index_next to
+                  terminate as soon as the key differs from the search key.
+                */
+                if (is_partial_key)
+                    index_key_len = key_len;
+                else
+                    index_key_len = 0;
             }
 
-            /* We fetch the actual row value using tidesdb_txn_get (returns allocated memory) */
-            ret = tidesdb_txn_get(current_txn, share->cf, current_key, current_key_len, &value,
-                                  &value_size);
-            if (ret != TDB_SUCCESS)
+            ret = rnd_next(buf);
+            if (ret) DBUG_RETURN(ret);
+
+            /* We validate result against find_flag */
+            switch (find_flag)
             {
-                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+                case HA_READ_KEY_EXACT:
+                case HA_READ_PREFIX:
+                    if (current_key_len < key_len || memcmp(current_key, key, key_len) != 0)
+                        DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+                    break;
+                case HA_READ_AFTER_KEY:
+                    /* Must be strictly greater; skip exact matches */
+                    while (current_key_len >= key_len && memcmp(current_key, key, key_len) == 0)
+                    {
+                        ret = rnd_next(buf);
+                        if (ret) DBUG_RETURN(ret);
+                    }
+                    break;
+                case HA_READ_KEY_OR_NEXT:
+                    /* Any key >= search key is fine (already guaranteed by seek) */
+                    break;
+                case HA_READ_PREFIX_LAST:
+                case HA_READ_PREFIX_LAST_OR_PREV:
+                    break;
+                default:
+                    if (current_key_len < key_len || memcmp(current_key, key, key_len) != 0)
+                        DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+                    break;
             }
+
+            /* Row already unpacked by rnd_next into buf -- return directly */
+            DBUG_RETURN(0);
         }
     }
     else
@@ -6073,6 +6443,23 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         }
 
         tidesdb_column_family_t *idx_cf = share->index_cf[active_index];
+        KEY *idx_key_info = &table->key_info[active_index];
+
+        /*
+          Transform the search key from key_copy() format to sort-key format.
+          build_index_key() stores sort keys (using make_sort_key per field),
+          so we must seek with a sort-key as well.
+        */
+        uint sort_key_capacity = key_len; /* sort key is <= key_copy key */
+        uchar sort_search_key[TIDESDB_INITIAL_KEY_BUF_CAPACITY];
+        uchar *sort_key_ptr = sort_search_key;
+        if (sort_key_capacity > sizeof(sort_search_key))
+        {
+            sort_key_ptr = (uchar *)my_malloc(PSI_INSTRUMENT_ME, sort_key_capacity, MYF(MY_WME));
+            if (!sort_key_ptr) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+        }
+        uint sort_key_len =
+            transform_search_key_to_sort_key(table, idx_key_info, key, key_len, sort_key_ptr);
 
         /* For secondary index, we need to use an iterator to find matching keys */
         /* The index stores -- index_key -> primary_key */
@@ -6080,13 +6467,15 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         ret = tidesdb_iter_new(current_txn, idx_cf, &iter);
         if (ret != TDB_SUCCESS)
         {
+            if (sort_key_ptr != sort_search_key) my_free(sort_key_ptr);
             DBUG_RETURN(HA_ERR_GENERIC);
         }
 
-        ret = tidesdb_iter_seek(iter, (uint8_t *)key, key_len);
+        ret = tidesdb_iter_seek(iter, (uint8_t *)sort_key_ptr, sort_key_len);
         if (ret != TDB_SUCCESS || !tidesdb_iter_valid(iter))
         {
             tidesdb_iter_free(iter);
+            if (sort_key_ptr != sort_search_key) my_free(sort_key_ptr);
             DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
         }
 
@@ -6097,61 +6486,58 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         if (ret != TDB_SUCCESS)
         {
             tidesdb_iter_free(iter);
+            if (sort_key_ptr != sort_search_key) my_free(sort_key_ptr);
             DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
         }
 
         /*
-          Check if the found key matches based on find_flag:
-          -- HA_READ_KEY_EXACT        -- exact prefix match required
-          -- HA_READ_KEY_OR_NEXT      -- any key >= search key is valid
-          -- HA_READ_AFTER_KEY        -- any key > search key is valid
-          -- HA_READ_KEY_OR_PREV      -- any key <= search key is valid
-          -- HA_READ_BEFORE_KEY       -- any key < search key is valid
+          We check if the found key matches based on find_flag.
+          All comparisons use the transformed sort key.
         */
         bool key_matches = false;
         switch (find_flag)
         {
             case HA_READ_KEY_EXACT:
             case HA_READ_PREFIX:
-                /* Exact prefix match required */
-                key_matches = (idx_key_len >= key_len && memcmp(idx_key, key, key_len) == 0);
+                key_matches = (idx_key_len >= sort_key_len &&
+                               memcmp(idx_key, sort_key_ptr, sort_key_len) == 0);
                 break;
             case HA_READ_KEY_OR_NEXT:
             case HA_READ_AFTER_KEY:
-                /* Any key >= search key is valid (seek already positioned us there) */
                 key_matches = true;
-                /* For HA_READ_AFTER_KEY, skip if exact match */
-                if (find_flag == HA_READ_AFTER_KEY && idx_key_len >= key_len &&
-                    memcmp(idx_key, key, key_len) == 0)
+                if (find_flag == HA_READ_AFTER_KEY && idx_key_len >= sort_key_len &&
+                    memcmp(idx_key, sort_key_ptr, sort_key_len) == 0)
                 {
                     tidesdb_iter_next(iter);
                     if (!tidesdb_iter_valid(iter))
                     {
                         tidesdb_iter_free(iter);
+                        if (sort_key_ptr != sort_search_key) my_free(sort_key_ptr);
                         DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
                     }
                     ret = tidesdb_iter_key(iter, &idx_key, &idx_key_len);
                     if (ret != TDB_SUCCESS)
                     {
                         tidesdb_iter_free(iter);
+                        if (sort_key_ptr != sort_search_key) my_free(sort_key_ptr);
                         DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
                     }
                 }
                 break;
             case HA_READ_PREFIX_LAST:
             case HA_READ_PREFIX_LAST_OR_PREV:
-                /* For reverse scans, accept if prefix matches or is less */
                 key_matches = true;
                 break;
             default:
-                /* Default to prefix match for safety */
-                key_matches = (idx_key_len >= key_len && memcmp(idx_key, key, key_len) == 0);
+                key_matches = (idx_key_len >= sort_key_len &&
+                               memcmp(idx_key, sort_key_ptr, sort_key_len) == 0);
                 break;
         }
 
         if (!key_matches)
         {
             tidesdb_iter_free(iter);
+            if (sort_key_ptr != sort_search_key) my_free(sort_key_ptr);
             DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
         }
 
@@ -6162,6 +6548,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         if (ret != TDB_SUCCESS || pk_len == 0)
         {
             tidesdb_iter_free(iter);
+            if (sort_key_ptr != sort_search_key) my_free(sort_key_ptr);
             DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
         }
 
@@ -6174,6 +6561,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
             if (!new_key)
             {
                 tidesdb_iter_free(iter);
+                if (sort_key_ptr != sort_search_key) my_free(sort_key_ptr);
                 DBUG_RETURN(HA_ERR_OUT_OF_MEM);
             }
             if (current_key) my_free(current_key);
@@ -6189,10 +6577,11 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         }
         index_iter = iter;
 
-        if (key_len > index_key_buf_capacity)
+        /* We save transformed sort key for boundary checking in index_next */
+        if (sort_key_len > index_key_buf_capacity)
         {
-            uint new_capacity = key_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
-                                    ? key_len * 2
+            uint new_capacity = sort_key_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                    ? sort_key_len * 2
                                     : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
             uchar *new_buf;
             if (index_key_buf == NULL)
@@ -6208,39 +6597,10 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         }
         if (index_key_buf)
         {
-            memcpy(index_key_buf, key, key_len);
-            index_key_len = key_len;
+            memcpy(index_key_buf, sort_key_ptr, sort_key_len);
+            index_key_len = sort_key_len;
         }
-
-        /*
-         * KEYREAD (Covering Index)
-         * For index-only scans, use key_restore() to unpack the index key
-         * directly to the record buffer, avoiding the expensive PK lookup.
-         * Index key format -- [index_columns][primary_key]
-         */
-        if (keyread_only)
-        {
-            KEY *key_info = &table->key_info[active_index];
-            uint idx_restore_len = key_info->key_length;
-
-            if (idx_restore_len <= idx_key_len)
-            {
-                memset(buf, 0, table->s->reclength);
-                key_restore(buf, idx_key, key_info, idx_restore_len);
-
-                /* We also restore the primary key portion */
-                if (table->s->primary_key != MAX_KEY)
-                {
-                    KEY *pk_info = &table->key_info[table->s->primary_key];
-                    uint pk_len = pk_info->key_length;
-                    if (idx_restore_len + pk_len <= idx_key_len)
-                    {
-                        key_restore(buf, idx_key + idx_restore_len, pk_info, pk_len);
-                    }
-                }
-                DBUG_RETURN(0);
-            }
-        }
+        if (sort_key_ptr != sort_search_key) my_free(sort_key_ptr);
 
         /* We now fetch the actual row using the primary key */
         ret = tidesdb_txn_get(current_txn, share->cf, current_key, current_key_len, &value,
@@ -6282,6 +6642,20 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
 
 /**
   @brief
+  Read last row matching a key prefix (for ORDER BY ... DESC LIMIT 1).
+
+  Delegates to index_read_map with HA_READ_PREFIX_LAST which seeks to the
+  last entry matching the key prefix. This avoids a full forward scan +
+  filesort for descending queries.
+*/
+int ha_tidesdb::index_read_last_map(uchar *buf, const uchar *key, key_part_map keypart_map)
+{
+    DBUG_ENTER("ha_tidesdb::index_read_last_map");
+    DBUG_RETURN(index_read_map(buf, key, keypart_map, HA_READ_PREFIX_LAST));
+}
+
+/**
+  @brief
   Read next row in index order.
 
   For secondary indexes -- uses index_iter to find next entry
@@ -6293,160 +6667,101 @@ int ha_tidesdb::index_next(uchar *buf)
 
     int ret;
 
-    /* For secondary index, use the saved iterator */
+    /* For secondary index, we use the saved iterator */
     if (active_index != table->s->primary_key && index_iter)
     {
-        tidesdb_iter_next(index_iter);
-
-        if (!tidesdb_iter_valid(index_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        uint8_t *idx_key = NULL;
-        size_t idx_key_len = 0;
-        ret = tidesdb_iter_key(index_iter, &idx_key, &idx_key_len);
-        if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        uint8_t *pk_value = NULL;
-        size_t pk_len = 0;
-        ret = tidesdb_iter_value(index_iter, &pk_value, &pk_len);
-        if (ret != TDB_SUCCESS || pk_len == 0) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        if (pk_len > current_key_capacity)
+        for (;;)
         {
-            size_t new_capacity = pk_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
-                                      ? pk_len * 2
-                                      : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
-            uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
-            if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-            if (current_key) my_free(current_key);
-            current_key = new_key;
-            current_key_capacity = new_capacity;
-        }
-        memcpy(current_key, pk_value, pk_len);
-        current_key_len = pk_len;
+            tidesdb_iter_next(index_iter);
 
-        /*
-         * KEYREAD (Covering Index)
-         * When keyread_only is set, the query only needs columns in the index.
-         * The index key was built using key_copy(), so we use key_restore() to
-         * unpack it back to the record buffer. This avoids the expensive PK lookup.
-         *
-         * Index key format -- [index_columns][primary_key]
-         * We restore both the index columns and the appended primary key.
-         */
-        if (keyread_only)
-        {
-            KEY *key_info = &table->key_info[active_index];
-            uint idx_restore_len = key_info->key_length;
+            if (!tidesdb_iter_valid(index_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-            /* We ensure we don't read past the index key */
-            if (idx_restore_len <= idx_key_len)
+            uint8_t *idx_key = NULL;
+            size_t idx_key_len = 0;
+            ret = tidesdb_iter_key(index_iter, &idx_key, &idx_key_len);
+            if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            uint8_t *pk_value = NULL;
+            size_t pk_len = 0;
+            ret = tidesdb_iter_value(index_iter, &pk_value, &pk_len);
+            if (ret != TDB_SUCCESS || pk_len == 0) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            if (pk_len > current_key_capacity)
             {
-                /* We clear the record buffer first */
-                memset(buf, 0, table->s->reclength);
-
-                /* We restore the index columns */
-                key_restore(buf, idx_key, key_info, idx_restore_len);
-
-                /* We also restore the primary key portion (appended after index columns) */
-                if (table->s->primary_key != MAX_KEY)
-                {
-                    KEY *pk_info = &table->key_info[table->s->primary_key];
-                    uint pk_len = pk_info->key_length;
-                    if (idx_restore_len + pk_len <= idx_key_len)
-                    {
-                        key_restore(buf, idx_key + idx_restore_len, pk_info, pk_len);
-                    }
-                }
-
-                DBUG_RETURN(0);
+                size_t new_capacity = pk_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                          ? pk_len * 2
+                                          : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+                uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+                if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+                if (current_key) my_free(current_key);
+                current_key = new_key;
+                current_key_capacity = new_capacity;
             }
-            /* Fall through to full row fetch if key format is unexpected */
+            memcpy(current_key, pk_value, pk_len);
+            current_key_len = pk_len;
+
+            if (!current_txn)
+            {
+                sql_print_error("TidesDB: No transaction available for index_next");
+                DBUG_RETURN(HA_ERR_GENERIC);
+            }
+
+            uint8_t *value = NULL;
+            size_t value_size = 0;
+            ret = tidesdb_txn_get(current_txn, share->cf, pk_value, pk_len, &value, &value_size);
+
+            if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+
+            if (tidesdb_enable_encryption && value_size > 0)
+            {
+                uchar *decrypted = NULL;
+                size_t decrypted_len = 0;
+                ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
+                tidesdb_free(value);
+                if (ret) DBUG_RETURN(ret);
+                ret = unpack_row(buf, decrypted, decrypted_len);
+                my_free(decrypted);
+            }
+            else
+            {
+                ret = unpack_row(buf, value, value_size);
+                tidesdb_free(value);
+            }
+
+            if (ret) DBUG_RETURN(ret);
+
+            /* ICP -- we evaluate pushed index condition; skip non-matching rows */
+            if (pushed_idx_cond && pushed_idx_cond_keyno == active_index)
+            {
+                if (!pushed_idx_cond->val_bool())
+                    continue; /* row rejected by ICP, advance to next */
+            }
+
+            DBUG_RETURN(0);
         }
-
-        if (!current_txn)
-        {
-            sql_print_error("TidesDB: No transaction available for index_next");
-            DBUG_RETURN(HA_ERR_GENERIC);
-        }
-
-        uint8_t *value = NULL;
-        size_t value_size = 0;
-        ret = tidesdb_txn_get(current_txn, share->cf, pk_value, pk_len, &value, &value_size);
-
-        if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-
-        ret = unpack_row(buf, value, value_size);
-        tidesdb_free(value);
-
-        DBUG_RETURN(ret);
-    }
-
-    if (!scan_iter || !scan_initialized) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-    uint8_t *key = NULL;
-    size_t key_size = 0;
-    uint8_t *value = NULL;
-    size_t value_size = 0;
-
-    /* We loop to skip metadata keys (starting with null byte) */
-    while (true)
-    {
-        tidesdb_iter_next(scan_iter);
-        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        ret = tidesdb_iter_key(scan_iter, &key, &key_size);
-        if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        if (key_size > 0 && key[0] == 0) continue;
-
-        break;
     }
 
     /*
-      For primary key prefix scans (composite keys), check if we're still
-      within the prefix boundary. If index_key_len > 0, we have a prefix
-      to check against.
+      For primary key scans, delegate to rnd_next() which implements
+      the merge scan (combining committed iterator + handler write buffer).
+      After rnd_next sets current_key, check the prefix boundary.
     */
+    if (!scan_iter || !scan_initialized) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+    ret = rnd_next(buf);
+    if (ret) DBUG_RETURN(ret);
+
+    /* Prefix boundary check for composite primary key scans */
     if (active_index == table->s->primary_key && index_key_len > 0)
     {
-        if (key_size < index_key_len || memcmp(key, index_key_buf, index_key_len) != 0)
+        if (current_key_len < index_key_len ||
+            memcmp(current_key, index_key_buf, index_key_len) != 0)
         {
             DBUG_RETURN(HA_ERR_END_OF_FILE);
         }
     }
 
-    ret = tidesdb_iter_value(scan_iter, &value, &value_size);
-    if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-    if (key_size > current_key_capacity)
-    {
-        size_t new_capacity = key_size > TIDESDB_INITIAL_KEY_BUF_CAPACITY
-                                  ? key_size * 2
-                                  : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
-        uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
-        if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-        if (current_key) my_free(current_key);
-        current_key = new_key;
-        current_key_capacity = new_capacity;
-    }
-    memcpy(current_key, key, key_size);
-    current_key_len = key_size;
-
-    if (tidesdb_enable_encryption && value_size > 0)
-    {
-        uchar *decrypted = NULL;
-        size_t decrypted_len = 0;
-        ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
-        if (ret) DBUG_RETURN(ret);
-        ret = unpack_row(buf, decrypted, decrypted_len);
-        my_free(decrypted);
-    }
-    else
-    {
-        ret = unpack_row(buf, value, value_size);
-    }
-
-    DBUG_RETURN(ret);
+    DBUG_RETURN(0);
 }
 
 /**
@@ -6462,153 +6777,101 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
 
     int ret;
 
-    /* For secondary index, use the saved iterator */
+    /* For secondary index, we use the saved iterator */
     if (active_index != table->s->primary_key && index_iter)
     {
-        tidesdb_iter_next(index_iter);
-
-        if (!tidesdb_iter_valid(index_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        uint8_t *idx_key = NULL;
-        size_t idx_key_len = 0;
-        ret = tidesdb_iter_key(index_iter, &idx_key, &idx_key_len);
-        if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        /* We check if key prefix still matches */
-        uint check_len = index_key_len > 0 ? index_key_len : keylen;
-        if (idx_key_len < check_len ||
-            memcmp(idx_key, index_key_buf ? index_key_buf : key, check_len) != 0)
+        for (;;)
         {
-            DBUG_RETURN(HA_ERR_END_OF_FILE);
-        }
+            tidesdb_iter_next(index_iter);
 
-        /* We get the primary key from the index entry */
-        uint8_t *pk_value = NULL;
-        size_t pk_len = 0;
-        ret = tidesdb_iter_value(index_iter, &pk_value, &pk_len);
-        if (ret != TDB_SUCCESS || pk_len == 0) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (!tidesdb_iter_valid(index_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-        if (pk_len > current_key_capacity)
-        {
-            size_t new_capacity = pk_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
-                                      ? pk_len * 2
-                                      : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
-            uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
-            if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-            if (current_key) my_free(current_key);
-            current_key = new_key;
-            current_key_capacity = new_capacity;
-        }
-        memcpy(current_key, pk_value, pk_len);
-        current_key_len = pk_len;
+            uint8_t *idx_key = NULL;
+            size_t idx_key_len = 0;
+            ret = tidesdb_iter_key(index_iter, &idx_key, &idx_key_len);
+            if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-        /*
-         * KEYREAD (Covering Index)
-         * Use key_restore() to unpack index key directly to record buffer.
-         * Index key format -- [index_columns][primary_key]
-         */
-        if (keyread_only)
-        {
-            KEY *key_info = &table->key_info[active_index];
-            uint idx_restore_len = key_info->key_length;
-
-            if (idx_restore_len <= idx_key_len)
+            /* We check if key prefix still matches */
+            uint check_len = index_key_len > 0 ? index_key_len : keylen;
+            if (idx_key_len < check_len ||
+                memcmp(idx_key, index_key_buf ? index_key_buf : key, check_len) != 0)
             {
-                memset(buf, 0, table->s->reclength);
-                key_restore(buf, idx_key, key_info, idx_restore_len);
-
-                /* We also restore the primary key portion */
-                if (table->s->primary_key != MAX_KEY)
-                {
-                    KEY *pk_info = &table->key_info[table->s->primary_key];
-                    uint pk_len = pk_info->key_length;
-                    if (idx_restore_len + pk_len <= idx_key_len)
-                    {
-                        key_restore(buf, idx_key + idx_restore_len, pk_info, pk_len);
-                    }
-                }
-                DBUG_RETURN(0);
+                DBUG_RETURN(HA_ERR_END_OF_FILE);
             }
+
+            /* We get the primary key from the index entry */
+            uint8_t *pk_value = NULL;
+            size_t pk_len = 0;
+            ret = tidesdb_iter_value(index_iter, &pk_value, &pk_len);
+            if (ret != TDB_SUCCESS || pk_len == 0) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            if (pk_len > current_key_capacity)
+            {
+                size_t new_capacity = pk_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                          ? pk_len * 2
+                                          : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+                uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+                if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+                if (current_key) my_free(current_key);
+                current_key = new_key;
+                current_key_capacity = new_capacity;
+            }
+            memcpy(current_key, pk_value, pk_len);
+            current_key_len = pk_len;
+
+            if (!current_txn)
+            {
+                sql_print_error("TidesDB: No transaction available for index_next_same");
+                DBUG_RETURN(HA_ERR_GENERIC);
+            }
+
+            uint8_t *value = NULL;
+            size_t value_size = 0;
+            ret = tidesdb_txn_get(current_txn, share->cf, current_key, current_key_len, &value,
+                                  &value_size);
+
+            if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            if (tidesdb_enable_encryption && value_size > 0)
+            {
+                uchar *decrypted = NULL;
+                size_t decrypted_len = 0;
+                ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
+                tidesdb_free(value);
+                if (ret) DBUG_RETURN(ret);
+                ret = unpack_row(buf, decrypted, decrypted_len);
+                my_free(decrypted);
+            }
+            else
+            {
+                ret = unpack_row(buf, value, value_size);
+                tidesdb_free(value);
+            }
+
+            if (ret) DBUG_RETURN(ret);
+
+            /* ICP -- we evaluate pushed index condition; skip non-matching rows */
+            if (pushed_idx_cond && pushed_idx_cond_keyno == active_index)
+            {
+                if (!pushed_idx_cond->val_bool())
+                    continue; /* row rejected by ICP, advance to next */
+            }
+
+            DBUG_RETURN(0);
         }
-
-        if (!current_txn)
-        {
-            sql_print_error("TidesDB: No transaction available for index_next_same");
-            DBUG_RETURN(HA_ERR_GENERIC);
-        }
-
-        uint8_t *value = NULL;
-        size_t value_size = 0;
-        ret = tidesdb_txn_get(current_txn, share->cf, current_key, current_key_len, &value,
-                              &value_size);
-
-        if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        ret = unpack_row(buf, value, value_size);
-        tidesdb_free(value);
-
-        DBUG_RETURN(ret);
     }
 
-    /* For primary key, we use scan_iter */
+    /* For primary key, delegate to rnd_next which has merge scan logic */
     if (!scan_iter || !scan_initialized) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-    uint8_t *iter_key = NULL;
-    size_t iter_key_size = 0;
-    uint8_t *value = NULL;
-    size_t value_size = 0;
+    ret = rnd_next(buf);
+    if (ret) DBUG_RETURN(ret);
 
-    /* We loop to find next row with same key prefix, skipping metadata keys */
-    while (tidesdb_iter_valid(scan_iter))
-    {
-        tidesdb_iter_next(scan_iter);
+    /* We check if still within same key prefix */
+    if (current_key_len < keylen || memcmp(current_key, key, keylen) != 0)
+        DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        ret = tidesdb_iter_key(scan_iter, &iter_key, &iter_key_size);
-        if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        if (iter_key_size > 0 && iter_key[0] == 0) continue;
-
-        if (iter_key_size < keylen || memcmp(iter_key, key, keylen) != 0)
-            DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        break;
-    }
-
-    if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-    ret = tidesdb_iter_value(scan_iter, &value, &value_size);
-    if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-    if (iter_key_size > current_key_capacity)
-    {
-        size_t new_capacity = iter_key_size > TIDESDB_INITIAL_KEY_BUF_CAPACITY
-                                  ? iter_key_size * 2
-                                  : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
-        uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
-        if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-        if (current_key) my_free(current_key);
-        current_key = new_key;
-        current_key_capacity = new_capacity;
-    }
-    memcpy(current_key, iter_key, iter_key_size);
-    current_key_len = iter_key_size;
-
-    if (tidesdb_enable_encryption && value_size > 0)
-    {
-        uchar *decrypted = NULL;
-        size_t decrypted_len = 0;
-        ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
-        if (ret) DBUG_RETURN(ret);
-        ret = unpack_row(buf, decrypted, decrypted_len);
-        my_free(decrypted);
-    }
-    else
-    {
-        ret = unpack_row(buf, value, value_size);
-    }
-    DBUG_RETURN(ret);
+    DBUG_RETURN(0);
 }
 
 /**
@@ -6622,6 +6885,80 @@ int ha_tidesdb::index_prev(uchar *buf)
 
     int ret;
 
+    /* For secondary index, we use index_iter */
+    if (active_index != table->s->primary_key && index_iter)
+    {
+        for (;;)
+        {
+            tidesdb_iter_prev(index_iter);
+
+            if (!tidesdb_iter_valid(index_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            uint8_t *idx_key = NULL;
+            size_t idx_key_len = 0;
+            ret = tidesdb_iter_key(index_iter, &idx_key, &idx_key_len);
+            if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            uint8_t *pk_value = NULL;
+            size_t pk_len = 0;
+            ret = tidesdb_iter_value(index_iter, &pk_value, &pk_len);
+            if (ret != TDB_SUCCESS || pk_len == 0) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            if (pk_len > current_key_capacity)
+            {
+                size_t new_capacity = pk_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                          ? pk_len * 2
+                                          : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+                uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+                if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+                if (current_key) my_free(current_key);
+                current_key = new_key;
+                current_key_capacity = new_capacity;
+            }
+            memcpy(current_key, pk_value, pk_len);
+            current_key_len = pk_len;
+
+            if (!current_txn)
+            {
+                sql_print_error("TidesDB: No transaction available for index_prev");
+                DBUG_RETURN(HA_ERR_GENERIC);
+            }
+
+            uint8_t *value = NULL;
+            size_t value_size = 0;
+            ret = tidesdb_txn_get(current_txn, share->cf, pk_value, pk_len, &value, &value_size);
+            if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+
+            if (tidesdb_enable_encryption && value_size > 0)
+            {
+                uchar *decrypted = NULL;
+                size_t decrypted_len = 0;
+                ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
+                tidesdb_free(value);
+                if (ret) DBUG_RETURN(ret);
+                ret = unpack_row(buf, decrypted, decrypted_len);
+                my_free(decrypted);
+            }
+            else
+            {
+                ret = unpack_row(buf, value, value_size);
+                tidesdb_free(value);
+            }
+
+            if (ret) DBUG_RETURN(ret);
+
+            /* ICP -- we evaluate pushed index condition; skip non-matching rows */
+            if (pushed_idx_cond && pushed_idx_cond_keyno == active_index)
+            {
+                if (!pushed_idx_cond->val_bool())
+                    continue; /* row rejected by ICP, advance to prev */
+            }
+
+            DBUG_RETURN(0);
+        }
+    }
+
+    /* Primary key scan -- we use scan_iter */
     if (!scan_iter || !scan_initialized) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
     uint8_t *key = NULL;
@@ -6669,25 +7006,28 @@ int ha_tidesdb::index_prev(uchar *buf)
     memcpy(current_key, key, key_size);
     current_key_len = key_size;
 
+    /* We copy value before it's invalidated */
+    uchar *val_copy = (uchar *)my_malloc(PSI_INSTRUMENT_ME, value_size, MYF(MY_WME));
+    if (!val_copy) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+    memcpy(val_copy, value, value_size);
+
     if (tidesdb_enable_encryption && value_size > 0)
     {
         uchar *decrypted = NULL;
         size_t decrypted_len = 0;
-        ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
+        ret = tidesdb_decrypt_data(val_copy, value_size, &decrypted, &decrypted_len);
+        my_free(val_copy);
         if (ret) DBUG_RETURN(ret);
         ret = unpack_row(buf, decrypted, decrypted_len);
         my_free(decrypted);
     }
     else
     {
-        ret = unpack_row(buf, value, value_size);
-    }
-    if (ret)
-    {
-        DBUG_RETURN(ret);
+        ret = unpack_row(buf, val_copy, value_size);
+        my_free(val_copy);
     }
 
-    DBUG_RETURN(0);
+    DBUG_RETURN(ret);
 }
 
 /**
@@ -6698,10 +7038,122 @@ int ha_tidesdb::index_first(uchar *buf)
 {
     DBUG_ENTER("ha_tidesdb::index_first");
 
-    int ret = rnd_init(true);
-    if (ret) DBUG_RETURN(ret);
+    /* We clear prefix boundary so index_next does not truncate a full scan */
+    index_key_len = 0;
 
-    DBUG_RETURN(rnd_next(buf));
+    /* For primary key scans, use rnd_init + rnd_next (iterates primary CF) */
+    if (active_index == table->s->primary_key)
+    {
+        int ret = rnd_init(true);
+        if (ret) DBUG_RETURN(ret);
+
+        DBUG_RETURN(rnd_next(buf));
+    }
+
+    /* Secondary index scan -- we iterate the index CF in key order */
+    if (active_index >= TIDESDB_MAX_INDEXES || !share->index_cf[active_index])
+    {
+        DBUG_RETURN(HA_ERR_WRONG_COMMAND);
+    }
+
+    if (!current_txn)
+    {
+        THD *thd = ha_thd();
+        tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+        if (thd_txn)
+        {
+            current_txn = thd_txn;
+        }
+        else
+        {
+            DBUG_RETURN(HA_ERR_GENERIC);
+        }
+    }
+
+    tidesdb_column_family_t *idx_cf = share->index_cf[active_index];
+
+    /* We clean up any existing index iterator */
+    if (index_iter)
+    {
+        tidesdb_iter_free(index_iter);
+        index_iter = NULL;
+    }
+
+    int ret = tidesdb_iter_new(current_txn, idx_cf, &index_iter);
+    if (ret != TDB_SUCCESS)
+    {
+        DBUG_RETURN(HA_ERR_GENERIC);
+    }
+
+    tidesdb_iter_seek_to_first(index_iter);
+
+    /*
+      No metadata key skip here -- secondary index CFs don't store internal
+      metadata keys.  The null-byte prefix filter is only for the primary CF.
+      (MariaDB's key format for nullable fields starts with 0x00 meaning
+      "not null", which would be incorrectly filtered.)
+    */
+
+    if (!tidesdb_iter_valid(index_iter))
+    {
+        tidesdb_iter_free(index_iter);
+        index_iter = NULL;
+        DBUG_RETURN(HA_ERR_END_OF_FILE);
+    }
+
+    /* We get the PK value from the index entry */
+    uint8_t *pk_value = NULL;
+    size_t pk_len = 0;
+    ret = tidesdb_iter_value(index_iter, &pk_value, &pk_len);
+    if (ret != TDB_SUCCESS || pk_len == 0)
+    {
+        tidesdb_iter_free(index_iter);
+        index_iter = NULL;
+        DBUG_RETURN(HA_ERR_END_OF_FILE);
+    }
+
+    /* We save PK as current_key */
+    if (pk_len > current_key_capacity)
+    {
+        size_t new_capacity = pk_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                  ? pk_len * 2
+                                  : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+        uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+        if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+        if (current_key) my_free(current_key);
+        current_key = new_key;
+        current_key_capacity = new_capacity;
+    }
+    memcpy(current_key, pk_value, pk_len);
+    current_key_len = pk_len;
+
+    /* We fetch the actual row using PK */
+    uint8_t *value = NULL;
+    size_t value_size = 0;
+    ret =
+        tidesdb_txn_get(current_txn, share->cf, current_key, current_key_len, &value, &value_size);
+    if (ret != TDB_SUCCESS)
+    {
+        DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+    }
+
+    if (tidesdb_enable_encryption && value_size > 0)
+    {
+        uchar *decrypted = NULL;
+        size_t decrypted_len = 0;
+        ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
+        tidesdb_free(value);
+        if (ret) DBUG_RETURN(ret);
+        ret = unpack_row(buf, decrypted, decrypted_len);
+        my_free(decrypted);
+    }
+    else
+    {
+        ret = unpack_row(buf, value, value_size);
+        tidesdb_free(value);
+    }
+
+    DBUG_RETURN(ret);
 }
 
 /**
@@ -6715,84 +7167,150 @@ int ha_tidesdb::index_last(uchar *buf)
 
     int ret;
 
-    /* We clean up any existing iterator */
-    if (scan_iter)
-    {
-        tidesdb_iter_free(scan_iter);
-        scan_iter = NULL;
-    }
-
     if (!current_txn)
     {
-        ret = tidesdb_txn_begin_with_isolation(
-            tidesdb_instance, (tidesdb_isolation_level_t)tidesdb_default_isolation, &current_txn);
-        if (ret != TDB_SUCCESS)
+        THD *thd = ha_thd();
+        tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+        if (thd_txn)
         {
-            sql_print_error("TidesDB: Failed to begin transaction for index_last: %d", ret);
-            DBUG_RETURN(HA_ERR_GENERIC);
+            current_txn = thd_txn;
+        }
+        else
+        {
+            tidesdb_isolation_level_t iso_level =
+                thd ? (tidesdb_isolation_level_t)map_isolation_level(
+                          (enum_tx_isolation)thd->variables.tx_isolation)
+                    : (tidesdb_isolation_level_t)tidesdb_default_isolation;
+
+            ret = tidesdb_txn_begin_with_isolation(tidesdb_instance, iso_level, &current_txn);
+            if (ret != TDB_SUCCESS)
+            {
+                sql_print_error("TidesDB: Failed to begin transaction for index_last: %d", ret);
+                DBUG_RETURN(HA_ERR_GENERIC);
+            }
+            index_txn_owned = true;
         }
     }
 
-    ret = tidesdb_iter_new(current_txn, share->cf, &scan_iter);
+    /*** We choose the correct CF -- secondary index CF or primary CF */
+    bool is_secondary = (active_index != table->s->primary_key &&
+                         active_index < TIDESDB_MAX_INDEXES && share->index_cf[active_index]);
+
+    tidesdb_column_family_t *target_cf = is_secondary ? share->index_cf[active_index] : share->cf;
+    tidesdb_iter_t **target_iter = is_secondary ? &index_iter : &scan_iter;
+
+    /* We clean up existing iterator */
+    if (*target_iter)
+    {
+        tidesdb_iter_free(*target_iter);
+        *target_iter = NULL;
+    }
+
+    ret = tidesdb_iter_new(current_txn, target_cf, target_iter);
     if (ret != TDB_SUCCESS)
     {
         sql_print_error("TidesDB: Failed to create iterator: %d", ret);
         DBUG_RETURN(HA_ERR_GENERIC);
     }
 
-    tidesdb_iter_seek_to_last(scan_iter);
-    scan_initialized = true;
+    tidesdb_iter_seek_to_last(*target_iter);
+    if (!is_secondary) scan_initialized = true;
 
     uint8_t *key = NULL;
     size_t key_size = 0;
     uint8_t *value = NULL;
     size_t value_size = 0;
 
-    while (tidesdb_iter_valid(scan_iter))
+    /*
+      Skip metadata keys (null byte prefix) only for the primary CF.
+      Secondary index CFs don't have metadata keys, and their key format
+      for nullable fields starts with 0x00 (null indicator = "not null").
+    */
+    if (!is_secondary)
     {
-        ret = tidesdb_iter_key(scan_iter, &key, &key_size);
-        if (ret != TDB_SUCCESS)
+        while (tidesdb_iter_valid(*target_iter))
         {
-            DBUG_RETURN(HA_ERR_END_OF_FILE);
-        }
+            ret = tidesdb_iter_key(*target_iter, &key, &key_size);
+            if (ret != TDB_SUCCESS)
+            {
+                DBUG_RETURN(HA_ERR_END_OF_FILE);
+            }
 
-        if (key_size > 0 && key[0] == 0)
+            if (key_size > 0 && key[0] == 0)
+            {
+                tidesdb_iter_prev(*target_iter);
+                continue;
+            }
+
+            break;
+        }
+    }
+
+    if (!tidesdb_iter_valid(*target_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+    if (is_secondary)
+    {
+        /* For secondary index, value is the PK */
+        uint8_t *pk_value = NULL;
+        size_t pk_len = 0;
+        ret = tidesdb_iter_value(*target_iter, &pk_value, &pk_len);
+        if (ret != TDB_SUCCESS || pk_len == 0) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+        if (pk_len > current_key_capacity)
         {
-            tidesdb_iter_prev(scan_iter);
-            continue;
+            size_t new_capacity = pk_len > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                      ? pk_len * 2
+                                      : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+            uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+            if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+            if (current_key) my_free(current_key);
+            current_key = new_key;
+            current_key_capacity = new_capacity;
         }
+        memcpy(current_key, pk_value, pk_len);
+        current_key_len = pk_len;
 
-        break;
+        /* We fetch full row via PK */
+        ret = tidesdb_txn_get(current_txn, share->cf, current_key, current_key_len, &value,
+                              &value_size);
+        if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
     }
-
-    /* We check if we reached the beginning without finding data */
-    if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-    ret = tidesdb_iter_value(scan_iter, &value, &value_size);
-    if (ret != TDB_SUCCESS)
+    else
     {
-        DBUG_RETURN(HA_ERR_END_OF_FILE);
-    }
+        /* Primary CF -- key IS the PK, value IS the row data */
+        if (key_size > current_key_capacity)
+        {
+            size_t new_capacity = key_size > TIDESDB_INITIAL_KEY_BUF_CAPACITY
+                                      ? key_size * 2
+                                      : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
+            uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
+            if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+            if (current_key) my_free(current_key);
+            current_key = new_key;
+            current_key_capacity = new_capacity;
+        }
+        memcpy(current_key, key, key_size);
+        current_key_len = key_size;
 
-    if (key_size > current_key_capacity)
-    {
-        size_t new_capacity = key_size > TIDESDB_INITIAL_KEY_BUF_CAPACITY
-                                  ? key_size * 2
-                                  : TIDESDB_INITIAL_KEY_BUF_CAPACITY;
-        uchar *new_key = (uchar *)my_malloc(PSI_INSTRUMENT_ME, new_capacity, MYF(MY_WME));
-        if (!new_key) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
-        if (current_key) my_free(current_key);
-        current_key = new_key;
-        current_key_capacity = new_capacity;
+        ret = tidesdb_iter_value(*target_iter, &value, &value_size);
+        if (ret != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+        /* For primary CF, we need to copy the value since we don't own it */
+        uchar *val_copy = (uchar *)my_malloc(PSI_INSTRUMENT_ME, value_size, MYF(MY_WME));
+        if (!val_copy) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+        memcpy(val_copy, value, value_size);
+        value = val_copy;
     }
-    memcpy(current_key, key, key_size);
-    current_key_len = key_size;
 
     if (tidesdb_enable_encryption && value_size > 0)
     {
         uchar *decrypted = NULL;
         size_t decrypted_len = 0;
         ret = tidesdb_decrypt_data(value, value_size, &decrypted, &decrypted_len);
+        if (is_secondary)
+            tidesdb_free(value);
+        else
+            my_free(value);
         if (ret) DBUG_RETURN(ret);
         ret = unpack_row(buf, decrypted, decrypted_len);
         my_free(decrypted);
@@ -6800,13 +7318,13 @@ int ha_tidesdb::index_last(uchar *buf)
     else
     {
         ret = unpack_row(buf, value, value_size);
-    }
-    if (ret)
-    {
-        DBUG_RETURN(ret);
+        if (is_secondary)
+            tidesdb_free(value);
+        else
+            my_free(value);
     }
 
-    DBUG_RETURN(0);
+    DBUG_RETURN(ret);
 }
 
 /**
@@ -6823,22 +7341,41 @@ int ha_tidesdb::info(uint flag)
 
         if (share && share->cf)
         {
-            tidesdb_stats_t *tdb_stats = NULL;
-            if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+            /*
+              When row_count_valid is true, write_row/delete_row have been
+              maintaining share->row_count accurately.  Prefer it over
+              tidesdb_get_stats() which counts tombstones in the LSM tree
+              and therefore over-reports after DELETEs.
+            */
+            if (share->row_count_valid)
             {
-                /*
-                  tidesdb_get_stats counts ALL keys including internal metadata keys
-                  (auto_increment, hidden_pk). We store up to 2 metadata keys that
-                  start with null byte and are skipped by rnd_next. Subtract them
-                  from the count to get the actual row count.
-                */
-                ha_rows metadata_keys = 0;
-                if (!share->has_primary_key) metadata_keys++;           /* hidden_pk metadata */
-                if (table->s->found_next_number_field) metadata_keys++; /* auto_inc metadata */
+                stats.records = share->row_count;
+            }
+            else
+            {
+                tidesdb_stats_t *tdb_stats = get_realtime_stats(share);
+                if (tdb_stats)
+                {
+                    ha_rows metadata_keys = 0;
+                    if (!share->has_primary_key) metadata_keys++;
+                    if (table->s->found_next_number_field) metadata_keys++;
 
-                stats.records = tdb_stats->total_keys > metadata_keys
-                                    ? tdb_stats->total_keys - metadata_keys
-                                    : 0;
+                    stats.records = tdb_stats->total_keys > metadata_keys
+                                        ? tdb_stats->total_keys - metadata_keys
+                                        : 0;
+
+                    tidesdb_free_stats(tdb_stats);
+                }
+                else
+                {
+                    stats.records = TIDESDB_FALLBACK_RECORD_COUNT;
+                }
+            }
+
+            /* We always fetch size stats from storage */
+            tidesdb_stats_t *tdb_stats = get_realtime_stats(share);
+            if (tdb_stats)
+            {
                 stats.data_file_length = tdb_stats->total_data_size;
 
                 if (tdb_stats->avg_key_size > 0 || tdb_stats->avg_value_size > 0)
@@ -6850,19 +7387,10 @@ int ha_tidesdb::info(uint flag)
                 {
                     stats.mean_rec_length = table->s->reclength;
                 }
-
                 tidesdb_free_stats(tdb_stats);
             }
             else
             {
-                if (share->row_count_valid)
-                {
-                    stats.records = share->row_count;
-                }
-                else
-                {
-                    stats.records = TIDESDB_FALLBACK_RECORD_COUNT;
-                }
                 stats.data_file_length = TIDESDB_FALLBACK_DATA_FILE_LENGTH;
                 stats.mean_rec_length = table->s->reclength;
             }
@@ -6880,6 +7408,46 @@ int ha_tidesdb::info(uint flag)
     {
         stats.max_data_file_length = LLONG_MAX;
         stats.max_index_file_length = LLONG_MAX;
+
+        /*
+          Set per-index cardinality estimates (rec_per_key).
+          rec_per_key[i] = average number of rows sharing the same key
+          prefix up to and including key part i.
+
+          For unique indexes -- rec_per_key = 1
+          For non-unique:    -- estimate based on total rows / estimated distinct values
+        */
+        ha_rows total = stats.records > 0 ? stats.records : 1;
+        for (uint i = 0; i < table->s->keys; i++)
+        {
+            KEY *key = &table->key_info[i];
+            bool is_unique = (key->flags & HA_NOSAME) != 0;
+
+            for (uint j = 0; j < key->user_defined_key_parts; j++)
+            {
+                if (is_unique && j == key->user_defined_key_parts - 1)
+                {
+                    /* Last part of unique key: exactly 1 row per key */
+                    key->rec_per_key[j] = 1;
+                }
+                else
+                {
+                    /*
+                      Estimate -- fewer distinct values for leading key parts,
+                      more as we add parts. Use sqrt heuristic scaled by
+                      number of parts already included.
+                    */
+                    ulong distinct = (ulong)sqrt((double)total);
+                    if (distinct < 1) distinct = 1;
+                    /* Each additional part roughly doubles selectivity */
+                    for (uint k = 0; k < j; k++)
+                        distinct = (ulong)(distinct * 2 > total ? total : distinct * 2);
+
+                    key->rec_per_key[j] = (ulong)(total / distinct);
+                    if (key->rec_per_key[j] < 1) key->rec_per_key[j] = 1;
+                }
+            }
+        }
     }
 
     if (flag & HA_STATUS_AUTO)
@@ -6956,9 +7524,8 @@ int ha_tidesdb::extra(enum ha_extra_function operation)
               Sequential scan prefetch hint. When the optimizer signals
               HA_EXTRA_CACHE, we warm the block cache by doing a quick
               read-ahead pass. We create a throwaway iterator and read
-              PREFETCH_BATCH_SIZE keys forward -- each key access pulls
-              the underlying SSTable block into TidesDB's clock cache,
-              so the real scan iterator will hit cached blocks.
+              PREFETCH_BATCH_SIZE keys forward from the current scan
+              position. If no position is known yet, seek to first.
             */
             prefetch_active = true;
             if (share && share->cf && tidesdb_instance)
@@ -6969,7 +7536,11 @@ int ha_tidesdb::extra(enum ha_extra_function operation)
                     tidesdb_iter_t *pf_iter = NULL;
                     if (tidesdb_iter_new(pf_txn, share->cf, &pf_iter) == TDB_SUCCESS && pf_iter)
                     {
-                        tidesdb_iter_seek_to_first(pf_iter);
+                        if (current_key && current_key_len > 0)
+                            tidesdb_iter_seek(pf_iter, current_key, current_key_len);
+                        else
+                            tidesdb_iter_seek_to_first(pf_iter);
+
                         for (uint i = 0; i < PREFETCH_BATCH_SIZE && tidesdb_iter_valid(pf_iter);
                              i++)
                         {
@@ -7109,6 +7680,7 @@ Item *ha_tidesdb::idx_cond_push(uint keyno, Item *idx_cond)
 
     pushed_idx_cond = idx_cond;
     pushed_idx_cond_keyno = keyno;
+    in_range_check_pushed_down = true;
 
     /* We return NULL to indicate we accept all conditions */
     DBUG_RETURN(NULL);
@@ -7207,15 +7779,18 @@ const COND *ha_tidesdb::cond_push(const COND *cond)
 
     /*
       We store the pushed condition for evaluation during scans.
-      We accept all conditions and evaluate them in rnd_next().
+      We evaluate it in rnd_next() for early row filtering.
+
+      Return the condition back to the SQL layer so it re-evaluates it
+      as well. This is the safe approach -- TidesDB uses val_int() on the
+      full Item tree which works for simple column comparisons but may
+      not handle all expression types correctly (subqueries, stored
+      functions, non-deterministic expressions). Letting the SQL layer
+      re-check guarantees correctness while we still benefit from
+      skipping unpack_row() on non-matching rows.
     */
     pushed_cond = cond;
-
-    /*
-      Return NULL to indicate we accept the entire condition.
-      The SQL layer will not re-evaluate it.
-    */
-    DBUG_RETURN(NULL);
+    DBUG_RETURN(cond);
 }
 
 /**
@@ -7235,7 +7810,48 @@ void ha_tidesdb::cond_pop()
 
 /**
   @brief
+  Helper -- drop a column family and remove its on-disk directory.
+  tidesdb_drop_column_family removes the in-memory state but may leave
+  the on-disk directory.  We clean it up so tidesdb_create_column_family
+  starts with a fresh, empty directory.
+*/
+static int drop_cf_and_cleanup(const char *cf_name)
+{
+    int ret = tidesdb_drop_column_family(tidesdb_instance, cf_name);
+    if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND) return ret;
+
+    /*
+      We build the on-disk path -- <tidesdb_data_dir>/<cf_name>
+      If the directory still exists after drop, remove it recursively.
+    */
+    char cf_dir[FN_REFLEN];
+    snprintf(cf_dir, sizeof(cf_dir), "%s" TIDESDB_PATH_SEP_STR "tidesdb" TIDESDB_PATH_SEP_STR "%s",
+             mysql_real_data_home, cf_name);
+
+    MY_DIR *dir = my_dir(cf_dir, MYF(0));
+    if (dir)
+    {
+        /* Directory still exists -- we remove all files then the directory */
+        for (uint i = 0; i < dir->number_of_files; i++)
+        {
+            char filepath[FN_REFLEN];
+            snprintf(filepath, sizeof(filepath), "%s" TIDESDB_PATH_SEP_STR "%s", cf_dir,
+                     dir->dir_entry[i].name);
+            my_delete(filepath, MYF(0));
+        }
+        my_dirend(dir);
+        rmdir(cf_dir);
+    }
+
+    return 0;
+}
+
+/**
+  @brief
   Delete all rows in the table.
+
+  Drops and recreates the column family (and all secondary index / fulltext CFs).
+  This is the fastest way to clear all data.
 */
 int ha_tidesdb::delete_all_rows()
 {
@@ -7244,89 +7860,28 @@ int ha_tidesdb::delete_all_rows()
     char cf_name[TIDESDB_CF_NAME_BUF_SIZE];
     get_cf_name(share->table_name, cf_name, sizeof(cf_name));
 
-    sql_print_information("TidesDB: delete_all_rows called for CF '%s'", cf_name);
-
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
-    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = TDB_COMPRESS_LZ4;
-    }
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
     int ret;
 
-    /*
-      Flush memtable and wait for all background operations to complete.
-      This ensures all data is persisted before we drop the column family.
-    */
-    if (share->cf)
+    /* We drop and recreate the main column family */
+    ret = drop_cf_and_cleanup(cf_name);
+    if (ret != 0)
     {
-        /* Trigger flush */
-        tidesdb_flush_memtable(share->cf);
-
-        /* Wait for flush to complete using is_flushing flag */
-        int wait_count = 0;
-        while (tidesdb_is_flushing(share->cf) && wait_count < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
-        {
-            my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US); /* 1ms */
-            wait_count++;
-        }
-
-        /* Wait for any compaction to complete using is_compacting flag */
-        wait_count = 0;
-        while (tidesdb_is_compacting(share->cf) && wait_count < TIDESDB_FLUSH_WAIT_MAX_ITERATIONS)
-        {
-            my_sleep(TIDESDB_FLUSH_WAIT_SLEEP_US); /* 1ms */
-            wait_count++;
-        }
-    }
-
-    /*
-      We use rename-then-drop pattern. The rename waits for any in-progress
-      flush/compaction to complete before proceeding.
-    */
-    char tmp_cf_name[TIDESDB_IDX_CF_NAME_BUF_SIZE];
-    snprintf(tmp_cf_name, sizeof(tmp_cf_name), "%s" TIDESDB_CF_TRUNCATING_SUFFIX, cf_name,
-             (unsigned long)time(NULL));
-
-    ret = tidesdb_rename_column_family(tidesdb_instance, cf_name, tmp_cf_name);
-    if (ret == TDB_SUCCESS)
-    {
-        /* Rename succeeded -- we drop the renamed CF */
-        ret = tidesdb_drop_column_family(tidesdb_instance, tmp_cf_name);
-        if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
-        {
-            sql_print_error("TidesDB: Failed to drop renamed column family for truncate: %d", ret);
-            DBUG_RETURN(HA_ERR_GENERIC);
-        }
-    }
-    else if (ret == TDB_ERR_NOT_FOUND)
-    {
-        /* CF doesn't exist -- that's fine, we'll create it */
-    }
-    else
-    {
-        /* Rename failed -- we try direct drop */
-        ret = tidesdb_drop_column_family(tidesdb_instance, cf_name);
-        if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
-        {
-            sql_print_error("TidesDB: Failed to drop column family for truncate: %d", ret);
-            DBUG_RETURN(HA_ERR_GENERIC);
-        }
+        sql_print_error("TidesDB: delete_all_rows: failed to drop main CF '%s': %d", cf_name, ret);
+        DBUG_RETURN(HA_ERR_GENERIC);
     }
 
     ret = tidesdb_create_column_family(tidesdb_instance, cf_name, &cf_config);
     if (ret != TDB_SUCCESS)
     {
-        sql_print_error("TidesDB: Failed to recreate column family for truncate: %d", ret);
+        sql_print_error("TidesDB: delete_all_rows: failed to recreate main CF '%s': %d", cf_name,
+                        ret);
         DBUG_RETURN(HA_ERR_GENERIC);
     }
-
     share->cf = tidesdb_get_column_family(tidesdb_instance, cf_name);
 
+    /* We drop and recreate secondary index CFs */
     for (uint i = 0; i < table->s->keys; i++)
     {
         if (i == table->s->primary_key) continue;
@@ -7336,17 +7891,13 @@ int ha_tidesdb::delete_all_rows()
         char idx_cf_name[TIDESDB_CF_NAME_BUF_SIZE];
         snprintf(idx_cf_name, sizeof(idx_cf_name), TIDESDB_CF_IDX_FMT, cf_name, i);
 
-        ret = tidesdb_drop_column_family(tidesdb_instance, idx_cf_name);
-        if (ret == TDB_SUCCESS || ret == TDB_ERR_NOT_FOUND)
-        {
-            ret = tidesdb_create_column_family(tidesdb_instance, idx_cf_name, &cf_config);
-            if (ret == TDB_SUCCESS)
-            {
-                share->index_cf[i] = tidesdb_get_column_family(tidesdb_instance, idx_cf_name);
-            }
-        }
+        drop_cf_and_cleanup(idx_cf_name);
+        ret = tidesdb_create_column_family(tidesdb_instance, idx_cf_name, &cf_config);
+        if (ret == TDB_SUCCESS)
+            share->index_cf[i] = tidesdb_get_column_family(tidesdb_instance, idx_cf_name);
     }
 
+    /* We drop and recreate fulltext index CFs */
     for (uint i = 0; i < share->num_ft_indexes; i++)
     {
         if (!share->ft_cf[i]) continue;
@@ -7354,15 +7905,10 @@ int ha_tidesdb::delete_all_rows()
         char ft_cf_name[TIDESDB_CF_NAME_BUF_SIZE];
         snprintf(ft_cf_name, sizeof(ft_cf_name), TIDESDB_CF_FT_FMT, cf_name, share->ft_key_nr[i]);
 
-        ret = tidesdb_drop_column_family(tidesdb_instance, ft_cf_name);
-        if (ret == TDB_SUCCESS || ret == TDB_ERR_NOT_FOUND)
-        {
-            ret = tidesdb_create_column_family(tidesdb_instance, ft_cf_name, &cf_config);
-            if (ret == TDB_SUCCESS)
-            {
-                share->ft_cf[i] = tidesdb_get_column_family(tidesdb_instance, ft_cf_name);
-            }
-        }
+        drop_cf_and_cleanup(ft_cf_name);
+        ret = tidesdb_create_column_family(tidesdb_instance, ft_cf_name, &cf_config);
+        if (ret == TDB_SUCCESS)
+            share->ft_cf[i] = tidesdb_get_column_family(tidesdb_instance, ft_cf_name);
     }
 
     stats.records = 0;
@@ -7418,10 +7964,20 @@ ha_rows ha_tidesdb::records()
 
     if (share && share->cf)
     {
-        tidesdb_stats_t *tdb_stats = NULL;
-        if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+        tidesdb_stats_t *tdb_stats = get_realtime_stats(share);
+        if (tdb_stats)
         {
-            ha_rows count = tdb_stats->total_keys;
+            /*
+              We subtract metadata keys (same logic as info()) to avoid
+              over-counting by 1-2 rows.
+            */
+            ha_rows metadata_keys = 0;
+            if (!share->has_primary_key) metadata_keys++;
+            if (table->s->found_next_number_field) metadata_keys++;
+
+            ha_rows count = tdb_stats->total_keys > metadata_keys
+                                ? tdb_stats->total_keys - metadata_keys
+                                : 2; /* never 0 -- uncommitted txn ops invisible to stats */
             tidesdb_free_stats(tdb_stats);
             share->row_count = count;
             share->row_count_valid = true;
@@ -7620,8 +8176,8 @@ IO_AND_CPU_COST ha_tidesdb::scan_time()
 
     if (share && share->cf)
     {
-        tidesdb_stats_t *tdb_stats = NULL;
-        if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+        tidesdb_stats_t *tdb_stats = get_realtime_stats(share);
+        if (tdb_stats)
         {
             /*
               I/O cost based on total data size
@@ -7700,7 +8256,6 @@ IO_AND_CPU_COST ha_tidesdb::scan_time()
             /* Total I/O cost */
             cost.io = num_blocks * merge_overhead * cache_factor * vlog_overhead * format_factor;
             cost.cpu = cpu_cost;
-
             tidesdb_free_stats(tdb_stats);
         }
         else
@@ -7756,8 +8311,8 @@ IO_AND_CPU_COST ha_tidesdb::read_time(uint index, uint ranges, ha_rows rows)
 
     if (share && share->cf)
     {
-        tidesdb_stats_t *tdb_stats = NULL;
-        if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+        tidesdb_stats_t *tdb_stats = get_realtime_stats(share);
+        if (tdb_stats)
         {
             /*
               Read amplification from TidesDB stats
@@ -7883,7 +8438,6 @@ IO_AND_CPU_COST ha_tidesdb::read_time(uint index, uint ranges, ha_rows rows)
             cost.io = (ranges * seek_cost * cache_factor * secondary_idx_factor) +
                       (rows * row_fetch_cost * cache_factor * vlog_factor * secondary_idx_factor);
             cost.cpu = (double)rows * TIDESDB_CPU_COST_PER_KEY;
-
             tidesdb_free_stats(tdb_stats);
         }
         else
@@ -7920,8 +8474,8 @@ ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const k
     ha_rows total_rows = stats.records;
     if (share && share->cf)
     {
-        tidesdb_stats_t *tdb_stats = NULL;
-        if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+        tidesdb_stats_t *tdb_stats = get_realtime_stats(share);
+        if (tdb_stats)
         {
             total_rows = tdb_stats->total_keys;
             tidesdb_free_stats(tdb_stats);
@@ -7952,10 +8506,10 @@ ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const k
       -- Each additional key part -- divide by N (compound key selectivity)
       -- This is a heuristic; real cardinality stats would be better
     */
-    double selectivity = 1.0;
+    double selectivity = TIDESDB_DEFAULT_SELECTIVITY;
     if (key_parts_used > 0)
     {
-        /* First key part -- assume moderate cardinality */
+        /* First key part -- we assume moderate cardinality */
         double first_part_sel = 1.0 / sqrt((double)total_rows);
         if (first_part_sel > TIDESDB_SELECTIVITY_CAP)
             first_part_sel = TIDESDB_SELECTIVITY_CAP; /* Cap at n% for first part */
@@ -7996,9 +8550,64 @@ ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const k
         DBUG_RETURN(estimate);
     }
 
-    /* Range condition -- we use selectivity with range factor */
-    /* Ranges typically return more rows than equality */
-    double range_factor = TIDESDB_RANGE_FACTOR; /* Ranges return ~Nx more than equality */
+    /*
+      Data sampling -- for primary key ranges, use an iterator to sample
+      actual keys in the range. We scan up to TIDESDB_RANGE_SAMPLE_LIMIT
+      keys and extrapolate if the sample is exhausted. This gives much
+      better estimates than pure heuristics.
+    */
+    if (inx == table->s->primary_key && min_key && current_txn && share->cf)
+    {
+        tidesdb_iter_t *sample_iter = NULL;
+        int sret = tidesdb_iter_new(current_txn, share->cf, &sample_iter);
+        if (sret == TDB_SUCCESS && sample_iter)
+        {
+            sret = tidesdb_iter_seek(sample_iter, (uint8_t *)min_key->key, min_key->length);
+            if (sret == TDB_SUCCESS)
+            {
+                ha_rows sample_count = 0;
+                bool exhausted = true;
+
+                while (tidesdb_iter_valid(sample_iter) && sample_count < TIDESDB_RANGE_SAMPLE_LIMIT)
+                {
+                    if (max_key)
+                    {
+                        uint8_t *iter_key = NULL;
+                        size_t iter_key_len = 0;
+                        if (tidesdb_iter_key(sample_iter, &iter_key, &iter_key_len) != TDB_SUCCESS)
+                            break;
+
+                        /* We stop if we've passed the max key */
+                        int cmp =
+                            memcmp(iter_key, max_key->key,
+                                   iter_key_len < max_key->length ? iter_key_len : max_key->length);
+                        if (cmp > 0 || (cmp == 0 && iter_key_len > max_key->length))
+                        {
+                            exhausted = false;
+                            break;
+                        }
+                    }
+                    sample_count++;
+                    tidesdb_iter_next(sample_iter);
+                }
+
+                tidesdb_iter_free(sample_iter);
+
+                if (!exhausted || sample_count < TIDESDB_RANGE_SAMPLE_LIMIT)
+                {
+                    /* We scanned the full range or it's small enough */
+                    DBUG_RETURN(sample_count < 1 ? 1 : sample_count);
+                }
+                /* Sample exhausted -- extrapolate from heuristics but use sample as floor */
+            }
+            else
+            {
+                tidesdb_iter_free(sample_iter);
+            }
+        }
+    }
+
+    double range_factor = TIDESDB_RANGE_FACTOR;
     ha_rows estimate = (ha_rows)(total_rows * selectivity * range_factor);
 
     if (estimate < 1) estimate = 1;
@@ -8059,103 +8668,60 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
 {
     DBUG_ENTER("ha_tidesdb::external_lock");
 
-    int ret;
-    bool in_transaction = thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
-
-    /*
-      Like InnoDB's update_thd(), we always sync the handler's transaction
-      with the THD-level transaction at the start of external_lock().
-      This ensures that even if a new handler instance is created for a
-      statement within a multi-statement transaction, it will have access
-      to the correct transaction context.
-    */
-    tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
-    if (thd_txn && in_transaction)
-    {
-        current_txn = thd_txn;
-    }
+    /* Cache current time for this statement to avoid per-row time() syscalls */
+    cached_now = time(NULL);
 
     if (lock_type != F_UNLCK)
     {
-        if (in_transaction)
+        /*
+          F_WRLCK / F_RDLCK -- ensure a THD-level transaction exists.
+          TidesDB fully owns MVCC, concurrency and transaction lifecycle.
+          All we do here is:
+            1. Create the THD-level TidesDB txn if it doesn't exist yet
+            2. Point current_txn at it
+            3. Register with MariaDB's transaction coordinator so that
+               tidesdb_commit / tidesdb_rollback get called at the right time
+
+          We never commit or free transactions here.
+        */
+        tidesdb_txn_t *thd_txn = get_thd_txn(thd, tidesdb_hton);
+
+        if (!thd_txn)
         {
-            /* Multi-statement transaction -- we use THD-level transaction for savepoint support */
+            int isolation = map_isolation_level((enum_tx_isolation)thd->variables.tx_isolation);
 
-            if (!thd_txn)
+            int ret = tidesdb_txn_begin_with_isolation(
+                tidesdb_instance, (tidesdb_isolation_level_t)isolation, &thd_txn);
+            if (ret != TDB_SUCCESS)
             {
-                int isolation = map_isolation_level((enum_tx_isolation)thd->variables.tx_isolation);
-
-                ret = tidesdb_txn_begin_with_isolation(
-                    tidesdb_instance, (tidesdb_isolation_level_t)isolation, &thd_txn);
-                if (ret != TDB_SUCCESS)
-                {
-                    sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
-                    DBUG_RETURN(HA_ERR_GENERIC);
-                }
-                set_thd_txn(thd, tidesdb_hton, thd_txn);
-
-                trans_register_ha(thd, TRUE, tidesdb_hton, 0);
+                sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
+                DBUG_RETURN(HA_ERR_GENERIC);
             }
-
-            current_txn = thd_txn;
-            trans_register_ha(thd, FALSE, tidesdb_hton, 0);
+            set_thd_txn(thd, tidesdb_hton, thd_txn);
         }
-        else
-        {
-            /* Auto-commit mode -- we use handler-level transaction */
-            if (!current_txn)
-            {
-                bool is_read_only = (lock_type == F_RDLCK);
-                txn_read_only = is_read_only;
 
-                tidesdb_isolation_level_t iso_level =
-                    is_read_only ? TDB_ISOLATION_READ_UNCOMMITTED
-                                 : (tidesdb_isolation_level_t)map_isolation_level(
-                                       (enum_tx_isolation)thd->variables.tx_isolation);
+        current_txn = thd_txn;
+        txn_read_only = (lock_type == F_RDLCK);
 
-                ret = tidesdb_txn_begin_with_isolation(tidesdb_instance, iso_level, &current_txn);
-                if (ret != TDB_SUCCESS)
-                {
-                    sql_print_error("TidesDB: Failed to begin transaction: %d", ret);
-                    DBUG_RETURN(HA_ERR_GENERIC);
-                }
-            }
-        }
+        /* Always register at statement level so tidesdb_commit / tidesdb_rollback
+           are called for every statement. */
+        trans_register_ha(thd, FALSE, tidesdb_hton, 0);
+
+        /* Only register at global level when inside an explicit or implicit
+           multi-statement transaction.  For autocommit=1 single statements,
+           the statement-level registration is sufficient, and registering
+           globally would block subsequent DDL (e.g. RENAME TABLE). */
+        if (thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
+            trans_register_ha(thd, TRUE, tidesdb_hton, 0);
     }
     else
     {
-        if (in_transaction)
-        {
-            /* Multi-statement transaction -- we don't commit yet, wait for COMMIT */
-            /* We just clear the handler's reference to the THD transaction */
-            current_txn = NULL;
-        }
-        else
-        {
-            /* Auto-commit mode */
-            if (current_txn)
-            {
-                if (txn_read_only)
-                {
-                    tidesdb_txn_rollback(current_txn);
-                }
-                else
-                {
-                    ret = tidesdb_txn_commit(current_txn);
-                    if (ret != TDB_SUCCESS)
-                    {
-                        sql_print_error("TidesDB: Failed to commit transaction: %d", ret);
-                        tidesdb_txn_free(current_txn);
-                        current_txn = NULL;
-                        txn_read_only = false;
-                        DBUG_RETURN(HA_ERR_GENERIC);
-                    }
-                }
-                tidesdb_txn_free(current_txn);
-                current_txn = NULL;
-                txn_read_only = false;
-            }
-        }
+        /*
+          F_UNLCK -- statement is done.  Just detach the handler's pointer.
+          The actual commit/rollback happens in tidesdb_commit / tidesdb_rollback
+          called by MariaDB's transaction coordinator.
+        */
+        current_txn = NULL;
     }
 
     DBUG_RETURN(0);
@@ -8174,10 +8740,37 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
 THR_LOCK_DATA **ha_tidesdb::store_lock(THD *thd, THR_LOCK_DATA **to, enum thr_lock_type lock_type)
 {
     /*
-      TidesDB MVCC -- We accept any lock type but don't actually lock.
-      The lock.type is used by MariaDB for query planning, not actual locking.
+      TidesDB uses MVCC -- reads see a consistent snapshot and writes use
+      optimistic concurrency control with conflict detection at commit time.
+      No row-level or table-level locks are needed.
+
+      We must downgrade exclusive write locks to TL_WRITE_ALLOW_WRITE so that
+      MariaDB's THR_LOCK manager allows multiple concurrent writers.  Without
+      this, THR_LOCK serializes all write operations to the same table,
+      destroying multi-threaded write throughput.
+
+      Similarly, downgrade TL_READ_NO_INSERT to TL_READ so that INSERT...SELECT
+      from a table does not block concurrent inserts into that table.
+
+      This matches the approach used by InnoDB and MyRocks.
     */
-    if (lock_type != TL_IGNORE && lock.type == TL_UNLOCK) lock.type = lock_type;
+    if (lock_type != TL_IGNORE && lock.type == TL_UNLOCK)
+    {
+        /* Allow concurrent writers -- don't hold exclusive table-level locks */
+        if (lock_type >= TL_WRITE_CONCURRENT_INSERT && lock_type <= TL_WRITE &&
+            !thd_in_lock_tables(thd) && !thd_tablespace_op(thd))
+        {
+            lock_type = TL_WRITE_ALLOW_WRITE;
+        }
+
+        /* Allow concurrent inserts during INSERT...SELECT */
+        if (lock_type == TL_READ_NO_INSERT && !thd_in_lock_tables(thd))
+        {
+            lock_type = TL_READ;
+        }
+
+        lock.type = lock_type;
+    }
     *to++ = &lock;
     return to;
 }
@@ -8287,9 +8880,10 @@ struct tidesdb_ft_info
     uint ft_idx;
     char **matched_pks;
     size_t *matched_pk_lens;
+    float *relevance_scores; /* Per-document TF-IDF relevance scores */
     uint matched_count;
     uint current_match;
-    float relevance;
+    float relevance; /* Relevance of the last read row */
 };
 
 static int tidesdb_ft_read_next(FT_INFO *fts, char *record);
@@ -8309,7 +8903,12 @@ static int tidesdb_ft_read_next(FT_INFO *fts, char *record)
 
 static float tidesdb_ft_find_relevance(FT_INFO *fts, uchar *record, uint length)
 {
-    return 1.0f;
+    tidesdb_ft_info *info = (tidesdb_ft_info *)fts;
+    if (!info || !info->relevance_scores) return 0.0f;
+    /* We return relevance of the last-read document */
+    uint idx = info->current_match > 0 ? info->current_match - 1 : 0;
+    if (idx < info->matched_count) return info->relevance_scores[idx];
+    return 0.0f;
 }
 
 static void tidesdb_ft_close_search(FT_INFO *fts)
@@ -8326,6 +8925,7 @@ static void tidesdb_ft_close_search(FT_INFO *fts)
             my_free(info->matched_pks);
         }
         if (info->matched_pk_lens) my_free(info->matched_pk_lens);
+        if (info->relevance_scores) my_free(info->relevance_scores);
         my_free(info);
     }
 }
@@ -8333,7 +8933,12 @@ static void tidesdb_ft_close_search(FT_INFO *fts)
 static float tidesdb_ft_get_relevance(FT_INFO *fts)
 {
     tidesdb_ft_info *info = (tidesdb_ft_info *)fts;
-    return info ? info->relevance : 0.0f;
+    if (!info) return 0.0f;
+    /* We return relevance of the current document */
+    if (info->relevance_scores && info->current_match > 0 &&
+        info->current_match <= info->matched_count)
+        return info->relevance_scores[info->current_match - 1];
+    return info->relevance;
 }
 
 static void tidesdb_ft_reinit_search(FT_INFO *fts)
@@ -8757,7 +9362,7 @@ FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
     info->matched_pk_lens = NULL;
     info->matched_count = 0;
     info->current_match = 0;
-    info->relevance = 1.0f;
+    info->relevance = TIDESDB_FT_DEFAULT_RELEVANCE;
 
     /* We tokenize the search query into words */
     const char *query = key->ptr();
@@ -8892,10 +9497,97 @@ FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
     info->matched_pk_lens = result_lens;
     info->matched_count = result_count;
 
-    /* We calculate relevance based on match count */
+    /*
+      Compute per-document TF-IDF relevance scores.
+
+      For each document we accumulate:
+        score += TF(word, doc) * IDF(word)
+      where:
+        TF  = 1 (binary: word present in document)
+        IDF = log(1 + total_documents / documents_containing_word)
+
+      We approximate total_documents from cached stats.
+    */
+    info->relevance_scores = NULL;
     if (result_count > 0)
     {
-        info->relevance = (float)word_count; /* More matching words = higher relevance! */
+        info->relevance_scores = (float *)my_malloc(PSI_INSTRUMENT_ME, result_count * sizeof(float),
+                                                    MYF(MY_WME | MY_ZEROFILL));
+
+        /* We get approximate total document count for IDF denominator */
+        ha_rows total_docs = TIDESDB_FT_FALLBACK_TOTAL_DOCS;
+        tidesdb_stats_t *tdb_stats = get_realtime_stats(share);
+        if (tdb_stats && tdb_stats->total_keys > 0)
+        {
+            total_docs = tdb_stats->total_keys;
+            tidesdb_free_stats(tdb_stats);
+        }
+        else if (tdb_stats)
+        {
+            tidesdb_free_stats(tdb_stats);
+        }
+
+        if (info->relevance_scores)
+        {
+            /* For each query word, find which result docs contain it and add IDF */
+            for (uint w = 0; w < word_count; w++)
+            {
+                char **word_pks = NULL;
+                size_t *word_pk_lens = NULL;
+                uint word_pk_count = 0;
+
+                if (ft_search_word(current_txn, ft_cf, words[w], word_lens[w], &word_pks,
+                                   &word_pk_lens, &word_pk_count, max_matches) == 0 &&
+                    word_pk_count > 0)
+                {
+                    /* IDF = log(1 + N / df) where df = documents containing this word */
+                    float idf = logf(1.0f + (float)total_docs / (float)word_pk_count);
+
+                    /* For each result document, check if this word matches */
+                    for (uint d = 0; d < result_count; d++)
+                    {
+                        for (uint wp = 0; wp < word_pk_count; wp++)
+                        {
+                            if (result_lens[d] == word_pk_lens[wp] &&
+                                memcmp(result_pks[d], word_pks[wp], result_lens[d]) == 0)
+                            {
+                                info->relevance_scores[d] += idf;
+                                break;
+                            }
+                        }
+                    }
+
+                    ft_free_results(word_pks, word_pk_lens, word_pk_count);
+                }
+            }
+
+            /* We sort results by relevance descending (simple selection sort for stability) */
+            for (uint i = 0; i < result_count; i++)
+            {
+                uint best = i;
+                for (uint j = i + 1; j < result_count; j++)
+                {
+                    if (info->relevance_scores[j] > info->relevance_scores[best]) best = j;
+                }
+                if (best != i)
+                {
+                    /* Swap PKs, lens, and scores */
+                    char *tmp_pk = info->matched_pks[i];
+                    info->matched_pks[i] = info->matched_pks[best];
+                    info->matched_pks[best] = tmp_pk;
+
+                    size_t tmp_len = info->matched_pk_lens[i];
+                    info->matched_pk_lens[i] = info->matched_pk_lens[best];
+                    info->matched_pk_lens[best] = tmp_len;
+
+                    float tmp_score = info->relevance_scores[i];
+                    info->relevance_scores[i] = info->relevance_scores[best];
+                    info->relevance_scores[best] = tmp_score;
+                }
+            }
+        }
+
+        info->relevance = info->relevance_scores ? info->relevance_scores[0] : (float)word_count;
     }
 
     my_free(words);
@@ -9088,7 +9780,7 @@ int ha_tidesdb::end_bulk_insert()
 
         if (bulk_txn == thd_txn)
         {
-            /* THD transaction -- we don    t commit, just clear our reference */
+            /* THD transaction -- we don't commit, just clear our reference */
             bulk_txn = NULL;
         }
         else
@@ -9227,8 +9919,8 @@ ha_rows ha_tidesdb::estimate_rows_upper_bound()
 
     if (share && share->cf)
     {
-        tidesdb_stats_t *tdb_stats = NULL;
-        if (tidesdb_get_stats(share->cf, &tdb_stats) == TDB_SUCCESS && tdb_stats)
+        tidesdb_stats_t *tdb_stats = get_realtime_stats(share);
+        if (tdb_stats)
         {
             ha_rows upper = tdb_stats->total_keys;
             tidesdb_free_stats(tdb_stats);
@@ -9399,7 +10091,7 @@ int ha_tidesdb::preload_keys(THD *thd, HA_CHECK_OPT *check_opt)
 
     tidesdb_iter_free(iter);
 
-    /* Also preload secondary indexes */
+    /* We also preload secondary indexes */
     for (uint i = 0; i < table->s->keys; i++)
     {
         if (share->index_cf[i])
@@ -9595,20 +10287,7 @@ int ha_tidesdb::discard_or_import_tablespace(my_bool discard)
 
         sql_print_information("TidesDB: Importing tablespace for %s", cf_name);
 
-        tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-        cf_config.write_buffer_size = tidesdb_write_buffer_size;
-        cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-        cf_config.bloom_fpr = tidesdb_bloom_fpr;
-        cf_config.level_size_ratio = tidesdb_level_size_ratio;
-        cf_config.skip_list_max_level = tidesdb_skip_list_max_level;
-        cf_config.enable_block_indexes = tidesdb_enable_block_indexes ? 1 : 0;
-        cf_config.sync_mode = tidesdb_sync_mode;
-        cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-        if (tidesdb_enable_compression)
-            cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-        else
-            cf_config.compression_algorithm = TDB_COMPRESS_NONE;
+        tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
         int ret = tidesdb_create_column_family(tidesdb_instance, cf_name, &cf_config);
         if (ret != TDB_SUCCESS && ret != TDB_ERR_EXISTS)
@@ -9856,7 +10535,7 @@ int ha_tidesdb::get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_
     if (!share) DBUG_RETURN(0);
 
     /*
-      We Populate the list with FK constraints where this table is the parent
+      We populate the list with FK constraints where this table is the parent
       (i.e., other tables have FOREIGN KEY columns referencing this table).
       This information is stored in share->referencing_tables[].
     */
@@ -9882,7 +10561,7 @@ int ha_tidesdb::get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_
         }
         else
         {
-            /* No dot found, assume current database */
+            /* No dot found, we assume current database */
             fk_info->foreign_db =
                 thd_make_lex_string(thd, NULL, table_share->db.str, table_share->db.length, 1);
             fk_info->foreign_table =
@@ -10252,7 +10931,7 @@ bool ha_tidesdb::commit_inplace_alter_table(TABLE *altered_table, Alter_inplace_
         DBUG_RETURN(false);
     }
 
-    /* Commit -- indexes are already created, we update share and log success */
+    /* We commit -- indexes are already created, we update share and log success */
     alter_table_operations flags = ha_alter_info->handler_flags;
 
     if (flags & (ALTER_ADD_INDEX | ALTER_ADD_UNIQUE_INDEX | ALTER_ADD_NON_UNIQUE_NON_PRIM_INDEX))
@@ -10330,21 +11009,7 @@ int ha_tidesdb::add_index_inplace(TABLE *altered_table, Alter_inplace_info *ha_a
     char cf_name[TIDESDB_CF_NAME_BUF_SIZE];
     get_cf_name(share->table_name, cf_name, sizeof(cf_name));
 
-    tidesdb_column_family_config_t cf_config = tidesdb_default_column_family_config();
-    cf_config.write_buffer_size = tidesdb_write_buffer_size;
-    cf_config.enable_bloom_filter = tidesdb_enable_bloom_filter ? 1 : 0;
-    cf_config.bloom_fpr = tidesdb_bloom_fpr;
-    cf_config.sync_mode = tidesdb_sync_mode;
-    cf_config.use_btree = tidesdb_use_btree ? 1 : 0;
-
-    if (tidesdb_enable_compression)
-    {
-        cf_config.compression_algorithm = (compression_algorithm)tidesdb_compression_algo;
-    }
-    else
-    {
-        cf_config.compression_algorithm = TDB_COMPRESS_NONE;
-    }
+    tidesdb_column_family_config_t cf_config = build_cf_config_from_sysvars();
 
     for (uint i = 0; i < ha_alter_info->index_add_count; i++)
     {
@@ -10410,7 +11075,7 @@ int ha_tidesdb::drop_index_inplace(Alter_inplace_info *ha_alter_info)
         if (ret != TDB_SUCCESS && ret != TDB_ERR_NOT_FOUND)
         {
             sql_print_warning("TidesDB: Failed to drop index CF '%s': %d", idx_cf_name, ret);
-            /* Continue anyway -- index might not exist */
+            /* We continue anyway -- index might not exist */
         }
 
         sql_print_information("TidesDB: Dropped index '%s'", key->name.str);
@@ -10522,7 +11187,7 @@ int ha_tidesdb::rebuild_secondary_index(KEY *key_info, const char *key_name, TAB
             continue;
         }
 
-        if (pk_len > 0 && pk_data[0] == '_')
+        if (pk_len > 0 && pk_data[0] == 0)
         {
             tidesdb_iter_next(iter);
             continue;
@@ -10810,21 +11475,21 @@ static MYSQL_SYSVAR_STR(data_dir, tidesdb_data_dir, PLUGIN_VAR_RQCMDARG | PLUGIN
 
 static MYSQL_SYSVAR_ULONG(flush_threads, tidesdb_flush_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY, "Number of flush threads",
-                          NULL, NULL, 2, 1, 16, 0);
+                          NULL, NULL, TIDESDB_DEFAULT_FLUSH_THREADS, 1, 16, 0);
 
 static MYSQL_SYSVAR_ULONG(compaction_threads, tidesdb_compaction_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY, "Number of compaction threads",
-                          NULL, NULL, 2, 1, 16, 0);
+                          NULL, NULL, TIDESDB_DEFAULT_COMPACTION_THREADS, 1, 16, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(
     block_cache_size, tidesdb_block_cache_size, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
     "Block cache size in bytes (default 256MB, matches InnoDB buffer pool)", NULL, NULL,
-    256 * 1024 * 1024, 0, ULLONG_MAX, 0);
+    TIDESDB_DEFAULT_BLOCK_CACHE_SIZE, 0, ULLONG_MAX, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(write_buffer_size, tidesdb_write_buffer_size,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                              "Write buffer (memtable) size in bytes", NULL, NULL, 64 * 1024 * 1024,
-                              1024 * 1024, ULLONG_MAX, 0);
+                              "Write buffer (memtable) size in bytes", NULL, NULL,
+                              TIDESDB_DEFAULT_WRITE_BUFFER_SIZE, 1024 * 1024, ULLONG_MAX, 0);
 
 static MYSQL_SYSVAR_BOOL(enable_compression, tidesdb_enable_compression, PLUGIN_VAR_RQCMDARG,
                          "Enable LZ4 compression", NULL, NULL, TRUE);
@@ -10842,23 +11507,24 @@ static MYSQL_SYSVAR_ENUM(sync_mode, tidesdb_sync_mode, PLUGIN_VAR_RQCMDARG,
 
 static MYSQL_SYSVAR_ULONGLONG(sync_interval_us, tidesdb_sync_interval_us, PLUGIN_VAR_RQCMDARG,
                               "Sync interval in microseconds (for interval sync mode)", NULL, NULL,
-                              128000, 1000, 10000000, 0);
+                              TIDESDB_DEFAULT_SYNC_INTERVAL_US, 1000, 10000000, 0);
 
 static MYSQL_SYSVAR_DOUBLE(bloom_fpr, tidesdb_bloom_fpr, PLUGIN_VAR_RQCMDARG,
-                           "Bloom filter false positive rate (0.0 to 1.0)", NULL, NULL, 0.01,
-                           0.0001, 0.5, 0);
+                           "Bloom filter false positive rate (0.0 to 1.0)", NULL, NULL,
+                           TIDESDB_DEFAULT_BLOOM_FPR, 0.0001, 0.5, 0);
 
 static MYSQL_SYSVAR_ENUM(default_isolation, tidesdb_default_isolation, PLUGIN_VAR_RQCMDARG,
-                         "Default transaction isolation level", NULL, NULL, 1,
-                         &tidesdb_isolation_typelib);
+                         "Default transaction isolation level", NULL, NULL,
+                         TIDESDB_DEFAULT_ISOLATION, &tidesdb_isolation_typelib);
 
 static MYSQL_SYSVAR_ULONG(level_size_ratio, tidesdb_level_size_ratio,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "LSM level size ratio (multiplier between levels)", NULL, NULL, 10, 2,
-                          100, 0);
+                          "LSM level size ratio (multiplier between levels)", NULL, NULL,
+                          TIDESDB_DEFAULT_LEVEL_SIZE_RATIO, 2, 100, 0);
 
 static MYSQL_SYSVAR_ULONG(skip_list_max_level, tidesdb_skip_list_max_level, PLUGIN_VAR_RQCMDARG,
-                          "Skip list maximum level for memtables", NULL, NULL, 12, 4, 32, 0);
+                          "Skip list maximum level for memtables", NULL, NULL,
+                          TIDESDB_DEFAULT_SKIP_LIST_MAX_LEVEL, 4, 32, 0);
 
 static MYSQL_SYSVAR_BOOL(enable_block_indexes, tidesdb_enable_block_indexes,
                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -10866,62 +11532,69 @@ static MYSQL_SYSVAR_BOOL(enable_block_indexes, tidesdb_enable_block_indexes,
 
 static MYSQL_SYSVAR_ULONG(index_sample_ratio, tidesdb_index_sample_ratio, PLUGIN_VAR_RQCMDARG,
                           "Block index sampling ratio (1 = every block, 8 = every 8th block)", NULL,
-                          NULL, 1, 1, 64, 0);
+                          NULL, TIDESDB_DEFAULT_INDEX_SAMPLE_RATIO, 1, 64, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(default_ttl, tidesdb_default_ttl, PLUGIN_VAR_RQCMDARG,
                               "Default TTL in seconds for new rows (0 = no expiration)", NULL, NULL,
                               0, 0, ULLONG_MAX, 0);
 
 static MYSQL_SYSVAR_ENUM(log_level, tidesdb_log_level, PLUGIN_VAR_RQCMDARG,
-                         "TidesDB log level: debug, info, warn, error, fatal, none", NULL, NULL, 1,
-                         &tidesdb_log_level_typelib);
+                         "TidesDB log level: debug, info, warn, error, fatal, none", NULL, NULL,
+                         TIDESDB_DEFAULT_LOG_LEVEL, &tidesdb_log_level_typelib);
 
 static MYSQL_SYSVAR_ULONG(ft_min_word_len, tidesdb_ft_min_word_len, PLUGIN_VAR_RQCMDARG,
-                          "Minimum word length for fulltext indexing", NULL, NULL, 4, 1, 84, 0);
+                          "Minimum word length for fulltext indexing", NULL, NULL,
+                          TIDESDB_DEFAULT_FT_MIN_WORD_LEN, 1, 84, 0);
 
 static MYSQL_SYSVAR_ULONG(ft_max_word_len, tidesdb_ft_max_word_len, PLUGIN_VAR_RQCMDARG,
-                          "Maximum word length for fulltext indexing", NULL, NULL, 84, 1, 255, 0);
+                          "Maximum word length for fulltext indexing", NULL, NULL,
+                          TIDESDB_DEFAULT_FT_MAX_WORD_LEN, 1, 255, 0);
 
 static MYSQL_SYSVAR_ULONG(ft_max_query_words, tidesdb_ft_max_query_words, PLUGIN_VAR_RQCMDARG,
-                          "Maximum number of words in fulltext search query", NULL, NULL, 32, 1,
-                          256, 0);
+                          "Maximum number of words in fulltext search query", NULL, NULL,
+                          TIDESDB_DEFAULT_FT_MAX_QUERY_WORDS, 1, TIDESDB_FT_MAX_QUERY_WORDS_CAP, 0);
 
 static MYSQL_SYSVAR_ULONG(min_levels, tidesdb_min_levels, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Minimum number of LSM levels", NULL, NULL, 5, 1, 20, 0);
+                          "Minimum number of LSM levels", NULL, NULL, TIDESDB_DEFAULT_MIN_LEVELS, 1,
+                          20, 0);
 
 static MYSQL_SYSVAR_ULONG(dividing_level_offset, tidesdb_dividing_level_offset,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Compaction dividing level offset", NULL, NULL, 2, 0, 10, 0);
+                          "Compaction dividing level offset", NULL, NULL,
+                          TIDESDB_DEFAULT_DIVIDING_LEVEL_OFFSET, 0, 10, 0);
 
 static MYSQL_SYSVAR_DOUBLE(skip_list_probability, tidesdb_skip_list_probability,
                            PLUGIN_VAR_RQCMDARG, "Skip list probability for memtable", NULL, NULL,
-                           0.25, 0.01, 0.5, 0);
+                           TIDESDB_DEFAULT_SKIP_LIST_PROBABILITY, 0.01, 0.5, 0);
 
 static MYSQL_SYSVAR_ULONG(block_index_prefix_len, tidesdb_block_index_prefix_len,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Block index prefix length in bytes", NULL, NULL, 16, 1, 256, 0);
+                          "Block index prefix length in bytes", NULL, NULL,
+                          TIDESDB_DEFAULT_BLOCK_INDEX_PREFIX_LEN, 1, 256, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(klog_value_threshold, tidesdb_klog_value_threshold,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                              "Values larger than this go to vlog (bytes)", NULL, NULL, 512, 0,
-                              1048576, 0);
+                              "Values larger than this go to vlog (bytes)", NULL, NULL,
+                              TIDESDB_DEFAULT_KLOG_VALUE_THRESHOLD, 0, 1048576, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(min_disk_space, tidesdb_min_disk_space, PLUGIN_VAR_RQCMDARG,
-                              "Minimum disk space required (bytes)", NULL, NULL, 104857600, 0,
-                              ULLONG_MAX, 0);
+                              "Minimum disk space required (bytes)", NULL, NULL,
+                              TIDESDB_DEFAULT_MIN_DISK_SPACE, 0, ULLONG_MAX, 0);
 
 static MYSQL_SYSVAR_ULONG(l1_file_count_trigger, tidesdb_l1_file_count_trigger,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "L1 file count trigger for compaction", NULL, NULL, 4, 1, 100, 0);
+                          "L1 file count trigger for compaction", NULL, NULL,
+                          TIDESDB_DEFAULT_L1_FILE_COUNT_TRIGGER, 1, 100, 0);
 
 static MYSQL_SYSVAR_ULONG(l0_queue_stall_threshold, tidesdb_l0_queue_stall_threshold,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "L0 queue stall threshold for backpressure", NULL, NULL, 20, 1, 1000, 0);
+                          "L0 queue stall threshold for backpressure", NULL, NULL,
+                          TIDESDB_DEFAULT_L0_QUEUE_STALL_THRESHOLD, 1, 1000, 0);
 
 static MYSQL_SYSVAR_ULONG(max_open_sstables, tidesdb_max_open_sstables,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Maximum cached SSTable structures (each uses 2 FDs)", NULL, NULL, 256,
-                          16, 4096, 0);
+                          "Maximum cached SSTable structures (each uses 2 FDs)", NULL, NULL,
+                          TIDESDB_DEFAULT_MAX_OPEN_SSTABLES, 16, 4096, 0);
 
 static MYSQL_SYSVAR_BOOL(log_to_file, tidesdb_log_to_file,
                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -10930,13 +11603,13 @@ static MYSQL_SYSVAR_BOOL(log_to_file, tidesdb_log_to_file,
 static MYSQL_SYSVAR_ULONGLONG(log_truncation_at, tidesdb_log_truncation_at,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                               "Size in bytes at which to truncate the log file (0 = no truncation)",
-                              NULL, NULL, 25165824, 0, ULLONG_MAX, 0);
+                              NULL, NULL, TIDESDB_DEFAULT_LOG_TRUNCATION_AT, 0, ULLONG_MAX, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(
     active_txn_buffer_size, tidesdb_active_txn_buffer_size,
     PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-    "Size of active transaction buffer for SSI conflict detection (bytes)", NULL, NULL, 65536, 1024,
-    1048576, 0);
+    "Size of active transaction buffer for SSI conflict detection (bytes)", NULL, NULL,
+    TIDESDB_DEFAULT_ACTIVE_TXN_BUFFER_SIZE, 1024, 1048576, 0);
 
 static MYSQL_SYSVAR_BOOL(enable_encryption, tidesdb_enable_encryption,
                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -10945,21 +11618,12 @@ static MYSQL_SYSVAR_BOOL(enable_encryption, tidesdb_enable_encryption,
 
 static MYSQL_SYSVAR_ULONG(encryption_key_id, tidesdb_encryption_key_id,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Encryption key ID to use (from key management plugin)", NULL, NULL, 1, 1,
-                          UINT_MAX, 0);
-
-static MYSQL_SYSVAR_BOOL(enable_change_buffer, tidesdb_enable_change_buffer, PLUGIN_VAR_RQCMDARG,
-                         "Enable change buffer for secondary index updates (reduces random I/O)",
-                         NULL, NULL, TRUE);
-
-static MYSQL_SYSVAR_ULONG(change_buffer_max_size, tidesdb_change_buffer_max_size,
-                          PLUGIN_VAR_RQCMDARG,
-                          "Maximum pending entries in change buffer before flush", NULL, NULL, 1024,
-                          1, 1000000, 0);
+                          "Encryption key ID to use (from key management plugin)", NULL, NULL,
+                          TIDESDB_DEFAULT_ENCRYPTION_KEY_ID, 1, UINT_MAX, 0);
 
 static MYSQL_SYSVAR_BOOL(use_btree, tidesdb_use_btree, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                          "Use B+tree format for column families (faster point lookups)", NULL, NULL,
-                         TRUE);
+                         FALSE);
 
 static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(data_dir),
@@ -10997,8 +11661,6 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(active_txn_buffer_size),
     MYSQL_SYSVAR(enable_encryption),
     MYSQL_SYSVAR(encryption_key_id),
-    MYSQL_SYSVAR(enable_change_buffer),
-    MYSQL_SYSVAR(change_buffer_max_size),
     MYSQL_SYSVAR(use_btree),
     NULL};
 
@@ -11010,8 +11672,8 @@ maria_declare_plugin(tidesdb){MYSQL_STORAGE_ENGINE_PLUGIN,
                               PLUGIN_LICENSE_GPL,
                               tidesdb_init_func,
                               tidesdb_done_func,
-                              0x0130,
+                              0x0140,
                               NULL,
                               tidesdb_system_variables,
-                              "1.3.0",
+                              "1.4.0",
                               MariaDB_PLUGIN_MATURITY_STABLE} maria_declare_plugin_end;

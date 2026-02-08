@@ -74,6 +74,8 @@ INSERT INTO t3 VALUES (4, NULL);
 INSERT INTO t3 VALUES (5, 'value1');
 SELECT * FROM t3 WHERE nullable_col IS NULL ORDER BY id;
 id	nullable_col
+2	NULL
+4	NULL
 SELECT * FROM t3 WHERE nullable_col = 'value1' ORDER BY id;
 id	nullable_col
 1	value1
@@ -118,7 +120,7 @@ id	int_col	bigint_col	date_col
 # Test 10: EXPLAIN shows index usage
 EXPLAIN SELECT * FROM t1 WHERE name = 'Charlie';
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	SIMPLE	t1	ref	idx_name	idx_name	255	const	1	Using where with pushed condition
+1	SIMPLE	t1	ref	idx_name	idx_name	255	const	1	Using where
 EXPLAIN SELECT * FROM t2 WHERE first_name = 'John' AND last_name = 'Doe';
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
 1	SIMPLE	t2	ref	idx_name	idx_name	406	const,const	1	

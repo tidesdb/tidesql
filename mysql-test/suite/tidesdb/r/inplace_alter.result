@@ -19,29 +19,29 @@ Warnings:
 Note	1071	Specified key was too long; max key length is 255 bytes
 SHOW INDEX FROM t1;
 Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
-t1	0	PRIMARY	1	id	A	NULL	NULL	NULL		LSMB+			NO
-t1	1	idx_name	1	name	A	NULL	63	NULL	YES	LSMB+			NO
+t1	0	PRIMARY	1	id	A	3	NULL	NULL		LSMB+			NO
+t1	1	idx_name	1	name	A	1	63	NULL	YES	LSMB+			NO
 SELECT * FROM t1 WHERE name = 'Bob';
 id	name	value
 # Test 3: ADD UNIQUE INDEX with ALGORITHM=INPLACE
 ALTER TABLE t1 ADD UNIQUE INDEX idx_value (value), ALGORITHM=INPLACE;
 SHOW INDEX FROM t1;
 Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
-t1	0	PRIMARY	1	id	A	NULL	NULL	NULL		LSMB+			NO
-t1	0	idx_value	1	value	A	NULL	NULL	NULL	YES	LSMB+			NO
-t1	1	idx_name	1	name	A	NULL	63	NULL	YES	LSMB+			NO
+t1	0	PRIMARY	1	id	A	3	NULL	NULL		LSMB+			NO
+t1	0	idx_value	1	value	A	3	NULL	NULL	YES	LSMB+			NO
+t1	1	idx_name	1	name	A	1	63	NULL	YES	LSMB+			NO
 # Test 4: DROP INDEX with ALGORITHM=INPLACE
 ALTER TABLE t1 DROP INDEX idx_name, ALGORITHM=INPLACE;
 SHOW INDEX FROM t1;
 Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
-t1	0	PRIMARY	1	id	A	NULL	NULL	NULL		LSMB+			NO
-t1	0	idx_value	1	value	A	NULL	NULL	NULL	YES	LSMB+			NO
+t1	0	PRIMARY	1	id	A	3	NULL	NULL		LSMB+			NO
+t1	0	idx_value	1	value	A	3	NULL	NULL	YES	LSMB+			NO
 # Test 5: RENAME INDEX with ALGORITHM=INSTANT
 ALTER TABLE t1 RENAME INDEX idx_value TO idx_val, ALGORITHM=INSTANT;
 SHOW INDEX FROM t1;
 Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
-t1	0	PRIMARY	1	id	A	NULL	NULL	NULL		LSMB+			NO
-t1	0	idx_val	1	value	A	NULL	NULL	NULL	YES	LSMB+			NO
+t1	0	PRIMARY	1	id	A	3	NULL	NULL		LSMB+			NO
+t1	0	idx_val	1	value	A	3	NULL	NULL	YES	LSMB+			NO
 # Test 6: Change column default with ALGORITHM=INSTANT
 ALTER TABLE t1 ALTER COLUMN value SET DEFAULT 0, ALGORITHM=INSTANT;
 SHOW CREATE TABLE t1;
@@ -80,10 +80,10 @@ ADD INDEX idx_c (c),
 ALGORITHM=INPLACE;
 SHOW INDEX FROM t1;
 Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
-t1	0	PRIMARY	1	id	A	NULL	NULL	NULL		LSMB+			NO
-t1	1	idx_a	1	a	A	NULL	NULL	NULL	YES	LSMB+			NO
-t1	1	idx_b	1	b	A	NULL	NULL	NULL	YES	LSMB+			NO
-t1	1	idx_c	1	c	A	NULL	NULL	NULL	YES	LSMB+			NO
+t1	0	PRIMARY	1	id	A	3	NULL	NULL		LSMB+			NO
+t1	1	idx_a	1	a	A	1	NULL	NULL	YES	LSMB+			NO
+t1	1	idx_b	1	b	A	1	NULL	NULL	YES	LSMB+			NO
+t1	1	idx_c	1	c	A	1	NULL	NULL	YES	LSMB+			NO
 # Test 9: Verify indexes work after INPLACE ADD
 SELECT * FROM t1 WHERE a = 40;
 id	a	b	c
@@ -98,8 +98,8 @@ DROP INDEX idx_b,
 ALGORITHM=INPLACE;
 SHOW INDEX FROM t1;
 Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
-t1	0	PRIMARY	1	id	A	NULL	NULL	NULL		LSMB+			NO
-t1	1	idx_c	1	c	A	NULL	NULL	NULL	YES	LSMB+			NO
+t1	0	PRIMARY	1	id	A	3	NULL	NULL		LSMB+			NO
+t1	1	idx_c	1	c	A	1	NULL	NULL	YES	LSMB+			NO
 # Cleanup
 DROP TABLE t1;
 #

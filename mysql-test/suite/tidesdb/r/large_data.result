@@ -64,7 +64,7 @@ MIN(id)	MAX(id)	MIN(value)	MAX(value)
 # Test 6: Range queries on larger dataset
 SELECT COUNT(*) FROM t1 WHERE id BETWEEN 25 AND 75;
 COUNT(*)
-1
+51
 SELECT COUNT(*) FROM t1 WHERE value >= 500;
 COUNT(*)
 51
@@ -72,7 +72,7 @@ COUNT(*)
 DELETE FROM t1 WHERE id BETWEEN 40 AND 60;
 SELECT COUNT(*) FROM t1;
 COUNT(*)
-100
+79
 # Cleanup
 DROP TABLE t1;
 #

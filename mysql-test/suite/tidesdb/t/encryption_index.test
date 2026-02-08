@@ -1,0 +1,80 @@
+--echo #
+--echo # TidesDB encryption + secondary index combined test
+--echo # Verifies that encrypted data is correctly handled through all index paths
+--echo #
+
+# Check if TidesDB is available
+--disable_query_log
+--error 0,1286
+CREATE TABLE tidesdb_check (id INT) ENGINE=TidesDB;
+--enable_query_log
+if (`SELECT COUNT(*) = 0 FROM information_schema.tables WHERE table_name = 'tidesdb_check'`)
+{
+  --skip TidesDB storage engine not available
+}
+DROP TABLE IF EXISTS tidesdb_check;
+
+--echo # Encryption enabled via .opt file
+
+--echo # Test 1: Basic secondary index with encryption
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  name VARCHAR(100),
+  val INT,
+  KEY idx_name (name),
+  KEY idx_val (val)
+) ENGINE=TidesDB;
+
+INSERT INTO t1 VALUES (1, 'alice', 100), (2, 'bob', 200), (3, 'charlie', 300),
+                       (4, 'alice', 400), (5, 'bob', 500);
+
+--echo # Secondary index scan should decrypt correctly
+SELECT * FROM t1 WHERE name = 'alice' ORDER BY id;
+SELECT * FROM t1 WHERE name = 'bob' ORDER BY id;
+SELECT * FROM t1 WHERE val BETWEEN 200 AND 400 ORDER BY id;
+
+--echo # Test 2: Index scan with covering index (keyread)
+SELECT name FROM t1 WHERE name = 'alice';
+SELECT val FROM t1 WHERE val > 300 ORDER BY val;
+
+--echo # Test 3: Update through secondary index path
+UPDATE t1 SET val = 999 WHERE name = 'charlie';
+SELECT * FROM t1 WHERE id = 3;
+
+--echo # Test 4: Delete through secondary index
+DELETE FROM t1 WHERE name = 'bob';
+SELECT * FROM t1 ORDER BY id;
+
+--echo # Test 5: UNIQUE secondary index with encryption
+CREATE TABLE t2 (
+  id INT PRIMARY KEY,
+  email VARCHAR(200),
+  UNIQUE KEY idx_email (email)
+) ENGINE=TidesDB;
+
+INSERT INTO t2 VALUES (1, 'a@test.com'), (2, 'b@test.com'), (3, 'c@test.com');
+
+--echo # Unique index lookup with encryption
+SELECT * FROM t2 WHERE email = 'b@test.com';
+
+--echo # Duplicate should fail
+--error ER_DUP_ENTRY
+INSERT INTO t2 VALUES (4, 'a@test.com');
+
+--echo # Test 6: Composite secondary index with encryption
+CREATE TABLE t3 (
+  id INT PRIMARY KEY,
+  a INT,
+  b VARCHAR(50),
+  KEY idx_ab (a, b)
+) ENGINE=TidesDB;
+
+INSERT INTO t3 VALUES (1, 10, 'x'), (2, 10, 'y'), (3, 20, 'x'), (4, 20, 'y');
+
+SELECT * FROM t3 WHERE a = 10 ORDER BY b;
+SELECT * FROM t3 WHERE a = 20 AND b = 'y';
+
+--echo # Cleanup
+DROP TABLE t3;
+DROP TABLE t2;
+DROP TABLE t1;

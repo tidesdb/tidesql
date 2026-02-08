@@ -31,6 +31,8 @@
 #pragma interface /* gcc class implementation */
 #endif
 
+#include <string>
+
 #include "handler.h"
 #ifdef __cplusplus
 extern "C"
@@ -116,6 +118,11 @@ extern "C"
 #define TIDESDB_FT_MAX_QUERY_WORDS_CAP   256
 #define TIDESDB_ASCII_CASE_OFFSET        32
 #define TIDESDB_ROW_ESTIMATE_MARGIN      100
+#define TIDESDB_FT_DEFAULT_RELEVANCE     1.0f
+#define TIDESDB_FT_FALLBACK_TOTAL_DOCS   100
+#define TIDESDB_RANGE_SAMPLE_LIMIT       200
+#define TIDESDB_KEY_BUF_PADDING          16
+#define TIDESDB_DEFAULT_SELECTIVITY      1.0
 
 /* Spatial/geometry constants */
 #define TIDESDB_ZORDER_BITS             32
@@ -189,8 +196,7 @@ extern "C"
 #define TIDESDB_DEFAULT_SYNC_INTERVAL_US         128000
 #define TIDESDB_DEFAULT_BLOOM_FPR                0.01
 #define TIDESDB_DEFAULT_ENCRYPTION_KEY_ID        1
-#define TIDESDB_DEFAULT_CHANGE_BUFFER_SIZE       1024
-#define TIDESDB_DEFAULT_ISOLATION                1
+#define TIDESDB_DEFAULT_ISOLATION                2
 #define TIDESDB_DEFAULT_LEVEL_SIZE_RATIO         10
 #define TIDESDB_DEFAULT_SKIP_LIST_MAX_LEVEL      12
 #define TIDESDB_DEFAULT_INDEX_SAMPLE_RATIO       1
@@ -417,14 +423,11 @@ typedef struct st_tidesdb_share
     size_t referencing_fk_lengths[TIDESDB_MAX_FK]
                                  [TIDESDB_FK_MAX_COLS]; /* Byte length of each FK column */
 
-    /* Change buffer for secondary index updates */
-    struct
-    {
-        bool enabled;
-        uint pending_count;
-        pthread_mutex_t mutex;
-    } change_buffer;
     uint num_referencing;
+
+    /* Cached stats from tidesdb_get_stats() to avoid repeated calls */
+    tidesdb_stats_t *cached_stats;
+    time_t cached_stats_time; /* When stats were last fetched */
 
     /* Tablespace state -- for DISCARD/IMPORT TABLESPACE */
     bool tablespace_discarded;
@@ -449,6 +452,7 @@ class ha_tidesdb : public handler
     /* Current transaction for this handler */
     tidesdb_txn_t *current_txn;
     bool scan_txn_owned;    /* True if we created the scan transaction */
+    bool index_txn_owned;   /* True if we created the index scan transaction */
     bool is_read_only_scan; /* True if current operation is read-only */
 
     /* Iterator for table scans */
@@ -501,6 +505,9 @@ class ha_tidesdb : public handler
 
     /* Track if current transaction is read-only (skip commit overhead) */
     bool txn_read_only;
+
+    /* Cached current time to avoid per-row time() syscalls during bulk ops */
+    time_t cached_now;
 
     /* Semi-consistent read state */
     bool semi_consistent_read_enabled;
@@ -571,7 +578,6 @@ class ha_tidesdb : public handler
                                              tidesdb_txn_t *txn);
 
     /* Spatial index helper methods (Z-order encoding) */
-    uint64_t encode_zorder(double x, double y);
     void decode_zorder(uint64_t z, double *x, double *y);
     int create_spatial_index(const char *table_name, uint key_nr);
     int insert_spatial_entry(uint idx, const uchar *buf, tidesdb_txn_t *txn);
@@ -639,7 +645,6 @@ class ha_tidesdb : public handler
                HA_ONLINE_ANALYZE |               /* No need to evict from cache after ANALYZE */
                HA_CAN_TABLE_CONDITION_PUSHDOWN | /* Supports WHERE pushdown during scans */
                HA_CAN_SKIP_LOCKED | /* MVCC: SELECT FOR UPDATE SKIP LOCKED (no blocking) */
-               HA_HAS_RECORDS |     /* records() returns exact count */
                HA_CAN_FULLTEXT_EXT; /* Extended fulltext API (relevance, boolean mode) */
     }
 
@@ -761,6 +766,7 @@ class ha_tidesdb : public handler
     int index_end();
     int index_read_map(uchar *buf, const uchar *key, key_part_map keypart_map,
                        enum ha_rkey_function find_flag);
+    int index_read_last_map(uchar *buf, const uchar *key, key_part_map keypart_map);
     int index_next(uchar *buf);
     int index_next_same(uchar *buf, const uchar *key, uint keylen);
     int index_prev(uchar *buf);

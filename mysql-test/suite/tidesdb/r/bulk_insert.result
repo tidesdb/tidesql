@@ -20,7 +20,7 @@ INSERT INTO t1 (name, value) VALUES ('row7', 7), ('row8', 8), ('row9', 9);
 INSERT INTO t2 SELECT * FROM t1;
 SELECT COUNT(*) FROM t2;
 COUNT(*)
-8
+9
 # Test 3: Large multi-row INSERT
 CREATE TABLE t3 (
 id INT PRIMARY KEY,
