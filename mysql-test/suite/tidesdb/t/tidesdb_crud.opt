@@ -1,0 +1,3 @@
+--plugin-maturity=unknown
+--plugin-load-add=ha_tidesdb
+--loose-tidesdb-crud-test=1

@@ -1,0 +1,147 @@
+--source include/not_embedded.inc
+
+
+--echo #
+--echo # ============================================
+--echo # TEST 1: Table-level TTL (short expiration)
+--echo # ============================================
+--echo #
+
+CREATE TABLE t_ttl_table (
+  id INT PRIMARY KEY,
+  val VARCHAR(50)
+) ENGINE=TIDESDB TTL=2;
+
+INSERT INTO t_ttl_table VALUES (1, 'alpha'), (2, 'beta'), (3, 'gamma');
+
+--echo # Rows should be visible immediately
+SELECT * FROM t_ttl_table ORDER BY id;
+
+--echo # Wait for TTL to expire (3 seconds > 2 second TTL)
+--sleep 3
+
+--echo # Rows should now be expired (empty result)
+SELECT * FROM t_ttl_table ORDER BY id;
+
+DROP TABLE t_ttl_table;
+
+--echo #
+--echo # ============================================
+--echo # TEST 2: Per-row TTL via TTL_COL field option
+--echo # ============================================
+--echo #
+
+CREATE TABLE t_ttl_col (
+  id INT PRIMARY KEY,
+  val VARCHAR(50),
+  expire_secs INT `TTL`=1
+) ENGINE=TIDESDB;
+
+# Row 1: 2-second TTL, Row 2: very long TTL, Row 3: 0 = no expiration
+INSERT INTO t_ttl_col VALUES (1, 'short', 2), (2, 'long', 86400), (3, 'forever', 0);
+
+--echo # All three rows visible immediately
+SELECT id, val FROM t_ttl_col ORDER BY id;
+
+--echo # Wait for the short TTL to expire
+--sleep 3
+
+--echo # Row 1 should be expired; rows 2 and 3 remain
+SELECT id, val FROM t_ttl_col ORDER BY id;
+
+DROP TABLE t_ttl_col;
+
+--echo #
+--echo # ============================================
+--echo # TEST 3: Per-row TTL overrides table default
+--echo # ============================================
+--echo #
+
+CREATE TABLE t_ttl_override (
+  id INT PRIMARY KEY,
+  val VARCHAR(50),
+  ttl_val INT `TTL`=1
+) ENGINE=TIDESDB TTL=86400;
+
+# Row 1: per-row TTL=2 overrides table default 86400
+# Row 2: per-row TTL=0 falls back to table default 86400
+INSERT INTO t_ttl_override VALUES (1, 'short_override', 2), (2, 'uses_default', 0);
+
+--echo # Both rows visible immediately
+SELECT id, val FROM t_ttl_override ORDER BY id;
+
+--sleep 3
+
+--echo # Row 1 expired (per-row TTL=2 overrode default); row 2 still alive (table TTL=86400)
+SELECT id, val FROM t_ttl_override ORDER BY id;
+
+DROP TABLE t_ttl_override;
+
+--echo #
+--echo # ============================================
+--echo # TEST 4: TTL=0 means no expiration (default)
+--echo # ============================================
+--echo #
+
+CREATE TABLE t_ttl_none (
+  id INT PRIMARY KEY,
+  val VARCHAR(50)
+) ENGINE=TIDESDB TTL=0;
+
+INSERT INTO t_ttl_none VALUES (1, 'permanent');
+
+--sleep 2
+
+--echo # Row should still be present (TTL=0 = no expiration)
+SELECT * FROM t_ttl_none ORDER BY id;
+
+DROP TABLE t_ttl_none;
+
+--echo #
+--echo # ============================================
+--echo # TEST 5: TTL with UPDATE refreshes expiration
+--echo # ============================================
+--echo #
+
+CREATE TABLE t_ttl_update (
+  id INT PRIMARY KEY,
+  val VARCHAR(50),
+  ttl_s INT `TTL`=1
+) ENGINE=TIDESDB;
+
+INSERT INTO t_ttl_update VALUES (1, 'original', 2);
+
+--echo # Row visible immediately
+SELECT id, val FROM t_ttl_update ORDER BY id;
+
+--sleep 1
+
+--echo # UPDATE resets TTL to 5 more seconds
+UPDATE t_ttl_update SET val = 'refreshed', ttl_s = 5 WHERE id = 1;
+
+--sleep 2
+
+--echo # Row should still be alive (UPDATE refreshed TTL at ~1s, now at ~3s, TTL=5s)
+SELECT id, val FROM t_ttl_update ORDER BY id;
+
+DROP TABLE t_ttl_update;
+
+--echo #
+--echo # ============================================
+--echo # TEST 6: SHOW CREATE TABLE shows TTL options
+--echo # ============================================
+--echo #
+
+CREATE TABLE t_ttl_show (
+  id INT PRIMARY KEY,
+  val VARCHAR(50),
+  row_ttl INT `TTL`=1
+) ENGINE=TIDESDB TTL=3600;
+
+SHOW CREATE TABLE t_ttl_show;
+
+DROP TABLE t_ttl_show;
+
+--echo #
+--echo #
+--echo # Done.

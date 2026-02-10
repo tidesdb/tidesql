@@ -1,7 +1,7 @@
 TIDESQL
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-A pluggable write and space optimized storage engine for MariaDB/MySQL using TidesDB.
+A pluggable write and space optimized storage engine for MariaDB using TidesDB.
 
 
 INSTALLATION
@@ -28,7 +28,7 @@ LINUX (Ubuntu/Debian)
 
 3. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch mariadb-11.4 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch mariadb-12.1 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesdb/tidesdb storage/
@@ -66,7 +66,7 @@ MACOS
 
 3. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch mariadb-11.4 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch mariadb-12.1 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesdb/tidesdb storage/
@@ -88,7 +88,6 @@ MACOS
      -DCMAKE_OSX_SYSROOT=${SDKROOT} \
      -DCMAKE_C_FLAGS="-Wno-nullability-completeness" \
      -DCMAKE_CXX_FLAGS="-Wno-nullability-completeness" \
-     -DPLUGIN_TIDESDB=DYNAMIC \
      -DWITH_SSL=bundled \
      -DWITH_PCRE=bundled \
      -G Ninja
@@ -132,7 +131,7 @@ WINDOWS
 
 4. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch mariadb-11.4 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch mariadb-12.1 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    xcopy /E /I path\to\tidesql\tidesdb storage\tidesdb
@@ -142,7 +141,6 @@ WINDOWS
 
    mkdir build && cd build
    cmake .. -G "Visual Studio 17 2022" -A x64 ^
-     -DPLUGIN_TIDESDB=DYNAMIC ^
      -DCMAKE_PREFIX_PATH="C:/tidesdb;C:/vcpkg/installed/x64-windows"
    cmake --build . --config RelWithDebInfo --parallel
 
@@ -160,131 +158,116 @@ ENABLE PLUGIN
 
 After building, enable the plugin in MariaDB:
 
-   INSTALL PLUGIN tidesdb SONAME 'ha_tidesdb.so';   -- Linux/macOS
-   INSTALL PLUGIN tidesdb SONAME 'ha_tidesdb.dll';  -- Windows
+   INSTALL SONAME 'ha_tidesdb';  -- works on all platforms
 
-
-CI/CD NOTES
------------
-
-For GitHub Actions workflows, see .github/workflows/mariadb-test.yml for
-complete examples. Key findings:
-
-- Linux: Straightforward build with system packages
-- macOS: Must use Xcode SDK (not CommandLineTools) and suppress
-  nullability-completeness warnings from Apple system headers
-- Windows: Use vcpkg binary caching with VCPKG_DEFAULT_BINARY_CACHE
-  environment variable for faster CI builds
 
 
 FEATURES
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 Core:
-- ACID transactions with commit, rollback, savepoints
-- MVCC (Multi-Version Concurrency Control)
-- LSM-tree storage with optional B+tree format (write-optimized)
-- Compression (LZ4, ZSTD, Snappy)
+- Per-statement transactions with snapshot isolation
+- Lock-free concurrency (no THR_LOCK, TidesDB handles isolation internally)
+- LSM-tree storage with optional B+tree SSTable format
+- Compression (NONE, LZ4, LZ4_FAST, ZSTD, Snappy)
 - Bloom filters for fast key lookups
 - Block cache for frequently accessed data
-- Lock-free atomic operations for scalability
-
-Optimizer Integration:
-- Index Condition Pushdown (ICP)
-- Multi-Range Read (DS-MRR) for batch key lookups
-- Rowid Filter Pushdown for semi-joins
-- Covering index plans (keyread flag for optimizer cost modeling)
-- Handler cloning for parallel operations
-- LSM-tree specific cost model
-
-Advanced:
-- XA distributed transactions (two-phase commit)
-- TTL (time-to-live) per-row expiration
-- Spatial indexes (Z-order/Morton code)
-- Foreign key constraints (CASCADE, SET NULL, self-referencing)
-- Foreign key parent list for ALTER TABLE safety
-- Full-text search indexing
+- Primary key and secondary index support
+- TTL (time-to-live) per-row and per-table expiration
 - Virtual/generated columns
-- Online backup
+- Online backup (SET GLOBAL tidesdb_backup_dir = '/path')
 - Partitioning (RANGE, LIST, HASH, KEY)
-- Data-at-rest encryption
-- Online DDL (instant metadata, inplace indexes, copy for columns)
-- Compatible data check to avoid unnecessary rebuilds
-- Bulk insert optimization with intermediate commits
-- Persistent statistics (ANALYZE TABLE persists to metadata)
+- Data-at-rest encryption (MariaDB encryption plugin integration)
+- Online DDL (instant metadata, inplace add/drop index, copy for columns)
+- TRUNCATE TABLE as O(1) drop+recreate (instant regardless of table size)
+- ANALYZE TABLE with detailed CF statistics (levels, keys, sizes, cache hit rate)
+- Cached optimizer statistics (refreshed every 2 seconds from TidesDB)
 
 
 CONFIGURATION
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-All variables are prefixed with tidesdb_
+TidesDB stores its data as a sibling of the MariaDB data directory:
+  <parent_of_datadir>/tidesdb_data
 
-Storage:
-  data_dir                  Data directory (default: <datadir>/tidesdb)
-  block_cache_size          Block cache size in bytes (default: 256MB)
-  write_buffer_size         Memtable size before flush (default: 64MB)
-  max_open_sstables         Max cached SSTable structures (default: 256)
 
-Threads:
+SYSTEM VARIABLES (SET GLOBAL tidesdb_...)
+-----------------------------------------
+
+All are read-only (set at startup) unless noted otherwise.
+
   flush_threads             Background flush threads (default: 2)
   compaction_threads        Background compaction threads (default: 2)
+  log_level                 DEBUG/INFO/WARN/ERROR/FATAL/NONE (default: WARN)
+  block_cache_size          Global block cache in bytes (default: 256MB)
+  max_open_sstables         Max cached SSTable structures (default: 256)
+  backup_dir                [dynamic] Set to a path to trigger online backup
+  debug_trace               [dynamic] Per-operation trace logging (default: OFF)
+
+
+TABLE OPTIONS (CREATE TABLE ... ENGINE=TidesDB <option>=<value>)
+----------------------------------------------------------------
+
+These are per-table options baked into the column family at creation time.
+Changing them via ALTER TABLE only updates the .frm; it does not reconfigure
+the live column family.
+
+Storage:
+  WRITE_BUFFER_SIZE         Memtable size before flush (default: 128MB)
+  MIN_DISK_SPACE            Minimum free disk space (default: 100MB)
+  KLOG_VALUE_THRESHOLD      Values larger than this go to vlog (default: 512)
 
 Compression:
-  enable_compression        Enable compression (default: ON)
-  compression_algo          Algorithm: none/snappy/lz4/zstd/lz4_fast (default: lz4)
+  COMPRESSION               NONE/SNAPPY/LZ4/ZSTD/LZ4_FAST (default: LZ4)
 
 Bloom Filters:
-  enable_bloom_filter       Enable bloom filters (default: ON)
-  bloom_fpr                 False positive rate 0.0-1.0 (default: 0.01)
+  BLOOM_FILTER              Enable bloom filters (default: ON)
+  BLOOM_FPR                 FPR in parts per 10000; 100 = 1% (default: 100)
 
 Durability:
-  sync_mode                 Sync mode: none/interval/full (default: full)
-  sync_interval_us          Sync interval microseconds (default: 128000)
+  SYNC_MODE                 NONE/INTERVAL/FULL (default: FULL)
+  SYNC_INTERVAL_US          Sync interval in microseconds (default: 128000)
 
 Isolation:
-  default_isolation         read_uncommitted/read_committed/repeatable_read/snapshot/serializable (default: repeatable_read)
+  ISOLATION_LEVEL           READ_UNCOMMITTED/READ_COMMITTED/REPEATABLE_READ/
+                            SNAPSHOT/SERIALIZABLE (default: REPEATABLE_READ)
 
 LSM Tree:
-  use_btree                 Use B+tree format for column families (default: OFF)
-  level_size_ratio          Level size multiplier (default: 10)
-  min_levels                Minimum LSM levels (default: 5)
-  dividing_level_offset     Compaction dividing level offset (default: 2)
-  l1_file_count_trigger     L1 file count trigger for compaction (default: 4)
-  l0_queue_stall_threshold  L0 queue stall threshold (default: 20)
+  USE_BTREE                 Use B+tree SSTable format (default: OFF)
+  LEVEL_SIZE_RATIO          Level size multiplier (default: 10)
+  MIN_LEVELS                Minimum LSM levels (default: 5)
+  DIVIDING_LEVEL_OFFSET     Compaction dividing level offset (default: 2)
+  L1_FILE_COUNT_TRIGGER     L1 file count trigger for compaction (default: 4)
+  L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 10)
 
 Skip List:
-  skip_list_max_level       Max skip list level (default: 12)
-  skip_list_probability     Skip list probability (default: 0.25)
+  SKIP_LIST_MAX_LEVEL       Max skip list level (default: 12)
+  SKIP_LIST_PROBABILITY     Percentage; 25 = 0.25 (default: 25)
 
 Block Indexes:
-  enable_block_indexes      Enable block indexes (default: ON)
-  index_sample_ratio        Sample ratio for block index (default: 1)
-  block_index_prefix_len    Block index prefix length (default: 16)
-
-Value Log:
-  klog_value_threshold      Values larger than this go to vlog (default: 512)
-
-Resources:
-  min_disk_space            Minimum disk space required (default: 100MB)
+  BLOCK_INDEXES             Enable block indexes (default: ON)
+  INDEX_SAMPLE_RATIO        Sample ratio for block index (default: 1)
+  BLOCK_INDEX_PREFIX_LEN    Block index prefix length (default: 16)
 
 TTL:
-  default_ttl               Default TTL in seconds, 0=none (default: 0)
-
-Full-Text:
-  ft_min_word_len           Minimum word length for FT index (default: 4)
-  ft_max_word_len           Maximum word length for FT index (default: 84)
-
-Logging:
-  log_level                 debug/info/warn/error/fatal/none (default: info)
-  log_to_file               Log to file instead of stderr (default: OFF)
-  log_truncation_at         Log file truncation size in bytes (default: 24MB)
+  TTL                       Default TTL in seconds, 0 = none (default: 0)
 
 Encryption:
-  enable_encryption         Enable data-at-rest encryption (default: OFF)
-  encryption_key_id         Encryption key ID (default: 1)
+  ENCRYPTED                 Enable data-at-rest encryption (default: OFF)
+  ENCRYPTION_KEY_ID         Encryption key ID (default: 1)
 
-SSI (Serializable Snapshot Isolation):
-  active_txn_buffer_size    Buffer size for SSI conflict detection (default: 64KB)
+
+FIELD OPTIONS (per-column)
+--------------------------
+
+  TTL                       Marks column as per-row TTL source (seconds)
+
+Example:
+  CREATE TABLE t (
+    id INT PRIMARY KEY,
+    data VARCHAR(100),
+    expires INT TTL=1
+  ) ENGINE=TidesDB TTL=3600 SYNC_MODE='NONE' COMPRESSION='ZSTD';
 
 
 TESTING
@@ -296,62 +279,24 @@ Run all TidesDB tests:
 
 Run specific test:
 
-  ./mysql-test/mtr --suite=tidesdb basic
+  ./mysql-test/mtr --suite=tidesdb tidesdb_crud
+
+Available tests:
+  tidesdb_crud          Basic CRUD operations
+  tidesdb_pk_index      Primary key and secondary index scans
+  tidesdb_options        Table and field options
+  tidesdb_ttl           Time-to-live expiration
+  tidesdb_vcol          Virtual/generated columns
+  tidesdb_encryption    Data-at-rest encryption
+  tidesdb_backup        Online backup
+  tidesdb_partition     RANGE/LIST/HASH/KEY partitioning
+  tidesdb_online_ddl    Online DDL (instant, inplace, copy)
+  tidesdb_analyze       ANALYZE TABLE with CF statistics output
+  tidesdb_rename        Table rename
 
 Run with verbose output:
 
   ./mysql-test/mtr --suite=tidesdb --verbose
-
-Available tests (49 total):
-  auto_increment        - Auto-increment columns
-  backup                - Backup operations
-  basic                 - Basic CRUD operations
-  blob_index            - BLOB column indexing
-  bulk_insert           - Bulk insert performance
-  clustered_index       - Clustered index behavior
-  compatible_data       - check_if_incompatible_data / metadata-only ALTERs
-  composite_keys        - Composite primary/secondary keys
-  concurrent_transactions - Concurrent transaction isolation
-  condition_pushdown    - Table Condition Pushdown (WHERE to engine)
-  consistent_snapshot   - START TRANSACTION WITH CONSISTENT SNAPSHOT
-  datatypes             - Data type handling
-  ddl                   - DDL operations (CREATE, DROP, RENAME)
-  disable_indexes       - Disable/enable indexes for bulk load
-  edge_cases            - Edge case handling
-  encryption            - Encryption configuration
-  encryption_index      - Encrypted index operations
-  estimate_rows         - Row estimation and optimizer hints
-  fk_cascade            - Foreign key CASCADE/SET NULL/self-referencing
-  fk_parent_list        - get_parent_foreign_key_list / ALTER on FK tables
-  foreign_keys          - Foreign key definitions
-  fulltext              - Full-text search
-  hidden_pk             - Hidden primary key (tables without PK)
-  icp_mrr               - Index Condition Pushdown and Multi-Range Read
-  index_operations      - Index create/drop
-  index_scan            - Index scan operations
-  inplace_alter         - In-place ALTER TABLE
-  large_data            - Large data handling
-  maintenance           - ANALYZE, CHECK TABLE
-  online_ddl            - Online ALTER TABLE
-  partitioning          - Table partitioning
-  per_table_options     - Per-table column family CREATE TABLE options
-  persistent_stats      - Persistent statistics (ANALYZE persists to metadata)
-  prefetch_cache        - Sequential scan prefetch optimization
-  preload_keys          - LOAD INDEX INTO CACHE
-  rowid_filter           - Rowid filter pushdown for semi-joins
-  secondary_index       - Secondary index operations
-  semi_consistent_read  - Semi-consistent reads under READ COMMITTED
-  skip_locked           - SELECT FOR UPDATE SKIP LOCKED
-  spatial               - Spatial data types
-  spatial_geometry      - Geometry functions
-  spatial_index         - Spatial indexing
-  table_operations      - Table operations
-  tablespace            - Tablespace operations
-  transactions          - Transaction commit/rollback
-  ttl                   - Time-to-live expiration
-  update_pk_change      - UPDATE with primary key change
-  virtual_columns       - Generated columns
-  xa_transactions       - XA distributed transactions
 
 
 QUICK TEST
@@ -369,10 +314,12 @@ SANITIZER BUILDS
 The TidesDB plugin supports plugin-level UBSAN/ASAN without rebuilding the
 entire MariaDB server:
 
-  cmake .. -DTIDESDB_WITH_UBSAN=ON
+  cmake .. -DTIDESDB_WITH_UBSAN=ON   # UBSAN only
+  cmake .. -DTIDESDB_WITH_ASAN=ON    # ASAN only
+  cmake .. -DTIDESDB_WITH_ASAN=ON -DTIDESDB_WITH_UBSAN=ON  # both
   make -j$(nproc) tidesdb
 
-  # Run tests with UBSAN error logging:
+  # Run tests with sanitizer error logging:
   UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0 \
     perl ./mtr --suite=tidesdb --parallel=4
 
