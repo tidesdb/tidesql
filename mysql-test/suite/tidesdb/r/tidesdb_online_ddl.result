@@ -1,0 +1,116 @@
+# ---- Setup ----
+CREATE TABLE t1 (
+id INT PRIMARY KEY,
+a INT,
+b VARCHAR(100),
+c INT DEFAULT 0
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 10, 'alpha', 100);
+INSERT INTO t1 VALUES (2, 20, 'beta', 200);
+INSERT INTO t1 VALUES (3, 30, 'gamma', 300);
+INSERT INTO t1 VALUES (4, 10, 'delta', 400);
+INSERT INTO t1 VALUES (5, 50, 'epsilon', 500);
+# ---- INSTANT: change column default ----
+ALTER TABLE t1 ALTER COLUMN c SET DEFAULT 999, ALGORITHM=INSTANT;
+INSERT INTO t1 (id, a, b) VALUES (6, 60, 'zeta');
+SELECT id, c FROM t1 WHERE id = 6;
+id	c
+6	999
+# ---- INSTANT: rename column ----
+ALTER TABLE t1 CHANGE b b_name VARCHAR(100), ALGORITHM=INSTANT;
+SELECT id, b_name FROM t1 WHERE id = 1;
+id	b_name
+1	alpha
+# ---- INSTANT: change table option (SYNC_MODE) ----
+ALTER TABLE t1 SYNC_MODE='NONE', ALGORITHM=INSTANT;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int(11) NOT NULL,
+  `a` int(11) DEFAULT NULL,
+  `b_name` varchar(100) DEFAULT NULL,
+  `c` int(11) DEFAULT 999,
+  PRIMARY KEY (`id`)
+) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `SYNC_MODE`='NONE'
+# ---- INPLACE: add secondary index ----
+ALTER TABLE t1 ADD INDEX idx_a (a), ALGORITHM=INPLACE;
+SHOW INDEX FROM t1;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
+t1	0	PRIMARY	1	id	A	6	NULL	NULL		BTREE			NO
+t1	1	idx_a	1	a	A	6	NULL	NULL	YES	BTREE			NO
+# Verify index is usable
+SELECT id, a FROM t1 WHERE a = 10 ORDER BY id;
+id	a
+1	10
+4	10
+SELECT id, a FROM t1 WHERE a >= 30 ORDER BY a;
+id	a
+3	30
+5	50
+6	60
+# ---- INPLACE: add another index ----
+ALTER TABLE t1 ADD INDEX idx_c (c), ALGORITHM=INPLACE;
+SHOW INDEX FROM t1;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
+t1	0	PRIMARY	1	id	A	6	NULL	NULL		BTREE			NO
+t1	1	idx_a	1	a	A	6	NULL	NULL	YES	BTREE			NO
+t1	1	idx_c	1	c	A	6	NULL	NULL	YES	BTREE			NO
+EXPLAIN SELECT id, c FROM t1 WHERE c = 200;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t1	ref	idx_c	idx_c	5	const	2	Using index
+SELECT id, c FROM t1 WHERE c = 200;
+id	c
+2	200
+# ---- INPLACE: drop index ----
+ALTER TABLE t1 DROP INDEX idx_a, ALGORITHM=INPLACE;
+SHOW INDEX FROM t1;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
+t1	0	PRIMARY	1	id	A	6	NULL	NULL		BTREE			NO
+t1	1	idx_c	1	c	A	6	NULL	NULL	YES	BTREE			NO
+# Verify remaining index still works
+SELECT id, c FROM t1 WHERE c = 300;
+id	c
+3	300
+# ---- INPLACE: add + drop in one statement ----
+ALTER TABLE t1 ADD INDEX idx_a2 (a), DROP INDEX idx_c, ALGORITHM=INPLACE;
+SHOW INDEX FROM t1;
+Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
+t1	0	PRIMARY	1	id	A	6	NULL	NULL		BTREE			NO
+t1	1	idx_a2	1	a	A	6	NULL	NULL	YES	BTREE			NO
+EXPLAIN SELECT id, a FROM t1 WHERE a = 20;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	t1	ref	idx_a2	idx_a2	5	const	2	Using index
+SELECT id, a FROM t1 WHERE a = 20;
+id	a
+2	20
+# ---- COPY fallback: add column ----
+ALTER TABLE t1 ADD COLUMN d INT DEFAULT 0;
+SELECT id, d FROM t1 WHERE id = 1;
+id	d
+1	0
+# ---- COPY fallback: drop column ----
+ALTER TABLE t1 DROP COLUMN d;
+SELECT * FROM t1 WHERE id = 1;
+id	a	b_name	c
+1	10	alpha	100
+# ---- Verify ALGORITHM=INPLACE rejected for column changes ----
+ALTER TABLE t1 ADD COLUMN e INT, ALGORITHM=INPLACE;
+ERROR 0A000: ALGORITHM=INPLACE is not supported for this operation. Try ALGORITHM=COPY
+# ---- Cleanup ----
+DROP TABLE t1;
+# ---- Test with data and hidden PK (no explicit PK) ----
+CREATE TABLE t_nopk (
+a INT,
+b VARCHAR(50)
+) ENGINE=TidesDB;
+INSERT INTO t_nopk VALUES (1, 'one');
+INSERT INTO t_nopk VALUES (2, 'two');
+INSERT INTO t_nopk VALUES (3, 'three');
+# Add index on hidden-PK table
+ALTER TABLE t_nopk ADD INDEX idx_a (a), ALGORITHM=INPLACE;
+SELECT a, b FROM t_nopk WHERE a = 2;
+a	b
+2	two
+# Drop it
+ALTER TABLE t_nopk DROP INDEX idx_a, ALGORITHM=INPLACE;
+DROP TABLE t_nopk;

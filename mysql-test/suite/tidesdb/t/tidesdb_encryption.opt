@@ -1,0 +1,4 @@
+--plugin-maturity=unknown
+--plugin-load-add=ha_tidesdb
+--plugin-load-add=file_key_management
+--file-key-management-filename=$MYSQL_TEST_DIR/std_data/keys.txt
