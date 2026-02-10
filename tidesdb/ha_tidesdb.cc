@@ -56,7 +56,7 @@ static inline void tdb_hex(const uchar *data, uint len, char *out, uint out_sz)
 }
 
 /* MariaDB data directory */
-extern char mysql_real_data_home[];
+extern MYSQL_PLUGIN_IMPORT char mysql_real_data_home[];
 
 /* Global TidesDB database handle */
 static tidesdb_t *tdb_global = NULL;
