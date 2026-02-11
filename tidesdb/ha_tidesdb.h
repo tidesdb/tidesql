@@ -93,6 +93,10 @@ class TidesDB_share : public Handler_share
     /* Hidden PK row-id generator (used when has_user_pk == false) */
     std::atomic<uint64_t> next_row_id;
 
+    /* In-memory AUTO_INCREMENT counter (avoids index_last() per INSERT).
+       Seeded once from index_last() at open time; incremented atomically. */
+    std::atomic<ulonglong> auto_inc_val{0};
+
     /* Per-table isolation level (from CREATE TABLE options) */
     tidesdb_isolation_level_t isolation_level;
 
@@ -106,8 +110,9 @@ class TidesDB_share : public Handler_share
     uint encryption_key_version; /* cached latest key version */
 
     /* Cached table shape flags (set once at open time) */
-    bool has_blobs; /* true when table contains any BLOB/TEXT columns */
-    bool has_ttl;   /* true when TTL is configured (default_ttl or ttl_field_idx) */
+    bool has_blobs;             /* true when table contains any BLOB/TEXT columns */
+    bool has_ttl;               /* true when TTL is configured (default_ttl or ttl_field_idx) */
+    uint num_secondary_indexes; /* count of non-NULL secondary index CFs */
 
     /* Cached stats -- avoid expensive tidesdb_get_stats per statement.
        Refreshed at most every 2 seconds; read with relaxed atomics. */
@@ -117,6 +122,9 @@ class TidesDB_share : public Handler_share
     std::atomic<uint32_t> cached_mean_rec_len{0};  /* avg_key_size + avg_value_size */
     std::atomic<long long> stats_refresh_us{0};    /* last refresh timestamp (µs) */
     double cached_read_amp{1.0};                   /* read amplification factor */
+
+    /* Precomputed comparable key length per index (avoids per-row recomputation) */
+    uint idx_comp_key_len[MAX_KEY];
 
     /* Secondary index CFs (one per secondary key) */
     std::vector<tidesdb_column_family_t *> idx_cfs;
@@ -327,6 +335,10 @@ class ha_tidesdb : public handler
     int update_row(const uchar *old_data, const uchar *new_data) override;
     int delete_row(const uchar *buf) override;
     int delete_all_rows(void) override;
+
+    /* AUTO_INCREMENT -- O(1) atomic counter instead of index_last() per INSERT */
+    void get_auto_increment(ulonglong offset, ulonglong increment, ulonglong nb_desired_values,
+                            ulonglong *first_value, ulonglong *nb_reserved_values) override;
 
     /* Stats */
     int info(uint flag) override;
