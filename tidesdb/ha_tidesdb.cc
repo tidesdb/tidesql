@@ -2394,7 +2394,7 @@ bool ha_tidesdb::prepare_inplace_alter_table(TABLE *altered_table,
 
 /*
   Inplace phase -- we populate newly added indexes by scanning the table.
-  Called with exclusive MDL lock held (HA_ALTER_INPLACE_EXCLUSIVE_LOCK).
+  Called with no MDL lock blocking (HA_ALTER_INPLACE_NO_LOCK).
 */
 bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *ha_alter_info)
 {
@@ -2439,6 +2439,11 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
 
     ha_rows rows_processed = 0;
 
+    /* We remember the last data key so we can seek directly to it after
+       a batch commit, instead of walking from the beginning (O(n²)). */
+    uchar last_data_key[MAX_KEY_LENGTH + 2];
+    size_t last_data_key_len = 0;
+
     while (tidesdb_iter_valid(iter))
     {
         uint8_t *key_data = NULL;
@@ -2458,6 +2463,13 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
         {
             tidesdb_iter_next(iter);
             continue;
+        }
+
+        /* We save this data key for potential batch re-seek */
+        if (key_size <= sizeof(last_data_key))
+        {
+            memcpy(last_data_key, key_data, key_size);
+            last_data_key_len = key_size;
         }
 
         /* We extract PK from the data key (skip KEY_NS_DATA prefix) */
@@ -2487,9 +2499,9 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
            altered_table->key_info fields have ptr into altered_table->record[0],
            but data is in table->record[0].
 
-           We use move_field_offset with ptrdiff = table->record[0] - altered_table->record[0]
+           We use move_field_offset with ptdiff = table->record[0] - altered_table->record[0]
            to temporarily rebase field pointers (same pattern as make_comparable_key). */
-        my_ptrdiff_t ptrdiff = (my_ptrdiff_t)(table->record[0] - altered_table->record[0]);
+        my_ptrdiff_t ptdiff = (my_ptrdiff_t)(table->record[0] - altered_table->record[0]);
 
         for (uint a = 0; a < ctx->add_cfs.size(); a++)
         {
@@ -2505,9 +2517,9 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
 
                 /* make_sort_key_part handles nullable fields internally:
                    writes 1-byte null indicator + kp->length sort bytes. */
-                field->move_field_offset(ptrdiff);
+                field->move_field_offset(ptdiff);
                 field->make_sort_key_part(ik + pos, kp->length);
-                field->move_field_offset(-ptrdiff);
+                field->move_field_offset(-ptdiff);
                 pos += kp->length;
                 if (field->real_maybe_null()) pos++;
             }
@@ -2553,15 +2565,10 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
                 tmp_restore_column_map(&altered_table->read_set, old_map);
                 DBUG_RETURN(true);
             }
-            tidesdb_iter_seek_to_first(iter);
-            /* We seek past the last processed key.  Since we're iterating
-               sequentially, we can just skip forward to the right position. */
-            ha_rows skip = rows_processed;
-            while (skip > 0 && tidesdb_iter_valid(iter))
-            {
-                tidesdb_iter_next(iter);
-                skip--;
-            }
+            /* We seek directly to the last processed key and advance past it,
+               instead of seeking to first and skipping N rows (O(n²)). */
+            tidesdb_iter_seek(iter, last_data_key, last_data_key_len);
+            if (tidesdb_iter_valid(iter)) tidesdb_iter_next(iter);
             continue; /* Don't call iter_next again */
         }
 
