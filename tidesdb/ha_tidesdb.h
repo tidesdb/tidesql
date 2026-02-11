@@ -354,3 +354,4 @@ class ha_tidesdb : public handler
                                     bool commit) override;
     bool check_if_incompatible_data(HA_CREATE_INFO *create_info, uint table_changes) override;
 };
+
