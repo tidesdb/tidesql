@@ -2287,9 +2287,10 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
     /* If only instant operations, return INSTANT */
     if (!(flags & ~TIDESDB_INSTANT)) DBUG_RETURN(HA_ALTER_INPLACE_INSTANT);
 
-    /* If only instant + index operations, return INPLACE with exclusive lock.
-       We need exclusive lock because populating a new index requires a
-       consistent full table scan. */
+    /* If only instant + index operations, return INPLACE with no lock.
+       TidesDB handles all concurrency via MVCC internally -- the index
+       population scan runs inside its own transaction and does not need
+       server-level MDL blocking. */
     if (!(flags & ~(TIDESDB_INSTANT | TIDESDB_INPLACE_INDEX)))
     {
         /* Changing PK requires full rebuild */
@@ -2298,7 +2299,7 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
             ha_alter_info->unsupported_reason = "TidesDB cannot change PRIMARY KEY inplace";
             DBUG_RETURN(HA_ALTER_INPLACE_NOT_SUPPORTED);
         }
-        DBUG_RETURN(HA_ALTER_INPLACE_EXCLUSIVE_LOCK);
+        DBUG_RETURN(HA_ALTER_INPLACE_NO_LOCK);
     }
 
     /* Everything else requires COPY */
@@ -2307,7 +2308,7 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
 
 /*
   Create CFs for newly added indexes.
-  Called with exclusive MDL lock held.
+  Called with shared MDL lock (concurrent DML is allowed).
 */
 bool ha_tidesdb::prepare_inplace_alter_table(TABLE *altered_table,
                                              Alter_inplace_info *ha_alter_info)
