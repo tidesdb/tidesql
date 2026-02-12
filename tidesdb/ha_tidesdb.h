@@ -155,22 +155,36 @@ class ha_tidesdb_inplace_ctx : public inplace_alter_handler_ctx
 };
 
 /*
+  Per-connection TidesDB transaction context.
+  Stored via thd_set_ha_data(); shared by ALL handler objects on the
+  same connection.  The TidesDB txn spans the entire BEGIN...COMMIT
+  block (or a single auto-commit statement).
+*/
+struct tidesdb_trx_t
+{
+    tidesdb_txn_t *txn;
+    bool dirty;                                /* true once any DML uses txn */
+    tidesdb_isolation_level_t isolation_level; /* from first table opened */
+};
+
+/*
   ha_tidesdb -- per-connection handler object.
 */
 class ha_tidesdb : public handler
 {
     TidesDB_share *share;
 
-    /* Per-handler TidesDB transaction.  Created lazily in ensure_stmt_txn().
-       Dirty txns: commit + reset for reuse.  Clean (read-only) txns: freed. */
+    /* Points into the per-connection tidesdb_trx_t::txn.
+       Set in external_lock(), cleared in external_lock(F_UNLCK). */
     tidesdb_txn_t *stmt_txn;
     bool stmt_txn_dirty; /* true once any DML uses stmt_txn */
 
     /* Scan / index-scan state (iterator lives on stmt_txn when available) */
     tidesdb_txn_t *scan_txn;
     tidesdb_iter_t *scan_iter;
-    tidesdb_column_family_t *scan_cf_; /* CF for lazy iterator creation */
-    bool idx_pk_exact_done_;           /* deferred seek after PK exact */
+    tidesdb_column_family_t *scan_cf_;      /* CF for lazy iterator creation */
+    tidesdb_column_family_t *scan_iter_cf_; /* CF the cached scan_iter was created for */
+    bool idx_pk_exact_done_;                /* deferred seek after PK exact */
     enum scan_dir_t
     {
         DIR_NONE,
@@ -191,11 +205,18 @@ class ha_tidesdb : public handler
     uchar idx_search_comp_[MAX_KEY_LENGTH];
     uint idx_search_comp_len_;
 
+    /* Bulk insert state */
+    bool in_bulk_insert_;
+
+    /* Covering-index mode (HA_EXTRA_KEYREAD) */
+    bool keyread_only_;
+
     /* ----- private helpers ----------------------------------------------------------------------
      */
     int ensure_stmt_txn(); /* lazy txn creation on first data access */
     TidesDB_share *get_share();
     const std::string &serialize_row(const uchar *buf);
+    void deserialize_row(uchar *buf, const uchar *data, size_t len);
     void deserialize_row(uchar *buf, const std::string &row);
     static std::string path_to_cf_name(const char *path);
 
@@ -234,6 +255,9 @@ class ha_tidesdb : public handler
     /* Lazily create scan_iter from scan_cf_ when first needed */
     int ensure_scan_iter();
 
+    /* Try to decode record from secondary index key (keyread-only) */
+    bool try_keyread_from_index(const uint8_t *ik, size_t iks, uint idx, uchar *buf);
+
     /* Recover hidden-PK counter by scanning the CF */
     void recover_counters();
 
@@ -245,7 +269,10 @@ class ha_tidesdb : public handler
     {
         return HA_BINLOG_STMT_CAPABLE | HA_BINLOG_ROW_CAPABLE | HA_NULL_IN_KEY |
                HA_PRIMARY_KEY_IN_READ_INDEX | HA_TABLE_SCAN_ON_INDEX | HA_CAN_VIRTUAL_COLUMNS |
-               HA_NO_TRANSACTIONS | HA_FAST_KEY_READ | HA_REC_NOT_IN_SEQ | HA_CAN_SQL_HANDLER;
+               HA_FAST_KEY_READ | HA_REC_NOT_IN_SEQ | HA_CAN_SQL_HANDLER |
+               HA_REQUIRES_KEY_COLUMNS_FOR_DELETE | HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
+               HA_ONLINE_ANALYZE | HA_CAN_ONLINE_BACKUPS | HA_CONCURRENT_OPTIMIZE |
+               HA_CAN_TABLES_WITHOUT_ROLLBACK;
     }
 
     ulong index_flags(uint idx, uint part, bool all_parts) const override
@@ -336,13 +363,21 @@ class ha_tidesdb : public handler
     int delete_row(const uchar *buf) override;
     int delete_all_rows(void) override;
 
+    /* Bulk insert hint (LOAD DATA, multi-row INSERT, sysbench prepare) */
+    void start_bulk_insert(ha_rows rows, uint flags) override;
+    int end_bulk_insert() override;
+
+    /* Index Condition Pushdown (ICP) */
+    Item *idx_cond_push(uint keyno, Item *idx_cond) override;
+
     /* AUTO_INCREMENT -- O(1) atomic counter instead of index_last() per INSERT */
     void get_auto_increment(ulonglong offset, ulonglong increment, ulonglong nb_desired_values,
                             ulonglong *first_value, ulonglong *nb_reserved_values) override;
 
-    /* Stats */
+    /* Stats / Maintenance */
     int info(uint flag) override;
     int analyze(THD *thd, HA_CHECK_OPT *check_opt) override;
+    int optimize(THD *thd, HA_CHECK_OPT *check_opt) override;
     ha_rows records_in_range(uint inx, const key_range *min_key, const key_range *max_key,
                              page_range *pages) override;
     int extra(enum ha_extra_function operation) override;
