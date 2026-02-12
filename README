@@ -28,7 +28,7 @@ LINUX (Ubuntu/Debian)
 
 3. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch mariadb-12.1 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch 12.1 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
@@ -67,7 +67,7 @@ MACOS
 
 3. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch mariadb-12.1 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch 12.1 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
@@ -133,7 +133,7 @@ WINDOWS
 
 4. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch mariadb-12.1 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch 12.1 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    xcopy /E /I path\to\tidesql\tidesdb storage\tidesdb
