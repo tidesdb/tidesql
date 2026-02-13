@@ -1537,7 +1537,11 @@ int ha_tidesdb::write_row(const uchar *buf)
     stmt_txn_dirty = true;
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
-        if (trx) { trx->dirty = true; trx->stmt_was_dirty = true; }
+        if (trx)
+        {
+            trx->dirty = true;
+            trx->stmt_was_dirty = true;
+        }
     }
     if (unlikely(srv_debug_trace))
     {
@@ -2266,7 +2270,11 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     stmt_txn_dirty = true;
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
-        if (trx) { trx->dirty = true; trx->stmt_was_dirty = true; }
+        if (trx)
+        {
+            trx->dirty = true;
+            trx->stmt_was_dirty = true;
+        }
     }
 
     int rc;
@@ -2362,7 +2370,11 @@ int ha_tidesdb::delete_row(const uchar *buf)
     stmt_txn_dirty = true;
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
-        if (trx) { trx->dirty = true; trx->stmt_was_dirty = true; }
+        if (trx)
+        {
+            trx->dirty = true;
+            trx->stmt_was_dirty = true;
+        }
     }
 
     /* We delete data row */
