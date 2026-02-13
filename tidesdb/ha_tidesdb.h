@@ -16,6 +16,8 @@
 */
 #pragma once
 
+#include "my_global.h"
+
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -23,7 +25,6 @@
 
 #include "handler.h"
 #include "my_base.h"
-#include "my_global.h"
 #include "thr_lock.h"
 
 extern "C"
