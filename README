@@ -213,7 +213,7 @@ All are read-only (set at startup) unless noted otherwise.
   compaction_threads        Background compaction threads (default: 2)
   log_level                 DEBUG/INFO/WARN/ERROR/FATAL/NONE (default: WARN)
   block_cache_size          Global block cache in bytes (default: 256MB)
-  max_open_sstables         Max cached SSTable structures (default: 256)
+  max_open_sstables         Max cached SSTable structures (default: 512)
   backup_dir                [dynamic] Set to a path to trigger online backup
   debug_trace               [dynamic] Per-operation trace logging (default: OFF)
 
@@ -226,7 +226,7 @@ Changing them via ALTER TABLE only updates the .frm; it does not reconfigure
 the live column family.
 
 Storage:
-  WRITE_BUFFER_SIZE         Memtable size before flush (default: 128MB)
+  WRITE_BUFFER_SIZE         Memtable size before flush (default: 32MB)
   MIN_DISK_SPACE            Minimum free disk space (default: 100MB)
   KLOG_VALUE_THRESHOLD      Values larger than this go to vlog (default: 512)
 
@@ -251,7 +251,7 @@ LSM Tree:
   MIN_LEVELS                Minimum LSM levels (default: 5)
   DIVIDING_LEVEL_OFFSET     Compaction dividing level offset (default: 2)
   L1_FILE_COUNT_TRIGGER     L1 file count trigger for compaction (default: 4)
-  L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 10)
+  L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 20)
 
 Skip List:
   SKIP_LIST_MAX_LEVEL       Max skip list level (default: 12)
@@ -280,7 +280,7 @@ Example:
     id INT PRIMARY KEY,
     data VARCHAR(100),
     expires INT TTL=1
-  ) ENGINE=TidesDB TTL=3600 SYNC_MODE='NONE' COMPRESSION='ZSTD';
+  ) ENGINE=TIDESDB TTL=3600 SYNC_MODE='NONE' COMPRESSION='ZSTD';
 
 
 TESTING
@@ -298,7 +298,7 @@ Run specific test:
 Available tests:
   tidesdb_crud          Basic CRUD operations
   tidesdb_pk_index      Primary key and secondary index scans
-  tidesdb_options        Table and field options
+  tidesdb_options       Table and field options
   tidesdb_ttl           Time-to-live expiration
   tidesdb_vcol          Virtual/generated columns
   tidesdb_encryption    Data-at-rest encryption
