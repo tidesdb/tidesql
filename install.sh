@@ -8,9 +8,9 @@
 # Flow:
 #   1. Detect OS (Debian, RHEL, Arch, macOS, Windows)
 #   2. Install system dependencies
-#        - Linux:   apt/dnf/pacman (cmake, compilers, zstd, lz4, snappy, ssl, etc.)
-#        - macOS:   Homebrew (cmake, ninja, zstd, lz4, snappy, openssl, etc.)
-#        - Windows: vcpkg (zstd, lz4, snappy, pthreads)
+#        - Linux      apt/dnf/pacman (cmake, compilers, zstd, lz4, snappy, ssl, etc.)
+#        - macOS      Homebrew (cmake, ninja, zstd, lz4, snappy, openssl, etc.)
+#        - Windows    vcpkg (zstd, lz4, snappy, pthreads)
 #   3. Build & install TidesDB library
 #        - Clone tidesdb at the requested version tag
 #        - cmake Release build
@@ -72,7 +72,6 @@ set -euo pipefail
 # ── Resolve the tidesql repo root (where this script lives) ────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── Detect OS early (needed for defaults) ──────────────────────────────────
 detect_os() {
     case "$(uname -s)" in
         Linux*)
@@ -163,7 +162,7 @@ _cfg_row() {
 
 echo ""
 echo -e "${CYAN}╔$(printf '═%.0s' $(seq 1 68))╗${NC}"
-_cfg_row "${CYAN}TidesSQL Installer${NC}"
+_cfg_row "${CYAN}TIDESQL Installer${NC}"
 echo -e "${CYAN}╠$(printf '═%.0s' $(seq 1 68))╣${NC}"
 _cfg_row "TidesDB version  : ${GREEN}${TIDESDB_VERSION}${NC}"
 _cfg_row "MariaDB version  : ${GREEN}${MARIADB_VERSION}${NC}"
@@ -172,7 +171,7 @@ _cfg_row "MariaDB prefix   : ${GREEN}${MARIADB_PREFIX}${NC}"
 _cfg_row "Build directory  : ${GREEN}${BUILD_DIR}${NC}"
 _cfg_row "Parallel jobs    : ${GREEN}${JOBS}${NC}"
 _cfg_row "Detected OS      : ${GREEN}${OS}${NC}"
-_cfg_row "TidesQL repo     : ${GREEN}${SCRIPT_DIR}${NC}"
+_cfg_row "TideSQL repo     : ${GREEN}${SCRIPT_DIR}${NC}"
 echo -e "${CYAN}╚$(printf '═%.0s' $(seq 1 68))╝${NC}"
 echo ""
 
@@ -185,7 +184,6 @@ run_privileged() {
     fi
 }
 
-# ── Install system deps ────────────────────────────────────
 install_deps() {
     if $SKIP_DEPS; then
         warn "Skipping dependency installation (--skip-deps)"
@@ -359,7 +357,6 @@ prepare_mariadb() {
     ok "MariaDB source prepared"
 }
 
-# ── Build MariaDB ──────────────────────────────────────────────────
 build_mariadb() {
     info "Building MariaDB with InnoDB + TidesDB..."
 
@@ -419,7 +416,6 @@ build_mariadb() {
     ok "MariaDB build complete"
 }
 
-# ── Install MariaDB ────────────────────────────────────────────────
 install_mariadb() {
     info "Installing MariaDB to ${MARIADB_PREFIX}..."
 
@@ -524,7 +520,6 @@ max_allowed_packet = 64M
         warn "Config file already exists at ${cnf_file}, skipping"
     fi
 
-    # Initialize data directory
     info "Initializing MariaDB data directory..."
 
     local install_db=""
@@ -566,7 +561,6 @@ max_allowed_packet = 64M
     fi
 }
 
-# ── Print summary ──────────────────────────────────────────────────
 print_summary() {
     local cnf_name="my.cnf"
     local start_cmd="${MARIADB_PREFIX}/bin/mariadbd-safe"
@@ -629,7 +623,6 @@ print_summary() {
     echo ""
 }
 
-# ── Main ────────────────────────────────────────────────────────────────────
 main() {
     mkdir -p "${BUILD_DIR}"
 
