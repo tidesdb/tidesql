@@ -16,7 +16,6 @@
 */
 #include "ha_tidesdb.h"
 
-#include <my_global.h>
 #include <mysql/plugin.h>
 
 #include <cstring>
