@@ -78,8 +78,13 @@ static ulonglong srv_block_cache_size = TIDESDB_DEFAULT_BLOCK_CACHE; /* 256MB */
 static ulong srv_max_open_sstables = 512;
 
 static const char *log_level_names[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL", "NONE", NullS};
+#if MYSQL_VERSION_ID >= 120000
 static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_level_typelib",
                                     log_level_names, NULL, NULL};
+#else
+static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_level_typelib",
+                                    log_level_names, NULL};
+#endif
 
 static MYSQL_SYSVAR_ULONG(flush_threads, srv_flush_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -382,7 +387,11 @@ static tidesdb_trx_t *get_or_create_trx(THD *thd, handlerton *hton, tidesdb_isol
 
 /* ******************** Handlerton transaction callbacks ******************** */
 
+#if MYSQL_VERSION_ID >= 120000
 static int tidesdb_commit(THD *thd, bool all)
+#else
+static int tidesdb_commit(handlerton *, THD *thd, bool all)
+#endif
 {
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (!trx || !trx->txn) return 0;
@@ -456,7 +465,11 @@ static int tidesdb_commit(THD *thd, bool all)
     return 0;
 }
 
+#if MYSQL_VERSION_ID >= 120000
 static int tidesdb_rollback(THD *thd, bool all)
+#else
+static int tidesdb_rollback(handlerton *, THD *thd, bool all)
+#endif
 {
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (!trx || !trx->txn) return 0;
@@ -496,7 +509,11 @@ static int tidesdb_rollback(THD *thd, bool all)
     return 0;
 }
 
+#if MYSQL_VERSION_ID >= 120000
 static int tidesdb_close_connection(THD *thd)
+#else
+static int tidesdb_close_connection(handlerton *, THD *thd)
+#endif
 {
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (trx)
