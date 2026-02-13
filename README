@@ -7,6 +7,16 @@ A pluggable write and space optimized storage engine for MariaDB using TidesDB.
 INSTALLATION
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
+You can choose to run install.sh, for instructions run ./install.sh --help
+
+The install script will build TidesDB and MariaDB from source.
+You can specify the versions if you want.  The script will install everything
+and make TidesDB available as an engine to utilize.
+
+Below are manual install instructions for those who want to configure everything
+themselves, though with the install script you can modify configuration files
+after the fact.
+
 LINUX (Ubuntu/Debian)
 ---------------------
 
