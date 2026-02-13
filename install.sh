@@ -48,6 +48,7 @@
 #   --jobs            N         Parallel build jobs        (default: auto-detected)
 #   --skip-deps                 Skip system dependency installation
 #   --skip-tidesdb              Skip TidesDB library build (use if already installed)
+#   --pgo                       Enable Profile-Guided Optimization (3-phase build)
 #   --help                      Show this help message
 #
 # Platform defaults:
@@ -66,6 +67,7 @@
 #   ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
 #   ./install.sh --mariadb-version mariadb-12.1.2
 #   ./install.sh --skip-deps --skip-tidesdb
+#   ./install.sh --pgo          # Full PGO build (instrument → train → optimize)
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -114,6 +116,7 @@ BUILD_DIR="${DEFAULT_BUILD_DIR}"
 JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 SKIP_DEPS=false
 SKIP_TIDESDB=false
+PGO_ENABLED=false
 
 # ── Color helpers ───────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -144,6 +147,7 @@ while [[ $# -gt 0 ]]; do
         --jobs)             JOBS="$2";              shift 2 ;;
         --skip-deps)        SKIP_DEPS=true;         shift   ;;
         --skip-tidesdb)     SKIP_TIDESDB=true;      shift   ;;
+        --pgo)              PGO_ENABLED=true;       shift   ;;
         --help|-h)          usage ;;
         *) die "Unknown option: $1 (try --help)" ;;
     esac
@@ -171,6 +175,7 @@ _cfg_row "MariaDB prefix   : ${GREEN}${MARIADB_PREFIX}${NC}"
 _cfg_row "Build directory  : ${GREEN}${BUILD_DIR}${NC}"
 _cfg_row "Parallel jobs    : ${GREEN}${JOBS}${NC}"
 _cfg_row "Detected OS      : ${GREEN}${OS}${NC}"
+_cfg_row "PGO build        : ${GREEN}${PGO_ENABLED}${NC}"
 _cfg_row "TideSQL repo     : ${GREEN}${SCRIPT_DIR}${NC}"
 echo -e "${CYAN}╚$(printf '═%.0s' $(seq 1 68))╝${NC}"
 echo ""
@@ -420,8 +425,12 @@ install_mariadb() {
     info "Installing MariaDB to ${MARIADB_PREFIX}..."
 
     local mariadb_build="${BUILD_DIR}/mariadb-server/build"
+    local build_config="RelWithDebInfo"
+    if $PGO_ENABLED; then
+        build_config="Release"
+    fi
 
-    run_privileged cmake --install "${mariadb_build}" --config RelWithDebInfo
+    run_privileged cmake --install "${mariadb_build}" --config "${build_config}"
 
     ok "MariaDB installed to ${MARIADB_PREFIX}"
 }
@@ -593,6 +602,9 @@ print_summary() {
     row ""
     row "TidesDB installed to : ${CYAN}${TIDESDB_PREFIX}${NC}"
     row "MariaDB installed to : ${CYAN}${MARIADB_PREFIX}${NC}"
+    if $PGO_ENABLED; then
+        row "Build type           : ${CYAN}Release + PGO${NC}"
+    fi
     row ""
     row "Start MariaDB:"
     row "  ${start_cmd} \\"
@@ -607,7 +619,7 @@ print_summary() {
     row "  INSTALL SONAME 'ha_tidesdb';"
     row ""
     row "Quick test:"
-    row "  CREATE TABLE t (id INT PRIMARY KEY) ENGINE=TidesDB;"
+    row "  CREATE TABLE t (id INT PRIMARY KEY) ENGINE=TIDESDB;"
     row "  INSERT INTO t VALUES (1), (2), (3);"
     row "  SELECT * FROM t;"
     row "  DROP TABLE t;"
@@ -623,13 +635,160 @@ print_summary() {
     echo ""
 }
 
+# ── PGO Phase 1: Instrument build ─────────────────────────────────
+pgo_instrument() {
+    info "PGO Phase 1/3: Building MariaDB with profiling instrumentation..."
+
+    local mariadb_src="${BUILD_DIR}/mariadb-server"
+    local mariadb_build="${mariadb_src}/build"
+    local profile_dir="${BUILD_DIR}/pgo-profiles"
+
+    mkdir -p "${profile_dir}"
+    # Clean previous build to ensure instrumentation flags apply everywhere
+    rm -rf "${mariadb_build}"
+    mkdir -p "${mariadb_build}"
+
+    local cmake_args=(
+        -S "${mariadb_src}"
+        -B "${mariadb_build}"
+        -DCMAKE_INSTALL_PREFIX="${MARIADB_PREFIX}"
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_PREFIX_PATH="${TIDESDB_PREFIX}"
+        -DTIDESDB_ROOT="${TIDESDB_PREFIX}"
+        -DWITH_MARIABACKUP=ON
+        -DWITH_UNIT_TESTS=OFF
+        "-DCMAKE_C_FLAGS=-fprofile-generate=${profile_dir} -fprofile-update=atomic"
+        "-DCMAKE_CXX_FLAGS=-fprofile-generate=${profile_dir} -fprofile-update=atomic"
+        "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-generate=${profile_dir}"
+        "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-generate=${profile_dir}"
+        "-DCMAKE_MODULE_LINKER_FLAGS=-fprofile-generate=${profile_dir}"
+    )
+
+    export TIDESDB_ROOT="${TIDESDB_PREFIX}"
+
+    case "$OS" in
+        macos)
+            local sdk_root cc cxx
+            sdk_root="$(xcrun --show-sdk-path 2>/dev/null || true)"
+            cc="$(xcrun -find clang 2>/dev/null || true)"
+            cxx="$(xcrun -find clang++ 2>/dev/null || true)"
+
+            [[ -n "$cc" ]]       && cmake_args+=(-DCMAKE_C_COMPILER="${cc}")
+            [[ -n "$cxx" ]]      && cmake_args+=(-DCMAKE_CXX_COMPILER="${cxx}")
+            [[ -n "$sdk_root" ]] && cmake_args+=(-DCMAKE_OSX_SYSROOT="${sdk_root}")
+            cmake_args+=(
+                -DWITH_SSL=bundled
+                -DWITH_PCRE=bundled
+                -G Ninja
+            )
+            ;;
+    esac
+
+    cmake "${cmake_args[@]}"
+    cmake --build "${mariadb_build}" --config Release --parallel "${JOBS}"
+
+    ok "PGO Phase 1/3: Instrumented build complete"
+}
+
+# ── PGO Phase 2: Train — run MTR to generate profile data ────────
+pgo_train() {
+    info "PGO Phase 2/3: Running TidesDB test suite to generate profile data..."
+
+    local mariadb_src="${BUILD_DIR}/mariadb-server"
+    local mtr_dir="${mariadb_src}/build/mysql-test"
+
+    if [[ ! -f "${mtr_dir}/mtr" ]]; then
+        die "MTR not found at ${mtr_dir}/mtr — instrumented build may have failed"
+    fi
+
+    # Run the tidesdb test suite as the training workload
+    info "Running: perl mtr --suite=tidesdb --parallel=${JOBS}"
+    (
+        cd "${mtr_dir}" && \
+        perl mtr --suite=tidesdb --parallel="${JOBS}" --force --retry=0
+    ) || warn "Some MTR tests may have failed during PGO training (non-fatal)"
+
+    local profile_dir="${BUILD_DIR}/pgo-profiles"
+    local profile_count
+    profile_count="$(find "${profile_dir}" -name '*.gcda' 2>/dev/null | wc -l)"
+
+    if [[ "${profile_count}" -eq 0 ]]; then
+        die "No profile data generated in ${profile_dir} — PGO training failed"
+    fi
+
+    ok "PGO Phase 2/3: Training complete (${profile_count} profile files generated)"
+}
+
+# ── PGO Phase 3: Optimized rebuild using profile data ─────────────
+pgo_optimize() {
+    info "PGO Phase 3/3: Rebuilding MariaDB with profile-guided optimizations..."
+
+    local mariadb_src="${BUILD_DIR}/mariadb-server"
+    local mariadb_build="${mariadb_src}/build"
+    local profile_dir="${BUILD_DIR}/pgo-profiles"
+
+    # Clean the build but keep the profile data
+    rm -rf "${mariadb_build}"
+    mkdir -p "${mariadb_build}"
+
+    local cmake_args=(
+        -S "${mariadb_src}"
+        -B "${mariadb_build}"
+        -DCMAKE_INSTALL_PREFIX="${MARIADB_PREFIX}"
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_PREFIX_PATH="${TIDESDB_PREFIX}"
+        -DTIDESDB_ROOT="${TIDESDB_PREFIX}"
+        -DWITH_MARIABACKUP=ON
+        -DWITH_UNIT_TESTS=OFF
+        "-DCMAKE_C_FLAGS=-fprofile-use=${profile_dir} -fprofile-correction"
+        "-DCMAKE_CXX_FLAGS=-fprofile-use=${profile_dir} -fprofile-correction"
+        "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-use=${profile_dir}"
+        "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-use=${profile_dir}"
+        "-DCMAKE_MODULE_LINKER_FLAGS=-fprofile-use=${profile_dir}"
+    )
+
+    export TIDESDB_ROOT="${TIDESDB_PREFIX}"
+
+    case "$OS" in
+        macos)
+            local sdk_root cc cxx
+            sdk_root="$(xcrun --show-sdk-path 2>/dev/null || true)"
+            cc="$(xcrun -find clang 2>/dev/null || true)"
+            cxx="$(xcrun -find clang++ 2>/dev/null || true)"
+
+            [[ -n "$cc" ]]       && cmake_args+=(-DCMAKE_C_COMPILER="${cc}")
+            [[ -n "$cxx" ]]      && cmake_args+=(-DCMAKE_CXX_COMPILER="${cxx}")
+            [[ -n "$sdk_root" ]] && cmake_args+=(-DCMAKE_OSX_SYSROOT="${sdk_root}")
+            cmake_args+=(
+                -DWITH_SSL=bundled
+                -DWITH_PCRE=bundled
+                -G Ninja
+            )
+            ;;
+    esac
+
+    cmake "${cmake_args[@]}"
+    cmake --build "${mariadb_build}" --config Release --parallel "${JOBS}"
+
+    ok "PGO Phase 3/3: Optimized build complete"
+}
+
 main() {
     mkdir -p "${BUILD_DIR}"
 
     install_deps
     build_tidesdb
     prepare_mariadb
-    build_mariadb
+
+    if $PGO_ENABLED; then
+        info "PGO enabled — performing 3-phase build (instrument → train → optimize)"
+        pgo_instrument
+        pgo_train
+        pgo_optimize
+    else
+        build_mariadb
+    fi
+
     install_mariadb
     setup_mariadb
     print_summary
