@@ -16,6 +16,8 @@
 */
 #pragma once
 
+#include "my_global.h"
+
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -23,7 +25,6 @@
 
 #include "handler.h"
 #include "my_base.h"
-#include "my_global.h"
 #include "thr_lock.h"
 
 extern "C"
@@ -164,6 +165,8 @@ struct tidesdb_trx_t
 {
     tidesdb_txn_t *txn;
     bool dirty;                                /* true once any DML uses txn */
+    bool stmt_savepoint_active;                /* true while a "stmt" savepoint exists */
+    bool stmt_was_dirty;                       /* true if current stmt had writes */
     tidesdb_isolation_level_t isolation_level; /* from first table opened */
 };
 

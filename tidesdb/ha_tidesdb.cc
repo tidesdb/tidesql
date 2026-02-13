@@ -16,7 +16,6 @@
 */
 #include "ha_tidesdb.h"
 
-#include <my_global.h>
 #include <mysql/plugin.h>
 
 #include <cstring>
@@ -76,11 +75,16 @@ static ulong srv_compaction_threads = 2;
 static ulong srv_log_level = 2;                                      /* TDB_LOG_WARN */
 static my_bool srv_debug_trace = 0;                                  /* per-op trace logging */
 static ulonglong srv_block_cache_size = TIDESDB_DEFAULT_BLOCK_CACHE; /* 256MB */
-static ulong srv_max_open_sstables = 256;
+static ulong srv_max_open_sstables = 512;
 
 static const char *log_level_names[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL", "NONE", NullS};
+#if MYSQL_VERSION_ID >= 120000
 static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_level_typelib",
                                     log_level_names, NULL, NULL};
+#else
+static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_level_typelib",
+                                    log_level_names, NULL};
+#endif
 
 static MYSQL_SYSVAR_ULONG(flush_threads, srv_flush_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -105,7 +109,7 @@ static MYSQL_SYSVAR_ULONGLONG(block_cache_size, srv_block_cache_size,
 
 static MYSQL_SYSVAR_ULONG(max_open_sstables, srv_max_open_sstables,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Max cached SSTable structures in LRU cache", NULL, NULL, 256, 1, 65536,
+                          "Max cached SSTable structures in LRU cache", NULL, NULL, 512, 1, 65536,
                           0);
 
 /* ******************** Online backup via system variable ******************** */
@@ -190,8 +194,8 @@ struct ha_table_option_struct
 };
 
 ha_create_table_option tidesdb_table_option_list[] = {
-    HA_TOPTION_NUMBER("WRITE_BUFFER_SIZE", write_buffer_size, 128 * 1024 * 1024, 1024,
-                      ULONGLONG_MAX, 1024),
+    HA_TOPTION_NUMBER("WRITE_BUFFER_SIZE", write_buffer_size, 32 * 1024 * 1024, 1024, ULONGLONG_MAX,
+                      1024),
     HA_TOPTION_NUMBER("MIN_DISK_SPACE", min_disk_space, 100ULL * 1024 * 1024, 0, ULONGLONG_MAX,
                       1024),
     HA_TOPTION_NUMBER("KLOG_VALUE_THRESHOLD", klog_value_threshold, 512, 0, ULONGLONG_MAX, 1),
@@ -205,7 +209,7 @@ ha_create_table_option tidesdb_table_option_list[] = {
     HA_TOPTION_NUMBER("SKIP_LIST_PROBABILITY", skip_list_probability, 25, 1, 100, 1),
     HA_TOPTION_NUMBER("BLOOM_FPR", bloom_fpr, 100, 1, 10000, 1),
     HA_TOPTION_NUMBER("L1_FILE_COUNT_TRIGGER", l1_file_count_trigger, 4, 1, 1024, 1),
-    HA_TOPTION_NUMBER("L0_QUEUE_STALL_THRESHOLD", l0_queue_stall_threshold, 10, 1, 1024, 1),
+    HA_TOPTION_NUMBER("L0_QUEUE_STALL_THRESHOLD", l0_queue_stall_threshold, 20, 1, 1024, 1),
     HA_TOPTION_ENUM("COMPRESSION", compression, "NONE,SNAPPY,LZ4,ZSTD,LZ4_FAST", 2),
     HA_TOPTION_ENUM("SYNC_MODE", sync_mode, "NONE,INTERVAL,FULL", 2),
     HA_TOPTION_ENUM("ISOLATION_LEVEL", isolation_level,
@@ -383,15 +387,50 @@ static tidesdb_trx_t *get_or_create_trx(THD *thd, handlerton *hton, tidesdb_isol
 
 /* ******************** Handlerton transaction callbacks ******************** */
 
+#if MYSQL_VERSION_ID >= 120000
 static int tidesdb_commit(THD *thd, bool all)
+#else
+static int tidesdb_commit(handlerton *, THD *thd, bool all)
+#endif
 {
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (!trx || !trx->txn) return 0;
 
-    /* Always commit eagerly -- even for statement-end within a BEGIN block.
-       TidesDB uses optimistic concurrency without row-level locking;
-       buffering writes across statements only increases contention and
-       write-buffer scan overhead with no isolation benefit. */
+    /* Determine whether this is the final commit for the transaction.
+       all=true  -> explicit COMMIT or transaction-level end
+       all=false -> statement-level; only a real commit when autocommit */
+    bool is_real_commit = all || !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+
+    if (!is_real_commit)
+    {
+        /* Statement-level commit inside a multi-statement transaction.
+           Defer the actual commit -- writes stay buffered in the txn,
+           avoiding expensive txn_begin + commit per statement.
+
+           If this statement had writes, create/update a savepoint marking
+           the last known-good state.  If a later statement fails,
+           tidesdb_rollback(all=false) can rollback to here instead of
+           aborting the entire txn.  Per TidesDB docs: creating a
+           savepoint with an existing name updates it; savepoints are
+           auto-freed on commit/rollback. */
+        if (trx->stmt_was_dirty)
+        {
+            tidesdb_txn_savepoint(trx->txn, "stmt");
+            trx->stmt_savepoint_active = true;
+        }
+        trx->stmt_was_dirty = false;
+        return 0;
+    }
+
+    /* Release any active statement savepoint before final commit/rollback.
+       Savepoints must be explicitly released before txn_commit. */
+    if (trx->stmt_savepoint_active)
+    {
+        tidesdb_txn_release_savepoint(trx->txn, "stmt");
+        trx->stmt_savepoint_active = false;
+    }
+
+    /* Real commit -- flush to storage */
     if (trx->dirty)
     {
         int rc = tidesdb_txn_commit(trx->txn);
@@ -403,48 +442,78 @@ static int tidesdb_commit(THD *thd, bool all)
             trx->dirty = false;
             return HA_ERR_GENERIC;
         }
-        /* After commit -- we always free.  txn_reset after commit has a known
-           concurrency bug that causes segfaults at high thread counts. */
+        /* After dirty commit we must free the txn so that the next
+           get_or_create_trx() starts a fresh transaction with a new
+           read snapshot.  txn_reset after commit produces a stale
+           snapshot that cannot see the just-committed data. */
         tidesdb_txn_free(trx->txn);
         trx->txn = NULL;
     }
     else
     {
-        /* Read-only transaction -- rollback + reset to reuse buffers.
-           This avoids the expensive free+begin cycle for pure reads
-           (saves ~10 mallocs per statement in oltp_read_write). */
+        /* Read-only transaction -- rollback and free.  Like the dirty
+           path, we must free so the next get_or_create_trx() begins a
+           fresh txn with a current read snapshot.  txn_reset after
+           rollback produces a stale snapshot that misses data committed
+           by other connections between statements. */
         tidesdb_txn_rollback(trx->txn);
-        int rrc = tidesdb_txn_reset(trx->txn, trx->isolation_level);
-        if (rrc != TDB_SUCCESS)
-        {
-            tidesdb_txn_free(trx->txn);
-            trx->txn = NULL;
-        }
-    }
-    trx->dirty = false;
-    return 0;
-}
-
-static int tidesdb_rollback(THD *thd, bool all)
-{
-    tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
-    if (!trx || !trx->txn) return 0;
-
-    /* Always rollback eagerly (same rationale as commit). */
-    tidesdb_txn_rollback(trx->txn);
-
-    /* Try txn_reset to reuse internal buffers. */
-    int rrc = tidesdb_txn_reset(trx->txn, trx->isolation_level);
-    if (rrc != TDB_SUCCESS)
-    {
         tidesdb_txn_free(trx->txn);
         trx->txn = NULL;
     }
     trx->dirty = false;
+    trx->stmt_savepoint_active = false;
     return 0;
 }
 
+#if MYSQL_VERSION_ID >= 120000
+static int tidesdb_rollback(THD *thd, bool all)
+#else
+static int tidesdb_rollback(handlerton *, THD *thd, bool all)
+#endif
+{
+    tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
+    if (!trx || !trx->txn) return 0;
+
+    bool is_real_rollback = all || !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+
+    if (!is_real_rollback)
+    {
+        /* Statement-level rollback inside a multi-statement transaction.
+           If a savepoint exists from a prior successful statement,
+           rollback to it -- undoes only this statement's writes.
+           If no savepoint (this is the first statement), rollback
+           the entire txn since there's nothing to preserve. */
+        if (trx->stmt_savepoint_active)
+        {
+            tidesdb_txn_rollback_to_savepoint(trx->txn, "stmt");
+            return 0;
+        }
+        /* First statement failed -- no prior good state to restore.
+           Fall through to full rollback. */
+    }
+
+    /* Release any active savepoint before full rollback. */
+    if (trx->stmt_savepoint_active)
+    {
+        tidesdb_txn_release_savepoint(trx->txn, "stmt");
+        trx->stmt_savepoint_active = false;
+    }
+
+    /* Full rollback -- real transaction end, autocommit, or first
+       statement failure with no savepoint to restore to. */
+    tidesdb_txn_rollback(trx->txn);
+    tidesdb_txn_free(trx->txn);
+    trx->txn = NULL;
+    trx->dirty = false;
+    trx->stmt_savepoint_active = false;
+    return 0;
+}
+
+#if MYSQL_VERSION_ID >= 120000
 static int tidesdb_close_connection(THD *thd)
+#else
+static int tidesdb_close_connection(handlerton *, THD *thd)
+#endif
 {
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (trx)
@@ -665,8 +734,8 @@ uint ha_tidesdb::key_copy_to_comparable(KEY *key_info, const uchar *key_buf, uin
 
 /*
   Build PK bytes from a record.
-  -- With user PK -- use make_comparable_key for memcmp-correct ordering.
-  -- Without PK   -- not applicable for NEW rows (caller generates hidden id);
+  -- With user PK  -- use make_comparable_key for memcmp-correct ordering.
+  -- Without PK    -- not applicable for NEW rows (caller generates hidden id);
                      for EXISTING rows current_pk already holds the key.
 */
 uint ha_tidesdb::pk_from_record(const uchar *record, uchar *out)
@@ -688,6 +757,7 @@ uint ha_tidesdb::pk_from_record(const uchar *record, uchar *out)
   Compute the comparable key byte length for a KEY.
   Matches what make_comparable_key() actually produces:
     sum of (nullable ? 1 : 0) + kp->length for each key part.
+
   NOTE -- ki->key_length includes store_length overhead (e.g. 2 bytes
   per VARCHAR part for length prefix in key_copy format) which is
   not present in the comparable key output.
@@ -736,7 +806,7 @@ bool ha_tidesdb::try_keyread_from_index(const uint8_t *ik, size_t iks, uint idx,
     KEY *idx_key = &table->key_info[idx];
     uint idx_col_len = share->idx_comp_key_len[idx];
 
-    /* Check every column in read_set -- it must be a PK part or an index
+    /* We check every column in read_set -- it must be a PK part or an index
        part, and must be an integer type we can reverse-decode. */
     for (uint c = bitmap_get_first_set(table->read_set); c != MY_BIT_NONE;
          c = bitmap_get_next_set(table->read_set, c))
@@ -812,7 +882,7 @@ bool ha_tidesdb::try_keyread_from_index(const uint8_t *ik, size_t iks, uint idx,
         }
     };
 
-    /* Decode index column parts from the head of the key */
+    /* We decode index column parts from the head of the key */
     const uint8_t *pos = ik;
     for (uint p = 0; p < idx_key->user_defined_key_parts; p++)
     {
@@ -838,7 +908,7 @@ bool ha_tidesdb::try_keyread_from_index(const uint8_t *ik, size_t iks, uint idx,
         pos += kp->length;
     }
 
-    /* Decode PK parts from the tail of the key */
+    /* We decode PK parts from the tail of the key */
     const uint8_t *pk_start = ik + idx_col_len;
     pos = pk_start;
     for (uint p = 0; p < pk_key->user_defined_key_parts; p++)
@@ -1077,11 +1147,11 @@ int ha_tidesdb::close(void)
         scan_iter = NULL;
         scan_iter_cf_ = NULL;
     }
-    if (stmt_txn)
-    {
-        tidesdb_txn_free(stmt_txn);
-        stmt_txn = NULL;
-    }
+    /* stmt_txn is a borrowed pointer into the per-connection trx->txn.
+       We do not free it here -- the txn is owned by the per-connection trx
+       and will be freed in tidesdb_close_connection(). */
+    stmt_txn = NULL;
+    stmt_txn_dirty = false;
     DBUG_RETURN(0);
 }
 
@@ -1226,10 +1296,10 @@ const std::string &ha_tidesdb::serialize_row(const uchar *buf)
     pos += table->s->null_bytes;
 
     /* Pack each non-null field using Field::pack().
-       - Fixed-size fields (INT, BIGINT, DATE) -- copies pack_length() bytes
-       - CHAR                                  -- strips trailing spaces, stores length + data
-       - VARCHAR                               -- stores actual length + data (not padded to max)
-       - BLOB                                  -- stores length + blob data inline */
+       -- Fixed-size fields (INT, BIGINT, DATE) -- copies pack_length() bytes
+       -- CHAR                                  -- strips trailing spaces, stores length + data
+       -- VARCHAR                               -- stores actual length + data (not padded to max)
+       -- BLOB                                  -- stores length + blob data inline */
     for (uint i = 0; i < table->s->fields; i++)
     {
         Field *f = table->field[i];
@@ -1483,7 +1553,11 @@ int ha_tidesdb::write_row(const uchar *buf)
     stmt_txn_dirty = true;
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
-        if (trx) trx->dirty = true;
+        if (trx)
+        {
+            trx->dirty = true;
+            trx->stmt_was_dirty = true;
+        }
     }
     if (unlikely(srv_debug_trace))
     {
@@ -2212,7 +2286,11 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     stmt_txn_dirty = true;
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
-        if (trx) trx->dirty = true;
+        if (trx)
+        {
+            trx->dirty = true;
+            trx->stmt_was_dirty = true;
+        }
     }
 
     int rc;
@@ -2308,7 +2386,11 @@ int ha_tidesdb::delete_row(const uchar *buf)
     stmt_txn_dirty = true;
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
-        if (trx) trx->dirty = true;
+        if (trx)
+        {
+            trx->dirty = true;
+            trx->stmt_was_dirty = true;
+        }
     }
 
     /* We delete data row */
@@ -2449,7 +2531,7 @@ Item *ha_tidesdb::idx_cond_push(uint keyno, Item *idx_cond)
 
     /* Accept the pushed condition -- the server will evaluate it for us
        during index scans via handler::pushed_idx_cond.  For secondary
-       index scans the condition is checked BEFORE the PK lookup, saving
+       index scans the condition is checked before the PK lookup, saving
        the most expensive operation when the condition filters rows. */
     pushed_idx_cond = idx_cond;
     pushed_idx_cond_keyno = keyno;
@@ -2739,22 +2821,25 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
 
         /* Register at transaction level if inside BEGIN block */
         if (thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
+        {
             trans_register_ha(thd, true, ht, 0);
+
+            /* Savepoint for statement-level rollback is managed by
+               tidesdb_commit(all=false) and tidesdb_rollback(all=false). */
+        }
     }
     else
     {
         /* Statement end (F_UNLCK).
-           Free cached iterator before hton->commit() can free/reset the txn.
-           The iterator stores a live pointer to iter->txn which is dereferenced
-           by seek/next; it must be freed while the txn is still valid. */
+           Always free the cached iterator before hton->commit() can
+           free/reset the txn.  The iterator holds a live pointer into
+           the txn which would become dangling after txn_free. */
         if (scan_iter)
         {
             tidesdb_iter_free(scan_iter);
             scan_iter = NULL;
             scan_iter_cf_ = NULL;
         }
-        /* Dirty flag already propagated eagerly in write_row/update_row/delete_row.
-           Do not commit here -- hton->commit() handles that. */
         stmt_txn = NULL;
         stmt_txn_dirty = false;
     }
@@ -3010,7 +3095,7 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
            altered_table->key_info fields have ptr into altered_table->record[0],
            but data is in table->record[0].
 
-           We use move_field_offset with ptdiff = table->record[0] - altered_table->record[0]
+           We use move_field_offset with ptdiff = table->record[0] -- altered_table->record[0]
            to temporarily rebase field pointers (same pattern as make_comparable_key). */
         my_ptrdiff_t ptdiff = (my_ptrdiff_t)(table->record[0] - altered_table->record[0]);
 
@@ -3281,7 +3366,7 @@ int ha_tidesdb::delete_table(const char *name)
 
     std::string cf_name = path_to_cf_name(name);
 
-    /* We collect secondary index CF names BEFORE dropping so we can
+    /* We collect secondary index CF names before dropping so we can
        force-remove their directories afterwards. */
     std::vector<std::string> idx_cf_names;
     {
@@ -3335,8 +3420,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30000,
+    0x30100,
     NULL,
     tidesdb_system_variables,
-    "3.0.0",
+    "3.1.0",
     MariaDB_PLUGIN_MATURITY_EXPERIMENTAL} maria_declare_plugin_end;
