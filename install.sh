@@ -635,7 +635,7 @@ print_summary() {
     echo ""
 }
 
-# ── PGO Phase 1: Instrument build ─────────────────────────────────
+# ── PGO Phase 1 —— Instrument build ─────────────────────────────────
 pgo_instrument() {
     info "PGO Phase 1/3: Building MariaDB with profiling instrumentation..."
 
@@ -690,7 +690,7 @@ pgo_instrument() {
     ok "PGO Phase 1/3: Instrumented build complete"
 }
 
-# ── PGO Phase 2: Train — run MTR to generate profile data ────────
+# ── PGO Phase 2 —— Train — run MTR to generate profile data ────────
 pgo_train() {
     info "PGO Phase 2/3: Running TidesDB test suite to generate profile data..."
 
@@ -719,7 +719,7 @@ pgo_train() {
     ok "PGO Phase 2/3: Training complete (${profile_count} profile files generated)"
 }
 
-# ── PGO Phase 3: Optimized rebuild using profile data ─────────────
+# ── PGO Phase 3 —— Optimized rebuild using profile data ─────────────
 pgo_optimize() {
     info "PGO Phase 3/3: Rebuilding MariaDB with profile-guided optimizations..."
 
@@ -781,7 +781,7 @@ main() {
     prepare_mariadb
 
     if $PGO_ENABLED; then
-        info "PGO enabled — performing 3-phase build (instrument → train → optimize)"
+        info "PGO enabled —— performing 3-phase build (instrument ⤍ train ⤍ optimize)"
         pgo_instrument
         pgo_train
         pgo_optimize
