@@ -21,7 +21,7 @@ t1	CREATE TABLE `t1` (
   `score` decimal(10,2) DEFAULT NULL,
   `bio` text DEFAULT NULL,
   `born` date DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
 #
 # ============================================
 # TEST 2: INSERT — single row
