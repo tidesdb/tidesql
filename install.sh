@@ -80,10 +80,18 @@ detect_os() {
             if [[ -f /etc/os-release ]]; then
                 . /etc/os-release
                 case "$ID" in
-                    ubuntu|debian|pop|linuxmint) echo "debian"  ;;
-                    fedora|rhel|centos|rocky|alma) echo "redhat" ;;
-                    arch|manjaro) echo "arch" ;;
-                    *) echo "linux-unknown" ;;
+                    ubuntu|debian|pop|linuxmint|raspbian) echo "debian"  ;;
+                    fedora|rhel|centos|rocky|alma|ol|amzn|scientific) echo "redhat" ;;
+                    arch|manjaro|endeavouros) echo "arch" ;;
+                    *)
+                        # Fallback: check ID_LIKE for parent distro family
+                        case "${ID_LIKE:-}" in
+                            *debian*|*ubuntu*) echo "debian"  ;;
+                            *rhel*|*fedora*|*centos*) echo "redhat" ;;
+                            *arch*) echo "arch" ;;
+                            *) echo "linux-unknown" ;;
+                        esac
+                        ;;
                 esac
             else
                 echo "linux-unknown"

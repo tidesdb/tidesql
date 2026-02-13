@@ -396,13 +396,33 @@ static int tidesdb_commit(THD *thd, bool all)
     if (!is_real_commit)
     {
         /* Statement-level commit inside a multi-statement transaction.
-           Defer the actual commit -- writes stay buffered in the txn.
-           The txn and any cached iterators survive across statements,
-           avoiding expensive txn_begin + iter_new per statement. */
+           Defer the actual commit -- writes stay buffered in the txn,
+           avoiding expensive txn_begin + commit per statement.
+
+           If this statement had writes, create/update a savepoint marking
+           the last known-good state.  If a later statement fails,
+           tidesdb_rollback(all=false) can rollback to here instead of
+           aborting the entire txn.  Per TidesDB docs: creating a
+           savepoint with an existing name updates it; savepoints are
+           auto-freed on commit/rollback. */
+        if (trx->stmt_was_dirty)
+        {
+            tidesdb_txn_savepoint(trx->txn, "stmt");
+            trx->stmt_savepoint_active = true;
+        }
+        trx->stmt_was_dirty = false;
         return 0;
     }
 
-    /* Real commit -- flush to storage and reset txn for reuse */
+    /* Release any active statement savepoint before final commit/rollback.
+       Savepoints must be explicitly released before txn_commit. */
+    if (trx->stmt_savepoint_active)
+    {
+        tidesdb_txn_release_savepoint(trx->txn, "stmt");
+        trx->stmt_savepoint_active = false;
+    }
+
+    /* Real commit -- flush to storage */
     if (trx->dirty)
     {
         int rc = tidesdb_txn_commit(trx->txn);
@@ -414,27 +434,26 @@ static int tidesdb_commit(THD *thd, bool all)
             trx->dirty = false;
             return HA_ERR_GENERIC;
         }
-        /* Reset txn for reuse -- avoids expensive free+begin cycle.
-           The txn object and its internal buffers are retained. */
-        int rrc = tidesdb_txn_reset(trx->txn, trx->isolation_level);
-        if (rrc != TDB_SUCCESS)
-        {
-            tidesdb_txn_free(trx->txn);
-            trx->txn = NULL;
-        }
+        /* After dirty commit we must free the txn so that the next
+           get_or_create_trx() starts a fresh transaction with a new
+           read snapshot.  txn_reset after commit produces a stale
+           snapshot that cannot see the just-committed data. */
+        tidesdb_txn_free(trx->txn);
+        trx->txn = NULL;
     }
     else
     {
-        /* Read-only transaction -- rollback + reset to reuse buffers. */
+        /* Read-only transaction -- rollback and free.  Like the dirty
+           path, we must free so the next get_or_create_trx() begins a
+           fresh txn with a current read snapshot.  txn_reset after
+           rollback produces a stale snapshot that misses data committed
+           by other connections between statements. */
         tidesdb_txn_rollback(trx->txn);
-        int rrc = tidesdb_txn_reset(trx->txn, trx->isolation_level);
-        if (rrc != TDB_SUCCESS)
-        {
-            tidesdb_txn_free(trx->txn);
-            trx->txn = NULL;
-        }
+        tidesdb_txn_free(trx->txn);
+        trx->txn = NULL;
     }
     trx->dirty = false;
+    trx->stmt_savepoint_active = false;
     return 0;
 }
 
@@ -445,26 +464,36 @@ static int tidesdb_rollback(THD *thd, bool all)
 
     bool is_real_rollback = all || !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
 
-    if (!is_real_rollback && !trx->dirty)
+    if (!is_real_rollback)
     {
-        /* Statement-level rollback of a read-only statement inside a
-           multi-statement transaction.  Nothing to undo -- the txn
-           has no pending writes from this statement. */
-        return 0;
+        /* Statement-level rollback inside a multi-statement transaction.
+           If a savepoint exists from a prior successful statement,
+           rollback to it -- undoes only this statement's writes.
+           If no savepoint (this is the first statement), rollback
+           the entire txn since there's nothing to preserve. */
+        if (trx->stmt_savepoint_active)
+        {
+            tidesdb_txn_rollback_to_savepoint(trx->txn, "stmt");
+            return 0;
+        }
+        /* First statement failed -- no prior good state to restore.
+           Fall through to full rollback. */
     }
 
-    /* Full rollback -- either real transaction end, autocommit, or a
-       statement failure that dirtied the txn (TidesDB has no savepoints
-       so the entire txn must be rolled back). */
+    /* Release any active savepoint before full rollback. */
+    if (trx->stmt_savepoint_active)
+    {
+        tidesdb_txn_release_savepoint(trx->txn, "stmt");
+        trx->stmt_savepoint_active = false;
+    }
+
+    /* Full rollback -- real transaction end, autocommit, or first
+       statement failure with no savepoint to restore to. */
     tidesdb_txn_rollback(trx->txn);
-
-    int rrc = tidesdb_txn_reset(trx->txn, trx->isolation_level);
-    if (rrc != TDB_SUCCESS)
-    {
-        tidesdb_txn_free(trx->txn);
-        trx->txn = NULL;
-    }
+    tidesdb_txn_free(trx->txn);
+    trx->txn = NULL;
     trx->dirty = false;
+    trx->stmt_savepoint_active = false;
     return 0;
 }
 
@@ -1508,7 +1537,7 @@ int ha_tidesdb::write_row(const uchar *buf)
     stmt_txn_dirty = true;
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
-        if (trx) trx->dirty = true;
+        if (trx) { trx->dirty = true; trx->stmt_was_dirty = true; }
     }
     if (unlikely(srv_debug_trace))
     {
@@ -2237,7 +2266,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     stmt_txn_dirty = true;
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
-        if (trx) trx->dirty = true;
+        if (trx) { trx->dirty = true; trx->stmt_was_dirty = true; }
     }
 
     int rc;
@@ -2333,7 +2362,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
     stmt_txn_dirty = true;
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
-        if (trx) trx->dirty = true;
+        if (trx) { trx->dirty = true; trx->stmt_was_dirty = true; }
     }
 
     /* We delete data row */
@@ -2764,20 +2793,20 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
 
         /* Register at transaction level if inside BEGIN block */
         if (thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
+        {
             trans_register_ha(thd, true, ht, 0);
+
+            /* Savepoint for statement-level rollback is managed by
+               tidesdb_commit(all=false) and tidesdb_rollback(all=false). */
+        }
     }
     else
     {
         /* Statement end (F_UNLCK).
-           When inside a multi-statement transaction (BEGIN block) with
-           deferred commit, the txn survives across statements.  Keep the
-           cached iterator alive so the next statement can reuse it via
-           tidesdb_iter_seek() -- avoiding the expensive tidesdb_iter_new()
-           merge-heap build per statement.
-           For autocommit statements, the txn will be committed/reset by
-           hton->commit() right after this call, so free the iterator now
-           while the txn is still valid. */
-        if (scan_iter && !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN))
+           Always free the cached iterator before hton->commit() can
+           free/reset the txn.  The iterator holds a live pointer into
+           the txn which would become dangling after txn_free. */
+        if (scan_iter)
         {
             tidesdb_iter_free(scan_iter);
             scan_iter = NULL;
