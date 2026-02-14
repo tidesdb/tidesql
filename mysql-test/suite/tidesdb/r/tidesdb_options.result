@@ -32,7 +32,7 @@ Table	Create Table
 t_defaults	CREATE TABLE `t_defaults` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
 INSERT INTO t_defaults VALUES (1, 'default_opts');
 SELECT * FROM t_defaults;
 id	val
@@ -49,7 +49,7 @@ Table	Create Table
 t_none	CREATE TABLE `t_none` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `COMPRESSION`='NONE'
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `COMPRESSION`='NONE'
 INSERT INTO t_none VALUES (1, 'no compression');
 SELECT * FROM t_none;
 id	val
@@ -61,7 +61,7 @@ Table	Create Table
 t_zstd	CREATE TABLE `t_zstd` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `COMPRESSION`='ZSTD'
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `COMPRESSION`='ZSTD'
 INSERT INTO t_zstd VALUES (1, 'zstd compressed');
 SELECT * FROM t_zstd;
 id	val
@@ -78,7 +78,7 @@ Table	Create Table
 t_nobloom	CREATE TABLE `t_nobloom` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `BLOOM_FILTER`=0
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `BLOOM_FILTER`=0
 INSERT INTO t_nobloom VALUES (1, 'no bloom');
 SELECT * FROM t_nobloom;
 id	val
@@ -90,7 +90,7 @@ Table	Create Table
 t_lowfpr	CREATE TABLE `t_lowfpr` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `BLOOM_FPR`=10
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `BLOOM_FPR`=10
 INSERT INTO t_lowfpr VALUES (1, 'low fpr 0.1%');
 SELECT * FROM t_lowfpr;
 id	val
@@ -107,7 +107,7 @@ Table	Create Table
 t_bigbuf	CREATE TABLE `t_bigbuf` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `WRITE_BUFFER_SIZE`=16777216
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `WRITE_BUFFER_SIZE`=16777216
 INSERT INTO t_bigbuf VALUES (1, '16MB write buffer');
 SELECT * FROM t_bigbuf;
 id	val
@@ -123,7 +123,7 @@ SHOW CREATE TABLE t_syncnone;
 Table	Create Table
 t_syncnone	CREATE TABLE `t_syncnone` (
   `id` int(11) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `SYNC_MODE`='NONE'
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `SYNC_MODE`='NONE'
 INSERT INTO t_syncnone VALUES (1);
 SELECT * FROM t_syncnone;
 id
@@ -134,7 +134,7 @@ SHOW CREATE TABLE t_syncint;
 Table	Create Table
 t_syncint	CREATE TABLE `t_syncint` (
   `id` int(11) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `SYNC_MODE`='INTERVAL' `SYNC_INTERVAL_US`=500000
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `SYNC_MODE`='INTERVAL' `SYNC_INTERVAL_US`=500000
 INSERT INTO t_syncint VALUES (1);
 SELECT * FROM t_syncint;
 id
@@ -151,7 +151,7 @@ Table	Create Table
 t_rc	CREATE TABLE `t_rc` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `ISOLATION_LEVEL`='READ_COMMITTED'
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `ISOLATION_LEVEL`='READ_COMMITTED'
 INSERT INTO t_rc VALUES (1, 'read committed');
 SELECT * FROM t_rc;
 id	val
@@ -163,7 +163,7 @@ Table	Create Table
 t_ser	CREATE TABLE `t_ser` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `ISOLATION_LEVEL`='SERIALIZABLE'
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `ISOLATION_LEVEL`='SERIALIZABLE'
 INSERT INTO t_ser VALUES (1, 'serializable');
 SELECT * FROM t_ser;
 id	val
@@ -180,7 +180,7 @@ Table	Create Table
 t_btree	CREATE TABLE `t_btree` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `USE_BTREE`=1
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `USE_BTREE`=1
 INSERT INTO t_btree VALUES (1, 'btree format');
 SELECT * FROM t_btree;
 id	val
@@ -211,7 +211,7 @@ Table	Create Table
 t_multi	CREATE TABLE `t_multi` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(100) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `COMPRESSION`='ZSTD' `WRITE_BUFFER_SIZE`=8388608 `BLOOM_FILTER`=1 `BLOOM_FPR`=50 `BLOCK_INDEXES`=1 `SYNC_MODE`='FULL' `ISOLATION_LEVEL`='REPEATABLE_READ' `LEVEL_SIZE_RATIO`=8 `MIN_LEVELS`=3 `SKIP_LIST_MAX_LEVEL`=16 `SKIP_LIST_PROBABILITY`=50
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `COMPRESSION`='ZSTD' `WRITE_BUFFER_SIZE`=8388608 `BLOOM_FILTER`=1 `BLOOM_FPR`=50 `BLOCK_INDEXES`=1 `SYNC_MODE`='FULL' `ISOLATION_LEVEL`='REPEATABLE_READ' `LEVEL_SIZE_RATIO`=8 `MIN_LEVELS`=3 `SKIP_LIST_MAX_LEVEL`=16 `SKIP_LIST_PROBABILITY`=50
 INSERT INTO t_multi VALUES (1, 'multi-option table');
 INSERT INTO t_multi VALUES (2, 'second row');
 SELECT * FROM t_multi;
@@ -238,7 +238,7 @@ SHOW CREATE TABLE t_default_iso;
 Table	Create Table
 t_default_iso	CREATE TABLE `t_default_iso` (
   `id` int(11) DEFAULT NULL
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
 INSERT INTO t_default_iso VALUES (1), (2), (3);
 SELECT * FROM t_default_iso;
 id

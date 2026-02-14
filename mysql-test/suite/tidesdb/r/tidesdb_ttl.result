@@ -118,7 +118,7 @@ t_ttl_show	CREATE TABLE `t_ttl_show` (
   `val` varchar(50) DEFAULT NULL,
   `row_ttl` int(11) DEFAULT NULL `TTL`=1,
   PRIMARY KEY (`id`)
-) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `TTL`=3600
+) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `TTL`=3600
 DROP TABLE t_ttl_show;
 #
 #
