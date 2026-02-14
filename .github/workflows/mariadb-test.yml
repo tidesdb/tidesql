@@ -152,9 +152,11 @@ jobs:
     - name: Get latest MariaDB release tag
       id: mariadb-release
       shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         for i in 1 2 3; do
-          LATEST_TAG=$(curl -s https://api.github.com/repos/MariaDB/server/releases/latest | jq -r '.tag_name')
+          LATEST_TAG=$(curl -s -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/MariaDB/server/releases/latest | jq -r '.tag_name')
           if [ -n "$LATEST_TAG" ] && [ "$LATEST_TAG" != "null" ]; then
             echo "tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
             echo "Latest MariaDB release: ${LATEST_TAG}"
@@ -164,7 +166,7 @@ jobs:
           sleep 5
         done
         echo "Failed to get MariaDB release tag after 3 attempts, using fallback"
-        echo "tag=mariadb-11.4.5" >> $GITHUB_OUTPUT
+        echo "tag=mariadb-12.2.2" >> $GITHUB_OUTPUT
 
     - name: Clone MariaDB server
       shell: bash
