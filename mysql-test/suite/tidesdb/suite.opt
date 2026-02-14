@@ -1,1 +1,1 @@
---plugin-load-add=$HA_TIDESDB_SO --character-set-server=latin1 --collation-server=latin1_swedish_ci
+--plugin-load-add=$HA_TIDESDB_SO

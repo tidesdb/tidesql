@@ -190,7 +190,7 @@ t_vcol_show	CREATE TABLE `t_vcol_show` (
   `v_sum` int(11) GENERATED ALWAYS AS (`a` + `b`) VIRTUAL,
   `s_prod` int(11) GENERATED ALWAYS AS (`a` * `b`) STORED,
   PRIMARY KEY (`id`)
-) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
 DROP TABLE t_vcol_show;
 #
 #

@@ -292,7 +292,7 @@ t_show_part	CREATE TABLE `t_show_part` (
   `id` int(11) NOT NULL,
   `val` varchar(50) DEFAULT NULL,
   PRIMARY KEY (`id`)
-) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci
+) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
  PARTITION BY HASH (`id`)
 PARTITIONS 2
 DROP TABLE t_show_part;
