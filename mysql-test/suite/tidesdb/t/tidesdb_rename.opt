@@ -1,4 +1,2 @@
 --plugin-maturity=unknown
 --plugin-load-add=ha_tidesdb
---character-set-server=latin1
---collation-server=latin1_swedish_ci

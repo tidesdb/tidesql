@@ -31,7 +31,7 @@ t1	CREATE TABLE `t1` (
   `b_name` varchar(100) DEFAULT NULL,
   `c` int(11) DEFAULT 999,
   PRIMARY KEY (`id`)
-) ENGINE=TIDESDB DEFAULT CHARSET=latin1 COLLATE=latin1_swedish_ci `SYNC_MODE`='NONE'
+) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `SYNC_MODE`='NONE'
 # ---- INPLACE: add secondary index ----
 ALTER TABLE t1 ADD INDEX idx_a (a), ALGORITHM=INPLACE;
 SHOW INDEX FROM t1;
