@@ -40,8 +40,8 @@
 #   ./install.sh [OPTIONS]
 #
 # Options:
-#   --tidesdb-version VERSION   TidesDB release tag        (default: v8.3.2)
-#   --mariadb-version VERSION   MariaDB branch or tag      (default: 12.1)
+#   --tidesdb-version VERSION   TidesDB release tag        (default: latest from GitHub)
+#   --mariadb-version VERSION   MariaDB branch or tag      (default: latest from GitHub)
 #   --tidesdb-prefix  DIR       TidesDB install prefix     (default: platform-dependent)
 #   --mariadb-prefix  DIR       MariaDB install prefix     (default: platform-dependent)
 #   --build-dir       DIR       Working directory          (default: platform-dependent)
@@ -63,7 +63,7 @@
 #
 # Examples:
 #   ./install.sh
-#   ./install.sh --tidesdb-version v8.3.2 --mariadb-version 12.1
+#   ./install.sh --tidesdb-version v8.4.0 --mariadb-version 12.1
 #   ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
 #   ./install.sh --mariadb-version mariadb-12.1.2
 #   ./install.sh --skip-deps --skip-tidesdb
@@ -116,8 +116,31 @@ else
     DEFAULT_BUILD_DIR="/tmp/tidesql-build"
 fi
 
-TIDESDB_VERSION="v8.3.2"
-MARIADB_VERSION="12.1"
+# ── Fetch latest release versions from GitHub ────────────────────────────────
+get_latest_tidesdb_version() {
+    local version
+    version=$(curl -fsSL "https://api.github.com/repos/tidesdb/tidesdb/releases/latest" 2>/dev/null \
+        | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+    if [[ -z "$version" ]]; then
+        echo "v8.3.2"  # fallback
+    else
+        echo "$version"
+    fi
+}
+
+get_latest_mariadb_version() {
+    local version
+    version=$(curl -fsSL "https://api.github.com/repos/MariaDB/server/releases/latest" 2>/dev/null \
+        | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+    if [[ -z "$version" ]]; then
+        echo "12.1"  # fallback
+    else
+        echo "$version"
+    fi
+}
+
+TIDESDB_VERSION=""
+MARIADB_VERSION=""
 TIDESDB_PREFIX="${DEFAULT_TIDESDB_PREFIX}"
 MARIADB_PREFIX="${DEFAULT_MARIADB_PREFIX}"
 BUILD_DIR="${DEFAULT_BUILD_DIR}"
@@ -160,6 +183,16 @@ while [[ $# -gt 0 ]]; do
         *) die "Unknown option: $1 (try --help)" ;;
     esac
 done
+
+# ── Resolve versions (fetch from GitHub if not specified) ────────────────────
+if [[ -z "$TIDESDB_VERSION" ]]; then
+    info "Fetching latest TidesDB version from GitHub..."
+    TIDESDB_VERSION="$(get_latest_tidesdb_version)"
+fi
+if [[ -z "$MARIADB_VERSION" ]]; then
+    info "Fetching latest MariaDB version from GitHub..."
+    MARIADB_VERSION="$(get_latest_mariadb_version)"
+fi
 
 # ── Print configuration ────────────────────────────────────────────────────
 _cfg_row() {
