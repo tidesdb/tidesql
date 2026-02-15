@@ -117,9 +117,21 @@ else
 fi
 
 # ── Fetch latest release versions from GitHub ────────────────────────────────
+# Works on Linux, macOS, and Windows (MSYS2/Git Bash) using curl or wget
+_fetch_url() {
+    local url="$1"
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$url" 2>/dev/null
+    elif command -v wget &>/dev/null; then
+        wget -qO- "$url" 2>/dev/null
+    else
+        echo ""
+    fi
+}
+
 get_latest_tidesdb_version() {
     local version
-    version=$(curl -fsSL "https://api.github.com/repos/tidesdb/tidesdb/releases/latest" 2>/dev/null \
+    version=$(_fetch_url "https://api.github.com/repos/tidesdb/tidesdb/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
         echo "v8.3.2"  # fallback
@@ -130,7 +142,7 @@ get_latest_tidesdb_version() {
 
 get_latest_mariadb_version() {
     local version
-    version=$(curl -fsSL "https://api.github.com/repos/MariaDB/server/releases/latest" 2>/dev/null \
+    version=$(_fetch_url "https://api.github.com/repos/MariaDB/server/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
         echo "12.1"  # fallback
