@@ -3223,7 +3223,9 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
              -- invalidated by rnd_init/index_init if the txn changes,
              -- freed in close() when the handler is destroyed. */
         bool in_multi_stmt_txn = thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
-        if (scan_iter && (!in_multi_stmt_txn || stmt_txn_dirty))
+        tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, ht);
+        bool txn_has_writes = trx && trx->dirty;
+        if (scan_iter && (!in_multi_stmt_txn || stmt_txn_dirty || txn_has_writes))
         {
             /* Free the iterator when:
                (a) autocommit                -- txn will be freed by hton->commit(all=true), or
@@ -3231,7 +3233,13 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
                    built from a snapshot of the txn write buffer at iter_new()
                    time (tidesdb_merge_source_from_txn_ops); subsequent writes
                    are invisible to the old heap, so the next scan must get a
-                   fresh iterator to see its own writes. */
+                   fresh iterator to see its own writes, or
+               (c) the transaction had any prior writes -- the iterator's merge
+                   heap includes MERGE_SOURCE_TXN_OPS from the txn; when COMMIT
+                   frees the txn, those ops become dangling pointers.  If the
+                   allocator returns the same address for the next txn, the
+                   pointer comparison in rnd_init/index_init would falsely pass
+                   and reuse the stale iterator (use-after-free). */
             tidesdb_iter_free(scan_iter);
             scan_iter = NULL;
             scan_iter_cf_ = NULL;
