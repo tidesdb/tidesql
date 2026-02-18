@@ -1818,7 +1818,7 @@ int ha_tidesdb::rnd_init(bool scan)
 
     /* Reuse cached iterator if it belongs to the same CF AND same txn.
        tidesdb_iter_new() is extremely expensive (builds merge heap from
-       ALL SSTables).  tidesdb_iter_seek() reuses cached SST sources and
+       all SSTables).  tidesdb_iter_seek() reuses cached SST sources and
        just repositions them -- orders of magnitude cheaper.
        If the txn changed (e.g. after COMMIT created a new one), the
        iterator holds a stale txn pointer and must be recreated. */
@@ -1931,7 +1931,7 @@ int ha_tidesdb::index_init(uint idx, bool sorted)
     /* Reuse cached iterator if it belongs to the same CF AND same txn.
        In nested-loop joins, index_init/index_end cycle N times on the
        same index; reusing the iterator avoids N expensive iter_new() calls
-       (each builds a merge heap from ALL SSTables).
+       (each builds a merge heap from all SSTables).
        If the txn changed (e.g. after COMMIT created a new one), the
        iterator holds a stale txn pointer and must be recreated. */
     if (scan_iter && (scan_iter_cf_ != target_cf || scan_iter_txn_ != scan_txn))
@@ -3226,7 +3226,7 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
         if (scan_iter && (!in_multi_stmt_txn || stmt_txn_dirty))
         {
             /* Free the iterator when:
-               (a) autocommit -- txn will be freed by hton->commit(all=true), or
+               (a) autocommit                -- txn will be freed by hton->commit(all=true), or
                (b) this statement had writes -- the cached merge heap was
                    built from a snapshot of the txn write buffer at iter_new()
                    time (tidesdb_merge_source_from_txn_ops); subsequent writes
