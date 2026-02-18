@@ -9,6 +9,10 @@ INSTALLATION
 
 You can choose to run install.sh, for instructions run ./install.sh --help
 
+To install in a specific location(e.g /data being NVMe disk)
+./install.sh --mariadb-prefix /data/mariadb --tidesdb-prefix /data/tidesdb --build-dir /data/tidesql-build
+
+
 The install script will build TidesDB and MariaDB from source.
 You can specify the versions if you want.  The script will install everything
 and make TidesDB available as an engine to utilize.

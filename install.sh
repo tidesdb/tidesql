@@ -550,13 +550,16 @@ character-set-server = utf8mb4
 collation-server = utf8mb4_general_ci
 
 # TidesDB plugin — loaded at startup
-plugin_load_add = ha_tidesdb
+plugin_maturity = experimental
+plugin_load_add = ha_tidesdb.so
 
-# TidesDB settings (tune as needed)
-# tidesdb_flush_threads = 2
-# tidesdb_compaction_threads = 2
-# tidesdb_block_cache_size = 268435456
-# tidesdb_log_level = WARN
+# TidesDB settings (defaults shown — tune as needed)
+tidesdb_flush_threads = 2
+tidesdb_compaction_threads = 2
+tidesdb_block_cache_size = 268435456
+tidesdb_max_open_sstables = 256
+tidesdb_log_level = WARN
+tidesdb_debug_trace = OFF
 
 [client]
 port = 3306
