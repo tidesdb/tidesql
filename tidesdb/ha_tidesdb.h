@@ -261,7 +261,7 @@ class ha_tidesdb : public handler
     /* Try to decode record from secondary index key (keyread-only) */
     bool try_keyread_from_index(const uint8_t *ik, size_t iks, uint idx, uchar *buf);
 
-    /* Evaluate pushed index condition on a secondary-index entry BEFORE
+    /* Evaluate pushed index condition on a secondary-index entry before
        the expensive PK point-lookup.  Decodes the index key columns into
        buf and calls handler_index_cond_check().
        Returns CHECK_POS  -- condition satisfied, proceed with PK lookup

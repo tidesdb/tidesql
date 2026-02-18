@@ -410,7 +410,7 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
            If this statement had writes, create/update a savepoint marking
            the last known-good state.  If a later statement fails,
            tidesdb_rollback(all=false) can rollback to here instead of
-           aborting the entire txn.  Per TidesDB docs: creating a
+           aborting the entire txn.  Per TidesDB docs -- creating a
            savepoint with an existing name updates it; savepoints are
            auto-freed on commit/rollback. */
         if (trx->stmt_was_dirty)
@@ -990,7 +990,7 @@ bool ha_tidesdb::decode_int_sort_key(const uint8_t *src, uint sort_len, Field *f
 }
 
 /*
-  Evaluate pushed index condition on a secondary-index entry BEFORE
+  Evaluate pushed index condition on a secondary-index entry before
   the expensive PK point-lookup (InnoDB pattern).
 
   Decodes the index key column values and PK column values from the
@@ -2117,7 +2117,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         }
 
         /* We read the current entry from the secondary index.
-           ICP loop: evaluate pushed index condition BEFORE the expensive
+           ICP loop -- evaluate pushed index condition before the expensive
            PK point-lookup.  Entries that fail the condition are skipped
            without touching the data CF (same pattern as InnoDB). */
         bool is_backward =
@@ -2151,7 +2151,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
                 TDB_TRACE("sec found iks=%zu idx_col_len=%u ik=%s", iks, idx_col_len, hx);
             }
 
-            /* ICP: evaluate pushed condition on index columns before PK lookup */
+            /* ICP -- we evaluate pushed condition on index columns before PK lookup */
             check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
             if (icp == CHECK_NEG)
             {
@@ -2223,7 +2223,7 @@ int ha_tidesdb::index_next(uchar *buf)
     }
     else
     {
-        /* Secondary index -- ICP loop: skip entries that fail the pushed
+        /* Secondary index -- ICP loop -- we skip entries that fail the pushed
            condition without the expensive PK point-lookup. */
         uint idx_key_len = share->idx_comp_key_len[active_index];
         for (;;)
@@ -2237,7 +2237,7 @@ int ha_tidesdb::index_next(uchar *buf)
 
             if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-            /* ICP: evaluate pushed condition before PK lookup */
+            /* ICP -- we evaluate pushed condition before PK lookup */
             check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
             if (icp == CHECK_NEG)
             {
@@ -2315,7 +2315,7 @@ int ha_tidesdb::index_prev(uchar *buf)
 
             if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-            /* ICP: evaluate pushed condition before PK lookup */
+            /* ICP -- we evaluate pushed condition before PK lookup */
             check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
             if (icp == CHECK_NEG)
             {
@@ -2421,7 +2421,7 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
         DBUG_RETURN(HA_ERR_END_OF_FILE);
     }
 
-    /* Secondary index -- ICP loop: skip entries that fail the pushed
+    /* Secondary index -- ICP loop -- we skip entries that fail the pushed
        condition without the expensive PK point-lookup. */
     uint idx_col_len = share->idx_comp_key_len[active_index];
     for (;;)
@@ -2454,7 +2454,7 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
 
         if (iks <= idx_col_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-        /* ICP: evaluate pushed condition before PK lookup */
+        /* ICP -- we evaluate pushed condition before PK lookup */
         check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
         if (icp == CHECK_NEG)
         {
@@ -2983,7 +2983,7 @@ IO_AND_CPU_COST ha_tidesdb::scan_time()
     if (tidesdb_range_cost(share->cf, lo, 1, hi, hi_len, &full_cost) == TDB_SUCCESS &&
         full_cost > 0.0)
     {
-        /* Split the cost: block reads are I/O, per-entry processing is CPU.
+        /* Split the cost -- block reads are I/O, per-entry processing is CPU.
            tidesdb_range_cost weights blocks at ~1.0-1.5x and entries at 0.01x,
            so I/O dominates.  We assign 90% to I/O, 10% to CPU. */
         cost.io = full_cost * 0.9;
@@ -3079,7 +3079,7 @@ ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const k
 
     tmp_restore_column_map(&table->read_set, old_map);
 
-    /* Detect point equality: both bounds provided with identical comparable
+    /* Detect point equality -- both bounds provided with identical comparable
        bytes.  tidesdb_range_cost is an I/O cost metric, not a cardinality
        metric -- for memtable-only data it cannot distinguish a point range
        from a full scan.  For equalities we return rec_per_key directly. */
@@ -3117,7 +3117,7 @@ ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const k
 
     if (full_cost <= 0.0) return (total / 4) + 1; /* fallback */
 
-    /* Estimate records proportionally: narrower range → fewer records */
+    /* Estimate records proportionally -- narrower range -> fewer records */
     double fraction = range_cost / full_cost;
     if (fraction > 1.0) fraction = 1.0;
     if (fraction < 0.0) fraction = 0.0;
