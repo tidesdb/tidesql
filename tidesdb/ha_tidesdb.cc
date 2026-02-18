@@ -410,7 +410,7 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
            If this statement had writes, create/update a savepoint marking
            the last known-good state.  If a later statement fails,
            tidesdb_rollback(all=false) can rollback to here instead of
-           aborting the entire txn.  Per TidesDB docs: creating a
+           aborting the entire txn.  Per TidesDB docs -- creating a
            savepoint with an existing name updates it; savepoints are
            auto-freed on commit/rollback. */
         if (trx->stmt_was_dirty)
@@ -442,10 +442,10 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
             trx->dirty = false;
             return HA_ERR_GENERIC;
         }
-        /* After dirty commit we must free the txn so that the next
-           get_or_create_trx() starts a fresh transaction with a new
-           read snapshot.  txn_reset after commit produces a stale
-           snapshot that cannot see the just-committed data. */
+        /* We free the txn so that the next get_or_create_trx() starts
+           a fresh transaction with a new read snapshot AND a distinct
+           pointer -- allowing cached iterators to detect staleness via
+           scan_iter_txn_ != stmt_txn and invalidate themselves. */
         tidesdb_txn_free(trx->txn);
         trx->txn = NULL;
     }
@@ -453,9 +453,8 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
     {
         /* Read-only transaction -- rollback and free.  Like the dirty
            path, we must free so the next get_or_create_trx() begins a
-           fresh txn with a current read snapshot.  txn_reset after
-           rollback produces a stale snapshot that misses data committed
-           by other connections between statements. */
+           fresh txn with a current read snapshot and a new pointer for
+           stale-iterator detection. */
         tidesdb_txn_rollback(trx->txn);
         tidesdb_txn_free(trx->txn);
         trx->txn = NULL;
@@ -646,6 +645,7 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
       scan_iter(NULL),
       scan_cf_(NULL),
       scan_iter_cf_(NULL),
+      scan_iter_txn_(NULL),
       idx_pk_exact_done_(false),
       scan_dir_(DIR_NONE),
       current_pk_len_(0),
@@ -943,6 +943,157 @@ bool ha_tidesdb::try_keyread_from_index(const uint8_t *ik, size_t iks, uint idx,
     return true;
 }
 
+/* ******************** ICP (Index Condition Pushdown) helpers ******************** */
+
+/*
+  Reverse a single integer sort-key part (big-endian, sign-bit-flipped)
+  back to native little-endian field format in the record buffer.
+  Returns true on success, false for unsupported field types.
+*/
+bool ha_tidesdb::decode_int_sort_key(const uint8_t *src, uint sort_len, Field *f, uchar *buf)
+{
+    uchar *to = buf + (uintptr_t)(f->ptr - f->table->record[0]);
+    bool is_signed = !f->is_unsigned();
+    switch (sort_len)
+    {
+        case 1:
+            to[0] = is_signed ? (src[0] ^ 0x80) : src[0];
+            return true;
+        case 2:
+            to[0] = src[1];
+            to[1] = is_signed ? (src[0] ^ 0x80) : src[0];
+            return true;
+        case 3:
+            to[0] = src[2];
+            to[1] = src[1];
+            to[2] = is_signed ? (src[0] ^ 0x80) : src[0];
+            return true;
+        case 4:
+            to[0] = src[3];
+            to[1] = src[2];
+            to[2] = src[1];
+            to[3] = is_signed ? (src[0] ^ 0x80) : src[0];
+            return true;
+        case 8:
+            to[0] = src[7];
+            to[1] = src[6];
+            to[2] = src[5];
+            to[3] = src[4];
+            to[4] = src[3];
+            to[5] = src[2];
+            to[6] = src[1];
+            to[7] = is_signed ? (src[0] ^ 0x80) : src[0];
+            return true;
+        default:
+            return false;
+    }
+}
+
+/*
+  Evaluate pushed index condition on a secondary-index entry before
+  the expensive PK point-lookup (InnoDB pattern).
+
+  Decodes the index key column values and PK column values from the
+  comparable-format index key into the record buffer, then calls
+  handler_index_cond_check() which evaluates the pushed condition,
+  checks end_range, and handles THD kill signals.
+
+  Only supports integer column types for which the comparable encoding
+  (big-endian + sign-bit flip) is bijectively reversible.  If any
+  index or PK key part is a non-integer type, ICP is skipped and
+  CHECK_POS is returned so the caller falls through to the PK lookup.
+*/
+check_result_t ha_tidesdb::icp_check_secondary(const uint8_t *ik, size_t iks, uint idx, uchar *buf)
+{
+    if (!pushed_idx_cond || pushed_idx_cond_keyno != idx) return CHECK_POS;
+
+    KEY *idx_key = &table->key_info[idx];
+    uint idx_col_len = share->idx_comp_key_len[idx];
+
+    /* Decode index column parts from the head of the key */
+    const uint8_t *pos = ik;
+    for (uint p = 0; p < idx_key->user_defined_key_parts; p++)
+    {
+        KEY_PART_INFO *kp = &idx_key->key_part[p];
+        Field *f = kp->field;
+
+        /* Verify type is a reversible integer */
+        switch (f->real_type())
+        {
+            case MYSQL_TYPE_TINY:
+            case MYSQL_TYPE_SHORT:
+            case MYSQL_TYPE_INT24:
+            case MYSQL_TYPE_LONG:
+            case MYSQL_TYPE_LONGLONG:
+                break;
+            default:
+                return CHECK_POS; /* unsupported type -- skip ICP */
+        }
+
+        if (f->real_maybe_null())
+        {
+            if (pos >= ik + iks) return CHECK_POS;
+            if (*pos == 0)
+            {
+                f->set_null();
+                pos++;
+                continue;
+            }
+            f->set_notnull();
+            pos++;
+        }
+        if (pos + kp->length > ik + iks) return CHECK_POS;
+        if (!decode_int_sort_key(pos, kp->length, f, buf)) return CHECK_POS;
+        pos += kp->length;
+    }
+
+    /* Decode PK parts from the tail of the key (pushed condition may
+       reference PK columns since they are appended to every secondary
+       index entry for uniqueness). */
+    if (share->has_user_pk)
+    {
+        KEY *pk_key = &table->key_info[share->pk_index];
+        pos = ik + idx_col_len;
+        for (uint p = 0; p < pk_key->user_defined_key_parts; p++)
+        {
+            KEY_PART_INFO *kp = &pk_key->key_part[p];
+            Field *f = kp->field;
+
+            switch (f->real_type())
+            {
+                case MYSQL_TYPE_TINY:
+                case MYSQL_TYPE_SHORT:
+                case MYSQL_TYPE_INT24:
+                case MYSQL_TYPE_LONG:
+                case MYSQL_TYPE_LONGLONG:
+                    break;
+                default:
+                    return CHECK_POS; /* PK has non-integer column -- skip ICP */
+            }
+
+            if (f->real_maybe_null())
+            {
+                if (pos >= ik + iks) return CHECK_POS;
+                if (*pos == 0)
+                {
+                    f->set_null();
+                    pos++;
+                    continue;
+                }
+                f->set_notnull();
+                pos++;
+            }
+            if (pos + kp->length > ik + iks) return CHECK_POS;
+            if (!decode_int_sort_key(pos, kp->length, f, buf)) return CHECK_POS;
+            pos += kp->length;
+        }
+    }
+
+    /* All index + PK columns decoded -- delegate to MariaDB's handler
+       ICP evaluator which checks kill state, end_range, and pushed_idx_cond. */
+    return handler_index_cond_check(this);
+}
+
 /* ******************** Counter recovery ******************** */
 
 /*
@@ -1146,6 +1297,7 @@ int ha_tidesdb::close(void)
         tidesdb_iter_free(scan_iter);
         scan_iter = NULL;
         scan_iter_cf_ = NULL;
+        scan_iter_txn_ = NULL;
     }
     /* stmt_txn is a borrowed pointer into the per-connection trx->txn.
        We do not free it here -- the txn is owned by the per-connection trx
@@ -1664,19 +1816,22 @@ int ha_tidesdb::rnd_init(bool scan)
     }
     scan_txn = stmt_txn;
 
-    /* Reuse cached iterator if it belongs to the same CF.
+    /* Reuse cached iterator if it belongs to the same CF AND same txn.
        tidesdb_iter_new() is extremely expensive (builds merge heap from
-       ALL SSTables).  tidesdb_iter_seek() reuses cached SST sources and
-       just repositions them -- orders of magnitude cheaper. */
-    if (!scan_iter || scan_iter_cf_ != share->cf)
+       all SSTables).  tidesdb_iter_seek() reuses cached SST sources and
+       just repositions them -- orders of magnitude cheaper.
+       If the txn changed (e.g. after COMMIT created a new one), the
+       iterator holds a stale txn pointer and must be recreated. */
+    if (scan_iter && (scan_iter_cf_ != share->cf || scan_iter_txn_ != scan_txn))
     {
-        if (scan_iter)
-        {
-            tidesdb_iter_free(scan_iter);
-            scan_iter = NULL;
-            scan_iter_cf_ = NULL;
-        }
+        tidesdb_iter_free(scan_iter);
+        scan_iter = NULL;
+        scan_iter_cf_ = NULL;
+        scan_iter_txn_ = NULL;
+    }
 
+    if (!scan_iter)
+    {
         int rc = tidesdb_iter_new(scan_txn, share->cf, &scan_iter);
         if (rc != TDB_SUCCESS)
         {
@@ -1684,6 +1839,7 @@ int ha_tidesdb::rnd_init(bool scan)
             DBUG_RETURN(HA_ERR_GENERIC);
         }
         scan_iter_cf_ = share->cf;
+        scan_iter_txn_ = scan_txn;
     }
 
     /* We seek past meta keys to the first data key */
@@ -1772,15 +1928,18 @@ int ha_tidesdb::index_init(uint idx, bool sorted)
 
     scan_cf_ = target_cf;
 
-    /* Reuse cached iterator if it belongs to the same CF.
+    /* Reuse cached iterator if it belongs to the same CF AND same txn.
        In nested-loop joins, index_init/index_end cycle N times on the
        same index; reusing the iterator avoids N expensive iter_new() calls
-       (each builds a merge heap from ALL SSTables). */
-    if (scan_iter && scan_iter_cf_ != target_cf)
+       (each builds a merge heap from all SSTables).
+       If the txn changed (e.g. after COMMIT created a new one), the
+       iterator holds a stale txn pointer and must be recreated. */
+    if (scan_iter && (scan_iter_cf_ != target_cf || scan_iter_txn_ != scan_txn))
     {
         tidesdb_iter_free(scan_iter);
         scan_iter = NULL;
         scan_iter_cf_ = NULL;
+        scan_iter_txn_ = NULL;
     }
     /* If scan_iter is non-NULL here, ensure_scan_iter() will reuse it. */
 
@@ -1799,6 +1958,7 @@ int ha_tidesdb::ensure_scan_iter()
     if (rc == TDB_SUCCESS)
     {
         scan_iter_cf_ = scan_cf_;
+        scan_iter_txn_ = scan_txn;
         return 0;
     }
     return HA_ERR_GENERIC;
@@ -1956,58 +2116,75 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
             tidesdb_iter_seek(scan_iter, comp_key, comp_len);
         }
 
-        /* We read the current entry from the secondary index */
-        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-
-        uint8_t *ik = NULL;
-        size_t iks = 0;
-        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS)
-            DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-
-        /* For EXACT match, we verify the index prefix matches */
-        if (find_flag == HA_READ_KEY_EXACT)
-        {
-            if (iks < comp_len || memcmp(ik, comp_key, comp_len) != 0)
-                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-        }
-
-        /* We extract PK from the tail of the index key.
-           The comparable index-column portion length must match what
-           make_comparable_key() produces (NOT ki->key_length, which
-           includes VARCHAR store_length overhead). */
-        uint idx_col_len = share->idx_comp_key_len[active_index];
-        if (iks <= idx_col_len) DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
-
-        if (unlikely(srv_debug_trace))
-        {
-            char hx[128];
-            tdb_hex(ik, (uint)iks, hx, sizeof(hx));
-            TDB_TRACE("sec found iks=%zu idx_col_len=%u ik=%s", iks, idx_col_len, hx);
-        }
-
+        /* We read the current entry from the secondary index.
+           ICP loop -- evaluate pushed index condition before the expensive
+           PK point-lookup.  Entries that fail the condition are skipped
+           without touching the data CF (same pattern as InnoDB). */
         bool is_backward =
             (find_flag == HA_READ_KEY_OR_PREV || find_flag == HA_READ_BEFORE_KEY ||
              find_flag == HA_READ_PREFIX_LAST || find_flag == HA_READ_PREFIX_LAST_OR_PREV);
 
-        int ret;
-        if (keyread_only_ && try_keyread_from_index(ik, iks, active_index, buf))
-            ret = 0;
-        else
-            ret = fetch_row_by_pk(scan_txn, ik + idx_col_len, (uint)(iks - idx_col_len), buf);
-        if (ret == 0)
-        {
-            if (is_backward)
-            {
-                scan_dir_ = DIR_BACKWARD;
-            }
-            else
-            {
-                tidesdb_iter_next(scan_iter);
-                scan_dir_ = DIR_FORWARD;
-            }
-        }
+        uint idx_col_len = share->idx_comp_key_len[active_index];
 
-        DBUG_RETURN(ret);
+        for (;;)
+        {
+            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+
+            uint8_t *ik = NULL;
+            size_t iks = 0;
+            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS)
+                DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+
+            /* For EXACT match, we verify the index prefix matches */
+            if (find_flag == HA_READ_KEY_EXACT)
+            {
+                if (iks < comp_len || memcmp(ik, comp_key, comp_len) != 0)
+                    DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+            }
+
+            if (iks <= idx_col_len) DBUG_RETURN(HA_ERR_KEY_NOT_FOUND);
+
+            if (unlikely(srv_debug_trace))
+            {
+                char hx[128];
+                tdb_hex(ik, (uint)iks, hx, sizeof(hx));
+                TDB_TRACE("sec found iks=%zu idx_col_len=%u ik=%s", iks, idx_col_len, hx);
+            }
+
+            /* ICP -- we evaluate pushed condition on index columns before PK lookup */
+            check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
+            if (icp == CHECK_NEG)
+            {
+                if (is_backward)
+                    tidesdb_iter_prev(scan_iter);
+                else
+                    tidesdb_iter_next(scan_iter);
+                continue; /* skip this entry */
+            }
+            if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (icp == CHECK_ABORTED_BY_USER) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
+
+            /* CHECK_POS -- condition satisfied (or ICP not applicable) */
+            int ret;
+            if (keyread_only_ && try_keyread_from_index(ik, iks, active_index, buf))
+                ret = 0;
+            else
+                ret = fetch_row_by_pk(scan_txn, ik + idx_col_len, (uint)(iks - idx_col_len), buf);
+            if (ret == 0)
+            {
+                if (is_backward)
+                {
+                    scan_dir_ = DIR_BACKWARD;
+                }
+                else
+                {
+                    tidesdb_iter_next(scan_iter);
+                    scan_dir_ = DIR_FORWARD;
+                }
+            }
+
+            DBUG_RETURN(ret);
+        }
     }
 }
 
@@ -2046,24 +2223,39 @@ int ha_tidesdb::index_next(uchar *buf)
     }
     else
     {
-        /* Secondary index -- we read next entry, extract PK, point-lookup */
-        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        uint8_t *ik = NULL;
-        size_t iks = 0;
-        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
+        /* Secondary index -- ICP loop -- we skip entries that fail the pushed
+           condition without the expensive PK point-lookup. */
         uint idx_key_len = share->idx_comp_key_len[active_index];
-        if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        for (;;)
+        {
+            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-        int ret;
-        if (keyread_only_ && try_keyread_from_index(ik, iks, active_index, buf))
-            ret = 0;
-        else
-            ret = fetch_row_by_pk(scan_txn, ik + idx_key_len, (uint)(iks - idx_key_len), buf);
-        if (ret == 0) tidesdb_iter_next(scan_iter);
-        scan_dir_ = DIR_FORWARD;
-        DBUG_RETURN(ret);
+            uint8_t *ik = NULL;
+            size_t iks = 0;
+            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS)
+                DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            /* ICP -- we evaluate pushed condition before PK lookup */
+            check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
+            if (icp == CHECK_NEG)
+            {
+                tidesdb_iter_next(scan_iter);
+                continue;
+            }
+            if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (icp == CHECK_ABORTED_BY_USER) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
+
+            int ret;
+            if (keyread_only_ && try_keyread_from_index(ik, iks, active_index, buf))
+                ret = 0;
+            else
+                ret = fetch_row_by_pk(scan_txn, ik + idx_key_len, (uint)(iks - idx_key_len), buf);
+            if (ret == 0) tidesdb_iter_next(scan_iter);
+            scan_dir_ = DIR_FORWARD;
+            DBUG_RETURN(ret);
+        }
     }
 }
 
@@ -2110,22 +2302,37 @@ int ha_tidesdb::index_prev(uchar *buf)
     }
     else
     {
-        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        uint8_t *ik = NULL;
-        size_t iks = 0;
-        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
+        /* Secondary index -- ICP loop (backward direction) */
         uint idx_key_len = share->idx_comp_key_len[active_index];
-        if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        for (;;)
+        {
+            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
 
-        scan_dir_ = DIR_BACKWARD;
-        int ret;
-        if (keyread_only_ && try_keyread_from_index(ik, iks, active_index, buf))
-            ret = 0;
-        else
-            ret = fetch_row_by_pk(scan_txn, ik + idx_key_len, (uint)(iks - idx_key_len), buf);
-        DBUG_RETURN(ret);
+            uint8_t *ik = NULL;
+            size_t iks = 0;
+            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS)
+                DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            /* ICP -- we evaluate pushed condition before PK lookup */
+            check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
+            if (icp == CHECK_NEG)
+            {
+                tidesdb_iter_prev(scan_iter);
+                continue;
+            }
+            if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (icp == CHECK_ABORTED_BY_USER) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
+
+            scan_dir_ = DIR_BACKWARD;
+            int ret;
+            if (keyread_only_ && try_keyread_from_index(ik, iks, active_index, buf))
+                ret = 0;
+            else
+                ret = fetch_row_by_pk(scan_txn, ik + idx_key_len, (uint)(iks - idx_key_len), buf);
+            DBUG_RETURN(ret);
+        }
     }
 }
 
@@ -2214,44 +2421,57 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
         DBUG_RETURN(HA_ERR_END_OF_FILE);
     }
 
-    /* Secondary index -- we advance and verify the comparable prefix still matches */
-    if (!scan_iter || !tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-    uint8_t *ik = NULL;
-    size_t iks = 0;
-    if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-    if (iks < idx_search_comp_len_ || memcmp(ik, idx_search_comp_, idx_search_comp_len_) != 0)
+    /* Secondary index -- ICP loop -- we skip entries that fail the pushed
+       condition without the expensive PK point-lookup. */
+    uint idx_col_len = share->idx_comp_key_len[active_index];
+    for (;;)
     {
+        if (!scan_iter || !tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+        uint8_t *ik = NULL;
+        size_t iks = 0;
+        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+        if (iks < idx_search_comp_len_ || memcmp(ik, idx_search_comp_, idx_search_comp_len_) != 0)
+        {
+            if (unlikely(srv_debug_trace))
+            {
+                char hx1[128], hx2[128];
+                tdb_hex(ik, (uint)iks, hx1, sizeof(hx1));
+                tdb_hex(idx_search_comp_, idx_search_comp_len_, hx2, sizeof(hx2));
+                TDB_TRACE("prefix MISMATCH ik(%zu)=%s search(%u)=%s", iks, hx1,
+                          idx_search_comp_len_, hx2);
+            }
+            DBUG_RETURN(HA_ERR_END_OF_FILE);
+        }
+
         if (unlikely(srv_debug_trace))
         {
-            char hx1[128], hx2[128];
-            tdb_hex(ik, (uint)iks, hx1, sizeof(hx1));
-            tdb_hex(idx_search_comp_, idx_search_comp_len_, hx2, sizeof(hx2));
-            TDB_TRACE("prefix MISMATCH ik(%zu)=%s search(%u)=%s", iks, hx1, idx_search_comp_len_,
-                      hx2);
+            char hx[128];
+            tdb_hex(ik, (uint)iks, hx, sizeof(hx));
+            TDB_TRACE("prefix MATCH ik(%zu)=%s", iks, hx);
         }
-        DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+        if (iks <= idx_col_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+        /* ICP -- we evaluate pushed condition before PK lookup */
+        check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
+        if (icp == CHECK_NEG)
+        {
+            tidesdb_iter_next(scan_iter);
+            continue;
+        }
+        if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        if (icp == CHECK_ABORTED_BY_USER) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
+
+        int ret;
+        if (keyread_only_ && try_keyread_from_index(ik, iks, active_index, buf))
+            ret = 0;
+        else
+            ret = fetch_row_by_pk(scan_txn, ik + idx_col_len, (uint)(iks - idx_col_len), buf);
+        if (ret == 0) tidesdb_iter_next(scan_iter);
+        DBUG_RETURN(ret);
     }
-
-    if (unlikely(srv_debug_trace))
-    {
-        char hx[128];
-        tdb_hex(ik, (uint)iks, hx, sizeof(hx));
-        TDB_TRACE("prefix MATCH ik(%zu)=%s", iks, hx);
-    }
-
-    /* Prefix matches -- we extract PK and fetch the row */
-    uint idx_col_len = share->idx_comp_key_len[active_index];
-    if (iks <= idx_col_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-    int ret;
-    if (keyread_only_ && try_keyread_from_index(ik, iks, active_index, buf))
-        ret = 0;
-    else
-        ret = fetch_row_by_pk(scan_txn, ik + idx_col_len, (uint)(iks - idx_col_len), buf);
-    if (ret == 0) tidesdb_iter_next(scan_iter);
-    DBUG_RETURN(ret);
 }
 
 /* ******************** update_row (UPDATE) ******************** */
@@ -2435,6 +2655,7 @@ int ha_tidesdb::delete_all_rows(void)
         tidesdb_iter_free(scan_iter);
         scan_iter = NULL;
         scan_iter_cf_ = NULL;
+        scan_iter_txn_ = NULL;
     }
 
     /* Discard the connection txn before drop/recreate.  The txn may have
@@ -2740,19 +2961,176 @@ int ha_tidesdb::optimize(THD *thd, HA_CHECK_OPT *check_opt)
     DBUG_RETURN(HA_ADMIN_OK);
 }
 
+IO_AND_CPU_COST ha_tidesdb::scan_time()
+{
+    IO_AND_CPU_COST cost;
+    cost.io = 0.0;
+    cost.cpu = 0.0;
+
+    if (!share || !share->cf) return cost;
+
+    /* Use tidesdb_range_cost over the full key space of the data CF.
+       This accounts for the actual LSM structure (number of levels,
+       SSTables, compression, merge overhead) rather than the generic
+       data_file_length / IO_SIZE estimate. */
+    uchar lo[2] = {KEY_NS_DATA};
+    uchar hi[MAX_KEY_LENGTH + 2];
+    memset(hi, 0xFF, sizeof(hi));
+    uint hi_len = 1 + share->pk_key_len;
+    if (hi_len > sizeof(hi)) hi_len = sizeof(hi);
+
+    double full_cost = 0.0;
+    if (tidesdb_range_cost(share->cf, lo, 1, hi, hi_len, &full_cost) == TDB_SUCCESS &&
+        full_cost > 0.0)
+    {
+        /* Split the cost -- block reads are I/O, per-entry processing is CPU.
+           tidesdb_range_cost weights blocks at ~1.0-1.5x and entries at 0.01x,
+           so I/O dominates.  We assign 90% to I/O, 10% to CPU. */
+        cost.io = full_cost * 0.9;
+        cost.cpu = full_cost * 0.1;
+    }
+    else
+    {
+        /* Fallback to base implementation */
+        cost = handler::scan_time();
+    }
+
+    return cost;
+}
+
 ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const key_range *max_key,
                                      page_range *pages)
 {
-    /* We return a rough cached estimate.  The optimizer calls this frequently
-       during planning; an exact count would require a full CF scan.
-       Returning cached_records/4 nudges the optimizer toward index usage
-       without the cost of an actual range scan. */
-    if (share)
+    if (!share) return 10;
+
+    ha_rows total = share->cached_records.load(std::memory_order_relaxed);
+    if (total == 0) total = TIDESDB_MIN_STATS_RECORDS;
+
+    /* Determine which CF this index lives in */
+    tidesdb_column_family_t *cf;
+    bool is_pk = share->has_user_pk && inx == share->pk_index;
+    if (is_pk)
+        cf = share->cf;
+    else if (inx < share->idx_cfs.size() && share->idx_cfs[inx])
+        cf = share->idx_cfs[inx];
+    else
+        return (total / 4) + 1; /* fallback -- no CF for this index */
+
+    /* Convert min_key / max_key to our comparable format.
+       If a bound is missing we use the natural boundary of the key space. */
+    uchar lo_buf[MAX_KEY_LENGTH + 2];
+    uchar hi_buf[MAX_KEY_LENGTH + 2];
+    uint lo_len = 0, hi_len = 0;
+
+    MY_BITMAP *old_map = tmp_use_all_columns(table, &table->read_set);
+
+    if (min_key && min_key->key)
     {
-        ha_rows cached = share->cached_records.load(std::memory_order_relaxed);
-        if (cached > 0) return (cached / 4) + 1;
+        KEY *ki = &table->key_info[inx];
+        uint kl = calculate_key_len(table, inx, min_key->key, min_key->keypart_map);
+        if (is_pk)
+        {
+            uchar comp[MAX_KEY_LENGTH];
+            uint comp_len = key_copy_to_comparable(ki, min_key->key, kl, comp);
+            lo_len = build_data_key(comp, comp_len, lo_buf);
+        }
+        else
+        {
+            lo_len = key_copy_to_comparable(ki, min_key->key, kl, lo_buf);
+        }
     }
-    return 10;
+    else
+    {
+        /* No lower bound -- use smallest possible key */
+        if (is_pk)
+        {
+            lo_buf[0] = KEY_NS_DATA;
+            lo_len = 1;
+        }
+        else
+        {
+            memset(lo_buf, 0x00, 1);
+            lo_len = 1;
+        }
+    }
+
+    if (max_key && max_key->key)
+    {
+        KEY *ki = &table->key_info[inx];
+        uint kl = calculate_key_len(table, inx, max_key->key, max_key->keypart_map);
+        if (is_pk)
+        {
+            uchar comp[MAX_KEY_LENGTH];
+            uint comp_len = key_copy_to_comparable(ki, max_key->key, kl, comp);
+            hi_len = build_data_key(comp, comp_len, hi_buf);
+        }
+        else
+        {
+            hi_len = key_copy_to_comparable(ki, max_key->key, kl, hi_buf);
+        }
+    }
+    else
+    {
+        /* No upper bound -- use largest possible key */
+        memset(hi_buf, 0xFF, sizeof(hi_buf));
+        hi_len = is_pk ? (1 + share->pk_key_len) : share->idx_comp_key_len[inx] + share->pk_key_len;
+        if (hi_len > sizeof(hi_buf)) hi_len = sizeof(hi_buf);
+    }
+
+    tmp_restore_column_map(&table->read_set, old_map);
+
+    /* Detect point equality -- both bounds provided with identical comparable
+       bytes.  tidesdb_range_cost is an I/O cost metric, not a cardinality
+       metric -- for memtable-only data it cannot distinguish a point range
+       from a full scan.  For equalities we return rec_per_key directly. */
+    if (min_key && max_key && lo_len > 0 && hi_len > 0 && lo_len == hi_len &&
+        memcmp(lo_buf, hi_buf, lo_len) == 0)
+    {
+        KEY *ki = &table->key_info[inx];
+        uint parts_used = my_count_bits(min_key->keypart_map);
+        if (parts_used > 0 && parts_used <= ki->user_defined_key_parts)
+        {
+            ulong rpk = ki->rec_per_key[parts_used - 1];
+            ha_rows est = (rpk > 0) ? (ha_rows)rpk : 1;
+            if (est > total) est = total;
+            return est;
+        }
+        return 1;
+    }
+
+    /* Ask TidesDB for the range cost (no disk I/O -- uses in-memory
+       block indexes, SSTable min/max keys, and entry counts). */
+    double range_cost = 0.0;
+    int rc = tidesdb_range_cost(cf, lo_buf, lo_len, hi_buf, hi_len, &range_cost);
+    if (rc != TDB_SUCCESS || range_cost <= 0.0) return (total / 4) + 1; /* fallback */
+
+    /* Get full-range cost for normalization.  We use the natural boundaries
+       of the key space so that range_cost / full_cost ≈ fraction of data. */
+    double full_cost = 0.0;
+    {
+        uchar full_lo[2] = {(uchar)(is_pk ? KEY_NS_DATA : 0x00)};
+        uchar full_hi[MAX_KEY_LENGTH + 2];
+        memset(full_hi, 0xFF, sizeof(full_hi));
+        uint full_hi_len = hi_len; /* same width as hi_buf */
+        tidesdb_range_cost(cf, full_lo, 1, full_hi, full_hi_len, &full_cost);
+    }
+
+    if (full_cost <= 0.0) return (total / 4) + 1; /* fallback */
+
+    /* Estimate records proportionally -- narrower range -> fewer records */
+    double fraction = range_cost / full_cost;
+    if (fraction > 1.0) fraction = 1.0;
+    if (fraction < 0.0) fraction = 0.0;
+
+    ha_rows est = (ha_rows)(total * fraction);
+    if (est == 0) est = 1; /* never return 0 -- optimizer treats it as "empty" */
+
+    if (unlikely(srv_debug_trace))
+        TDB_TRACE("idx=%u range_cost=%.2f full_cost=%.2f fraction=%.4f est=%llu total=%llu", inx,
+                  range_cost, full_cost, fraction, (unsigned long long)est,
+                  (unsigned long long)total);
+
+    return est;
 }
 
 int ha_tidesdb::extra(enum ha_extra_function operation)
@@ -2831,14 +3209,41 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
     else
     {
         /* Statement end (F_UNLCK).
-           Always free the cached iterator before hton->commit() can
-           free/reset the txn.  The iterator holds a live pointer into
-           the txn which would become dangling after txn_free. */
-        if (scan_iter)
+           The iterator holds a live pointer into the txn (iter->txn is
+           dereferenced by seek/next).  In autocommit mode the txn will
+           be freed by the upcoming hton->commit(all=true), so we must
+           free the iterator here.
+
+           Inside a multi-statement transaction (BEGIN...COMMIT) the txn
+           survives across statements.  Keeping the iterator alive avoids
+           the catastrophically expensive tidesdb_iter_new() on every
+           statement -- iter_seek() reuses the cached merge heap and is
+           orders of magnitude cheaper.  The iterator will be:
+             -- reused by the next statement on the same CF/txn,
+             -- invalidated by rnd_init/index_init if the txn changes,
+             -- freed in close() when the handler is destroyed. */
+        bool in_multi_stmt_txn = thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+        tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, ht);
+        bool txn_has_writes = trx && trx->dirty;
+        if (scan_iter && (!in_multi_stmt_txn || stmt_txn_dirty || txn_has_writes))
         {
+            /* Free the iterator when:
+               (a) autocommit                -- txn will be freed by hton->commit(all=true), or
+               (b) this statement had writes -- the cached merge heap was
+                   built from a snapshot of the txn write buffer at iter_new()
+                   time (tidesdb_merge_source_from_txn_ops); subsequent writes
+                   are invisible to the old heap, so the next scan must get a
+                   fresh iterator to see its own writes, or
+               (c) the transaction had any prior writes -- the iterator's merge
+                   heap includes MERGE_SOURCE_TXN_OPS from the txn; when COMMIT
+                   frees the txn, those ops become dangling pointers.  If the
+                   allocator returns the same address for the next txn, the
+                   pointer comparison in rnd_init/index_init would falsely pass
+                   and reuse the stale iterator (use-after-free). */
             tidesdb_iter_free(scan_iter);
             scan_iter = NULL;
             scan_iter_cf_ = NULL;
+            scan_iter_txn_ = NULL;
         }
         stmt_txn = NULL;
         stmt_txn_dirty = false;
@@ -3420,8 +3825,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30100,
+    0x30200,
     NULL,
     tidesdb_system_variables,
-    "3.1.0",
+    "3.2.0",
     MariaDB_PLUGIN_MATURITY_EXPERIMENTAL} maria_declare_plugin_end;

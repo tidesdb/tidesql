@@ -16,8 +16,6 @@
 */
 #pragma once
 
-#include "my_global.h"
-
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -25,6 +23,7 @@
 
 #include "handler.h"
 #include "my_base.h"
+#include "my_global.h"
 #include "thr_lock.h"
 
 extern "C"
@@ -187,6 +186,7 @@ class ha_tidesdb : public handler
     tidesdb_iter_t *scan_iter;
     tidesdb_column_family_t *scan_cf_;      /* CF for lazy iterator creation */
     tidesdb_column_family_t *scan_iter_cf_; /* CF the cached scan_iter was created for */
+    tidesdb_txn_t *scan_iter_txn_;          /* txn the cached scan_iter was created on */
     bool idx_pk_exact_done_;                /* deferred seek after PK exact */
     enum scan_dir_t
     {
@@ -261,6 +261,19 @@ class ha_tidesdb : public handler
     /* Try to decode record from secondary index key (keyread-only) */
     bool try_keyread_from_index(const uint8_t *ik, size_t iks, uint idx, uchar *buf);
 
+    /* Evaluate pushed index condition on a secondary-index entry before
+       the expensive PK point-lookup.  Decodes the index key columns into
+       buf and calls handler_index_cond_check().
+       Returns CHECK_POS  -- condition satisfied, proceed with PK lookup
+               CHECK_NEG  -- condition not satisfied, skip this entry
+               CHECK_OUT_OF_RANGE  -- past end of scan range
+               CHECK_ABORTED_BY_USER -- query killed */
+    check_result_t icp_check_secondary(const uint8_t *ik, size_t iks, uint idx, uchar *buf);
+
+    /* Reverse a single integer sort-key part back to native little-endian
+       field format.  Returns true on success, false for unsupported types. */
+    static bool decode_int_sort_key(const uint8_t *src, uint sort_len, Field *f, uchar *buf);
+
     /* Recover hidden-PK counter by scanning the CF */
     void recover_counters();
 
@@ -298,18 +311,6 @@ class ha_tidesdb : public handler
     uint max_supported_key_length() const override
     {
         return MAX_KEY_LENGTH;
-    }
-
-    IO_AND_CPU_COST scan_time() override
-    {
-        /* Full table scan -- sequential merge across LSM levels.
-           Cost is proportional to data size, not just row count,
-           because larger values mean more bytes to read. */
-        IO_AND_CPU_COST cost;
-        cost.io = 0;
-        double rows = (double)(stats.records + stats.deleted);
-        cost.cpu = rows * TIDESDB_COST_SEQ_READ;
-        return cost;
     }
 
     IO_AND_CPU_COST keyread_time(uint index, ulong ranges, ha_rows rows, ulonglong blocks) override
@@ -385,6 +386,10 @@ class ha_tidesdb : public handler
                              page_range *pages) override;
     int extra(enum ha_extra_function operation) override;
 
+   protected:
+    IO_AND_CPU_COST scan_time() override;
+
+   public:
     /* Locking -- TidesDB handles all concurrency via MVCC internally.
        lock_count()=0 bypasses MariaDB's THR_LOCK (same pattern as InnoDB). */
     uint lock_count(void) const override
