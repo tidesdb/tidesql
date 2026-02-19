@@ -217,7 +217,7 @@ All are read-only (set at startup) unless noted otherwise.
   compaction_threads        Background compaction threads (default: 2)
   log_level                 DEBUG/INFO/WARN/ERROR/FATAL/NONE (default: WARN)
   block_cache_size          Global block cache in bytes (default: 256MB)
-  max_open_sstables         Max cached SSTable structures (default: 512)
+  max_open_sstables         Max cached SSTable files (default: 256)
   backup_dir                [dynamic] Set to a path to trigger online backup
   debug_trace               [dynamic] Per-operation trace logging (default: OFF)
 
