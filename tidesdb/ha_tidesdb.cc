@@ -442,9 +442,10 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
             trx->dirty = false;
             trx->stmt_savepoint_active = false;
             /* TDB_ERR_CONFLICT (-7) is a transient write-write conflict
-               in TidesDB's MVCC layer.  Map it to HA_ERR_LOCK_DEADLOCK
-               so MariaDB's deadlock retry logic handles it automatically
-               (same pattern as InnoDB).  All other errors remain fatal. */
+               in TidesDB's optimistic concurrency layer.  Map it to
+               HA_ERR_LOCK_DEADLOCK; MariaDB wraps this as
+               ER_ERROR_DURING_COMMIT (ERROR 1180) — the application
+               must catch it and retry.  All other errors are fatal. */
             if (rc == TDB_ERR_CONFLICT) return HA_ERR_LOCK_DEADLOCK;
             return HA_ERR_GENERIC;
         }
