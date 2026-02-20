@@ -440,6 +440,12 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
             tidesdb_txn_free(trx->txn);
             trx->txn = NULL;
             trx->dirty = false;
+            trx->stmt_savepoint_active = false;
+            /* TDB_ERR_CONFLICT (-7) is a transient write-write conflict
+               in TidesDB's MVCC layer.  Map it to HA_ERR_LOCK_DEADLOCK
+               so MariaDB's deadlock retry logic handles it automatically
+               (same pattern as InnoDB).  All other errors remain fatal. */
+            if (rc == TDB_ERR_CONFLICT) return HA_ERR_LOCK_DEADLOCK;
             return HA_ERR_GENERIC;
         }
         /* We free the txn so that the next get_or_create_trx() starts
@@ -1762,7 +1768,7 @@ int ha_tidesdb::write_row(const uchar *buf)
 err:
     tmp_restore_column_map(&table->read_set, old_map);
     sql_print_warning("TIDESDB: write_row put failed rc=%d", rc);
-    DBUG_RETURN(HA_ERR_GENERIC);
+    DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
 }
 
 /* ******************** AUTO_INCREMENT (O(1) atomic counter) ******************** */
@@ -2581,7 +2587,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
 err:
     tmp_restore_column_map(&table->read_set, old_map);
     sql_print_warning("TIDESDB: update_row put/delete failed rc=%d", rc);
-    DBUG_RETURN(HA_ERR_GENERIC);
+    DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
 }
 
 /* ******************** delete_row (DELETE) ******************** */
@@ -2621,7 +2627,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
     {
         tmp_restore_column_map(&table->read_set, old_map);
         sql_print_warning("TIDESDB: delete_row failed rc=%d", rc);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
     }
 
     /* We delete secondary index entries */
