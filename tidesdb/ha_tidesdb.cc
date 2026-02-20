@@ -75,7 +75,7 @@ static ulong srv_compaction_threads = 2;
 static ulong srv_log_level = 2;                                      /* TDB_LOG_WARN */
 static my_bool srv_debug_trace = 0;                                  /* per-op trace logging */
 static ulonglong srv_block_cache_size = TIDESDB_DEFAULT_BLOCK_CACHE; /* 256MB */
-static ulong srv_max_open_sstables = 512;
+static ulong srv_max_open_sstables = 256;
 
 static const char *log_level_names[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL", "NONE", NullS};
 #if MYSQL_VERSION_ID >= 120000
@@ -109,7 +109,7 @@ static MYSQL_SYSVAR_ULONGLONG(block_cache_size, srv_block_cache_size,
 
 static MYSQL_SYSVAR_ULONG(max_open_sstables, srv_max_open_sstables,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Max cached SSTable structures in LRU cache", NULL, NULL, 512, 1, 65536,
+                          "Max cached SSTable structures in LRU cache", NULL, NULL, 256, 1, 65536,
                           0);
 
 /* ******************** Online backup via system variable ******************** */
@@ -194,7 +194,7 @@ struct ha_table_option_struct
 };
 
 ha_create_table_option tidesdb_table_option_list[] = {
-    HA_TOPTION_NUMBER("WRITE_BUFFER_SIZE", write_buffer_size, 32 * 1024 * 1024, 1024, ULONGLONG_MAX,
+    HA_TOPTION_NUMBER("WRITE_BUFFER_SIZE", write_buffer_size, 64 * 1024 * 1024, 1024, ULONGLONG_MAX,
                       1024),
     HA_TOPTION_NUMBER("MIN_DISK_SPACE", min_disk_space, 100ULL * 1024 * 1024, 0, ULONGLONG_MAX,
                       1024),
@@ -209,7 +209,7 @@ ha_create_table_option tidesdb_table_option_list[] = {
     HA_TOPTION_NUMBER("SKIP_LIST_PROBABILITY", skip_list_probability, 25, 1, 100, 1),
     HA_TOPTION_NUMBER("BLOOM_FPR", bloom_fpr, 100, 1, 10000, 1),
     HA_TOPTION_NUMBER("L1_FILE_COUNT_TRIGGER", l1_file_count_trigger, 4, 1, 1024, 1),
-    HA_TOPTION_NUMBER("L0_QUEUE_STALL_THRESHOLD", l0_queue_stall_threshold, 20, 1, 1024, 1),
+    HA_TOPTION_NUMBER("L0_QUEUE_STALL_THRESHOLD", l0_queue_stall_threshold, 10, 1, 1024, 1),
     HA_TOPTION_ENUM("COMPRESSION", compression, "NONE,SNAPPY,LZ4,ZSTD,LZ4_FAST", 2),
     HA_TOPTION_ENUM("SYNC_MODE", sync_mode, "NONE,INTERVAL,FULL", 2),
     HA_TOPTION_ENUM("ISOLATION_LEVEL", isolation_level,
@@ -440,6 +440,13 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
             tidesdb_txn_free(trx->txn);
             trx->txn = NULL;
             trx->dirty = false;
+            trx->stmt_savepoint_active = false;
+            /* TDB_ERR_CONFLICT (-7) is a transient write-write conflict
+               in TidesDB's optimistic concurrency layer.  Map it to
+               HA_ERR_LOCK_DEADLOCK; MariaDB wraps this as
+               ER_ERROR_DURING_COMMIT (ERROR 1180) — the application
+               must catch it and retry.  All other errors are fatal. */
+            if (rc == TDB_ERR_CONFLICT) return HA_ERR_LOCK_DEADLOCK;
             return HA_ERR_GENERIC;
         }
         /* We free the txn so that the next get_or_create_trx() starts
@@ -1762,7 +1769,7 @@ int ha_tidesdb::write_row(const uchar *buf)
 err:
     tmp_restore_column_map(&table->read_set, old_map);
     sql_print_warning("TIDESDB: write_row put failed rc=%d", rc);
-    DBUG_RETURN(HA_ERR_GENERIC);
+    DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
 }
 
 /* ******************** AUTO_INCREMENT (O(1) atomic counter) ******************** */
@@ -2581,7 +2588,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
 err:
     tmp_restore_column_map(&table->read_set, old_map);
     sql_print_warning("TIDESDB: update_row put/delete failed rc=%d", rc);
-    DBUG_RETURN(HA_ERR_GENERIC);
+    DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
 }
 
 /* ******************** delete_row (DELETE) ******************** */
@@ -2621,7 +2628,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
     {
         tmp_restore_column_map(&table->read_set, old_map);
         sql_print_warning("TIDESDB: delete_row failed rc=%d", rc);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
     }
 
     /* We delete secondary index entries */
@@ -3825,8 +3832,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30200,
+    0x30300,
     NULL,
     tidesdb_system_variables,
-    "3.2.0",
+    "3.3.0",
     MariaDB_PLUGIN_MATURITY_EXPERIMENTAL} maria_declare_plugin_end;

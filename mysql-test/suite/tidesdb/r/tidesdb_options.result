@@ -20,7 +20,7 @@ Variable_name	Value
 tidesdb_block_cache_size	268435456
 SHOW VARIABLES LIKE 'tidesdb_max_open_sstables';
 Variable_name	Value
-tidesdb_max_open_sstables	512
+tidesdb_max_open_sstables	256
 #
 # ============================================
 # TEST 2: CREATE TABLE with default options
