@@ -213,13 +213,18 @@ SYSTEM VARIABLES (SET GLOBAL tidesdb_...)
 
 All are read-only (set at startup) unless noted otherwise.
 
-  flush_threads             Background flush threads (default: 2)
-  compaction_threads        Background compaction threads (default: 2)
-  log_level                 DEBUG/INFO/WARN/ERROR/FATAL/NONE (default: WARN)
+  flush_threads             Background flush threads (default: 4)
+  compaction_threads        Background compaction threads (default: 4)
+  log_level                 DEBUG/INFO/WARN/ERROR/FATAL/NONE (default: DEBUG)
   block_cache_size          Global block cache in bytes (default: 256MB)
   max_open_sstables         Max cached SSTable files (default: 256)
+  max_memory_usage          Global memory limit in bytes; 0 = auto (default: 0)
   backup_dir                [dynamic] Set to a path to trigger online backup
   debug_trace               [dynamic] Per-operation trace logging (default: OFF)
+
+Logging: TidesDB writes to <tidesdb_data>/LOG by default with automatic
+truncation at 24 MB.  Set log_level to WARN or higher in production to
+reduce log volume.
 
 
 TABLE OPTIONS (CREATE TABLE ... ENGINE=TidesDB <option>=<value>)
@@ -255,7 +260,7 @@ LSM Tree:
   MIN_LEVELS                Minimum LSM levels (default: 5)
   DIVIDING_LEVEL_OFFSET     Compaction dividing level offset (default: 2)
   L1_FILE_COUNT_TRIGGER     L1 file count trigger for compaction (default: 4)
-  L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 20)
+  L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 4)
 
 Skip List:
   SKIP_LIST_MAX_LEVEL       Max skip list level (default: 12)
@@ -300,17 +305,19 @@ Run specific test:
   perl mtr --suite=tidesdb tidesdb_crud
 
 Available tests:
-  tidesdb_crud          Basic CRUD operations
-  tidesdb_pk_index      Primary key and secondary index scans
-  tidesdb_options       Table and field options
-  tidesdb_ttl           Time-to-live expiration
-  tidesdb_vcol          Virtual/generated columns
-  tidesdb_encryption    Data-at-rest encryption
-  tidesdb_backup        Online backup
-  tidesdb_partition     RANGE/LIST/HASH/KEY partitioning
-  tidesdb_online_ddl    Online DDL (instant, inplace, copy)
-  tidesdb_analyze       ANALYZE TABLE with CF statistics output
-  tidesdb_rename        Table rename
+  tidesdb_crud            Basic CRUD operations
+  tidesdb_pk_index        Primary key and secondary index scans
+  tidesdb_options         Table and field options
+  tidesdb_ttl             Time-to-live expiration
+  tidesdb_vcol            Virtual/generated columns
+  tidesdb_encryption      Data-at-rest encryption
+  tidesdb_backup          Online backup
+  tidesdb_partition       RANGE/LIST/HASH/KEY partitioning
+  tidesdb_online_ddl      Online DDL (instant, inplace, copy)
+  tidesdb_analyze         ANALYZE TABLE with CF statistics output
+  tidesdb_rename          Table rename
+  tidesdb_stress          Concurrent transactions, conflicts, truncate cycles
+  tidesdb_write_pressure  oltp_write_only OOM reproduction (multi-connection)
 
 Run with verbose output:
 

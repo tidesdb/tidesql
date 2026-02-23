@@ -19,6 +19,7 @@ SHOW VARIABLES LIKE 'tidesdb_compaction_threads';
 SHOW VARIABLES LIKE 'tidesdb_log_level';
 SHOW VARIABLES LIKE 'tidesdb_block_cache_size';
 SHOW VARIABLES LIKE 'tidesdb_max_open_sstables';
+SHOW VARIABLES LIKE 'tidesdb_max_memory_usage';
 
 --echo #
 --echo # ============================================
