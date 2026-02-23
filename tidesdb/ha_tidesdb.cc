@@ -70,12 +70,13 @@ static const char *ha_tidesdb_exts[] = {NullS};
 
 /* ******************** System variables (global DB config) ******************** */
 
-static ulong srv_flush_threads = 2;
-static ulong srv_compaction_threads = 2;
-static ulong srv_log_level = 2;                                      /* TDB_LOG_WARN */
+static ulong srv_flush_threads = 4;
+static ulong srv_compaction_threads = 4;
+static ulong srv_log_level = 0;                                      /* TDB_LOG_DEBUG */
 static my_bool srv_debug_trace = 0;                                  /* per-op trace logging */
 static ulonglong srv_block_cache_size = TIDESDB_DEFAULT_BLOCK_CACHE; /* 256MB */
 static ulong srv_max_open_sstables = 256;
+static ulonglong srv_max_memory_usage = 0; /* 0 = auto (library decides) */
 
 static const char *log_level_names[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL", "NONE", NullS};
 #if MYSQL_VERSION_ID >= 120000
@@ -88,14 +89,14 @@ static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_le
 
 static MYSQL_SYSVAR_ULONG(flush_threads, srv_flush_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Number of TidesDB flush threads", NULL, NULL, 2, 1, 64, 0);
+                          "Number of TidesDB flush threads", NULL, NULL, 4, 1, 64, 0);
 
 static MYSQL_SYSVAR_ULONG(compaction_threads, srv_compaction_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Number of TidesDB compaction threads", NULL, NULL, 2, 1, 64, 0);
+                          "Number of TidesDB compaction threads", NULL, NULL, 4, 1, 64, 0);
 
 static MYSQL_SYSVAR_ENUM(log_level, srv_log_level, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                         "TidesDB log level (DEBUG, INFO, WARN, ERROR, FATAL, NONE)", NULL, NULL, 2,
+                         "TidesDB log level (DEBUG, INFO, WARN, ERROR, FATAL, NONE)", NULL, NULL, 0,
                          &log_level_typelib);
 
 static MYSQL_SYSVAR_BOOL(debug_trace, srv_debug_trace, PLUGIN_VAR_RQCMDARG,
@@ -111,6 +112,11 @@ static MYSQL_SYSVAR_ULONG(max_open_sstables, srv_max_open_sstables,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                           "Max cached SSTable structures in LRU cache", NULL, NULL, 256, 1, 65536,
                           0);
+
+static MYSQL_SYSVAR_ULONGLONG(max_memory_usage, srv_max_memory_usage,
+                              PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+                              "TidesDB global memory limit in bytes (0 = auto, ~80%% system RAM)",
+                              NULL, NULL, 0, 0, ULONGLONG_MAX, 0);
 
 /* ******************** Online backup via system variable ******************** */
 
@@ -158,11 +164,15 @@ static MYSQL_SYSVAR_STR(backup_dir, srv_backup_dir, PLUGIN_VAR_RQCMDARG | PLUGIN
                         "Example: SET GLOBAL tidesdb_backup_dir = '/path/to/backup'",
                         NULL, tidesdb_backup_dir_update, NULL);
 
-static struct st_mysql_sys_var *tidesdb_system_variables[] = {
-    MYSQL_SYSVAR(flush_threads),     MYSQL_SYSVAR(compaction_threads),
-    MYSQL_SYSVAR(log_level),         MYSQL_SYSVAR(block_cache_size),
-    MYSQL_SYSVAR(max_open_sstables), MYSQL_SYSVAR(backup_dir),
-    MYSQL_SYSVAR(debug_trace),       NULL};
+static struct st_mysql_sys_var *tidesdb_system_variables[] = {MYSQL_SYSVAR(flush_threads),
+                                                              MYSQL_SYSVAR(compaction_threads),
+                                                              MYSQL_SYSVAR(log_level),
+                                                              MYSQL_SYSVAR(block_cache_size),
+                                                              MYSQL_SYSVAR(max_open_sstables),
+                                                              MYSQL_SYSVAR(max_memory_usage),
+                                                              MYSQL_SYSVAR(backup_dir),
+                                                              MYSQL_SYSVAR(debug_trace),
+                                                              NULL};
 
 /* ******************** Table options (per-table CF config) ******************** */
 
@@ -194,7 +204,7 @@ struct ha_table_option_struct
 };
 
 ha_create_table_option tidesdb_table_option_list[] = {
-    HA_TOPTION_NUMBER("WRITE_BUFFER_SIZE", write_buffer_size, 64 * 1024 * 1024, 1024, ULONGLONG_MAX,
+    HA_TOPTION_NUMBER("WRITE_BUFFER_SIZE", write_buffer_size, 32 * 1024 * 1024, 1024, ULONGLONG_MAX,
                       1024),
     HA_TOPTION_NUMBER("MIN_DISK_SPACE", min_disk_space, 100ULL * 1024 * 1024, 0, ULONGLONG_MAX,
                       1024),
@@ -209,7 +219,7 @@ ha_create_table_option tidesdb_table_option_list[] = {
     HA_TOPTION_NUMBER("SKIP_LIST_PROBABILITY", skip_list_probability, 25, 1, 100, 1),
     HA_TOPTION_NUMBER("BLOOM_FPR", bloom_fpr, 100, 1, 10000, 1),
     HA_TOPTION_NUMBER("L1_FILE_COUNT_TRIGGER", l1_file_count_trigger, 4, 1, 1024, 1),
-    HA_TOPTION_NUMBER("L0_QUEUE_STALL_THRESHOLD", l0_queue_stall_threshold, 10, 1, 1024, 1),
+    HA_TOPTION_NUMBER("L0_QUEUE_STALL_THRESHOLD", l0_queue_stall_threshold, 4, 1, 1024, 1),
     HA_TOPTION_ENUM("COMPRESSION", compression, "NONE,SNAPPY,LZ4,ZSTD,LZ4_FAST", 2),
     HA_TOPTION_ENUM("SYNC_MODE", sync_mode, "NONE,INTERVAL,FULL", 2),
     HA_TOPTION_ENUM("ISOLATION_LEVEL", isolation_level,
@@ -578,6 +588,9 @@ static int tidesdb_init_func(void *p)
     cfg.log_level = (tidesdb_log_level_t)log_level_map[srv_log_level];
     cfg.block_cache_size = (size_t)srv_block_cache_size;
     cfg.max_open_sstables = (int)srv_max_open_sstables;
+    cfg.log_to_file = 1;
+    cfg.log_truncation_at = 24 * 1024 * 1024; /* 24MB, auto-truncate LOG file */
+    cfg.max_memory_usage = (size_t)srv_max_memory_usage;
 
     int rc = tidesdb_open(&cfg, &tdb_global);
     if (rc != TDB_SUCCESS)
@@ -3832,8 +3845,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30300,
+    0x30301,
     NULL,
     tidesdb_system_variables,
-    "3.3.0",
+    "3.3.1",
     MariaDB_PLUGIN_MATURITY_EXPERIMENTAL} maria_declare_plugin_end;

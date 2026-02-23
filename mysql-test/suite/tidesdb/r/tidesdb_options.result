@@ -8,19 +8,22 @@
 #
 SHOW VARIABLES LIKE 'tidesdb_flush_threads';
 Variable_name	Value
-tidesdb_flush_threads	2
+tidesdb_flush_threads	4
 SHOW VARIABLES LIKE 'tidesdb_compaction_threads';
 Variable_name	Value
-tidesdb_compaction_threads	2
+tidesdb_compaction_threads	4
 SHOW VARIABLES LIKE 'tidesdb_log_level';
 Variable_name	Value
-tidesdb_log_level	WARN
+tidesdb_log_level	DEBUG
 SHOW VARIABLES LIKE 'tidesdb_block_cache_size';
 Variable_name	Value
 tidesdb_block_cache_size	268435456
 SHOW VARIABLES LIKE 'tidesdb_max_open_sstables';
 Variable_name	Value
 tidesdb_max_open_sstables	256
+SHOW VARIABLES LIKE 'tidesdb_max_memory_usage';
+Variable_name	Value
+tidesdb_max_memory_usage	0
 #
 # ============================================
 # TEST 2: CREATE TABLE with default options
