@@ -1153,15 +1153,22 @@ void ha_tidesdb::recover_counters()
                     size_t val_size = 0;
                     if (tidesdb_iter_value(iter, &val, &val_size) == TDB_SUCCESS)
                     {
-                        /* Temporarily populate record[1] to read the field value */
-                        if (!share->has_blobs && !share->encrypted &&
-                            val_size >= table->s->reclength)
+                        /* Unpack the packed row into record[1] using the proper
+                           deserialize path so field offsets are correct even when
+                           variable-length fields (CHAR/VARCHAR) precede the
+                           AUTO_INCREMENT column. */
+                        if (share->has_blobs || share->encrypted)
                         {
-                            memcpy(table->record[1], val, table->s->reclength);
-                            ulonglong max_val = table->found_next_number_field->val_int_offset(
-                                table->s->rec_buff_length);
-                            share->auto_inc_val.store(max_val, std::memory_order_relaxed);
+                            std::string row_data((const char *)val, val_size);
+                            deserialize_row(table->record[1], row_data);
                         }
+                        else
+                        {
+                            deserialize_row(table->record[1], (const uchar *)val, val_size);
+                        }
+                        ulonglong max_val = table->found_next_number_field->val_int_offset(
+                            table->s->rec_buff_length);
+                        share->auto_inc_val.store(max_val, std::memory_order_relaxed);
                     }
                 }
             }
@@ -1445,9 +1452,13 @@ const std::string &ha_tidesdb::serialize_row(const uchar *buf)
 {
     my_ptrdiff_t ptrdiff = (my_ptrdiff_t)(buf - table->record[0]);
 
-    /* Upper-bound packed size -- null_bytes + reclength covers fixed fields.
+    /* Upper-bound packed size -- null_bytes + reclength covers field data.
+       Add 2 bytes per field for length-prefix overhead: Field_string::pack()
+       (CHAR columns) prepends a 1-2 byte length that is NOT included in
+       reclength.  Without this margin the buffer overflows by up to
+       2 * num_char_fields bytes, silently corrupting the heap.
        For BLOBs, add actual data sizes since Field_blob::pack() inlines data. */
-    size_t est = table->s->null_bytes + table->s->reclength;
+    size_t est = table->s->null_bytes + table->s->reclength + 2 * table->s->fields;
     if (share->has_blobs)
     {
         for (uint i = 0; i < table->s->fields; i++)
@@ -3845,8 +3856,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30301,
+    0x30302,
     NULL,
     tidesdb_system_variables,
-    "3.3.1",
+    "3.3.2",
     MariaDB_PLUGIN_MATURITY_EXPERIMENTAL} maria_declare_plugin_end;
