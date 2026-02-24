@@ -264,10 +264,10 @@ class ha_tidesdb : public handler
     /* Evaluate pushed index condition on a secondary-index entry before
        the expensive PK point-lookup.  Decodes the index key columns into
        buf and calls handler_index_cond_check().
-       Returns CHECK_POS  -- condition satisfied, proceed with PK lookup
-               CHECK_NEG  -- condition not satisfied, skip this entry
-               CHECK_OUT_OF_RANGE  -- past end of scan range
-               CHECK_ABORTED_BY_USER -- query killed */
+       Returns CHECK_POS                -- condition satisfied, proceed with PK lookup
+               CHECK_NEG                -- condition not satisfied, skip this entry
+               CHECK_OUT_OF_RANGE       -- past end of scan range
+               CHECK_ABORTED_BY_USER    -- query killed */
     check_result_t icp_check_secondary(const uint8_t *ik, size_t iks, uint idx, uchar *buf);
 
     /* Reverse a single integer sort-key part back to native little-endian
@@ -390,8 +390,8 @@ class ha_tidesdb : public handler
     IO_AND_CPU_COST scan_time() override;
 
    public:
-    /* Locking -- TidesDB handles all concurrency via MVCC internally.
-       lock_count()=0 bypasses MariaDB's THR_LOCK (same pattern as InnoDB). */
+    /* Locking -- TidesDB handles concurrency via MVCC internally.
+       lock_count()=0 bypasses MariaDB's THR_LOCK. */
     uint lock_count(void) const override
     {
         return 0;
