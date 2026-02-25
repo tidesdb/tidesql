@@ -63,7 +63,7 @@
 #
 # Examples:
 #   ./install.sh
-#   ./install.sh --tidesdb-version v8.4.0 --mariadb-version 12.1
+#   ./install.sh --tidesdb-version v8.6.1 --mariadb-version 12.1
 #   ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
 #   ./install.sh --mariadb-version mariadb-12.1.2
 #   ./install.sh --skip-deps --skip-tidesdb
@@ -134,7 +134,7 @@ get_latest_tidesdb_version() {
     version=$(_fetch_url "https://api.github.com/repos/tidesdb/tidesdb/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "v8.3.2"  # fallback
+        echo "v8.6.1"  # fallback
     else
         echo "$version"
     fi

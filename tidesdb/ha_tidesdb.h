@@ -44,35 +44,38 @@ static constexpr size_t HIDDEN_PK_SIZE = sizeof(uint64_t);
 /* ----- Maximum number of secondary indexes we support ----------------------------------------- */
 static constexpr uint MAX_TIDESDB_KEYS = MAX_KEY;
 
-/* ----- Cost model constants for the optimizer ------------------------------------------------ */
+/* ----- Cost model constants for the optimizer ------------------------------------------------- */
 static constexpr double TIDESDB_COST_SEQ_READ = 0.00005;
 static constexpr double TIDESDB_COST_KEY_READ = 0.00003;
 static constexpr double TIDESDB_COST_RANGE_SETUP = 0.0001;
 static constexpr double TIDESDB_DEFAULT_READ_AMP = 1.0;
 
-/* ----- Stats cache refresh interval (microseconds) ------------------------------------------- */
+/* ----- Stats cache refresh interval (microseconds) -------------------------------------------- */
 static constexpr long long TIDESDB_STATS_REFRESH_US = 2000000LL; /* 2 seconds */
 
-/* ----- Minimum stats.records to avoid optimizer edge cases with 0 rows ----------------------- */
+/* ----- Minimum stats.records to avoid optimizer edge cases with 0 rows ------------------------ */
 static constexpr ha_rows TIDESDB_MIN_STATS_RECORDS = 2;
 
-/* ----- Inplace index build batch commit size ------------------------------------------------- */
+/* ----- Inplace index build batch commit size -------------------------------------------------- */
 static constexpr ha_rows TIDESDB_INDEX_BUILD_BATCH = 10000;
 
-/* ----- Encryption ---------------------------------------------------------------------------- */
+/* ----- Bulk insert mid-txn commit threshold (ops, not rows) ----------------------------------- */
+static constexpr ha_rows TIDESDB_BULK_INSERT_BATCH_OPS = 50000;
+
+/* ----- Encryption ----------------------------------------------------------------------------- */
 static constexpr uint TIDESDB_ENC_IV_LEN = 16;
 static constexpr uint TIDESDB_ENC_KEY_LEN = 32;
 
-/* ----- Bloom filter FPR conversion (table option stores parts per 10000) --------------------- */
+/* ----- Bloom filter FPR conversion (table option stores parts per 10000) ---------------------- */
 static constexpr double TIDESDB_BLOOM_FPR_DIVISOR = 10000.0;
 
-/* ----- Skip list probability conversion (table option stores percentage) --------------------- */
+/* ----- Skip list probability conversion (table option stores percentage) ---------------------- */
 static constexpr float TIDESDB_SKIP_LIST_PROB_DIV = 100.0f;
 
-/* ----- TTL sentinel value meaning no expiration ---------------------------------------------- */
+/* ----- TTL sentinel value meaning no expiration ----------------------------------------------- */
 static constexpr time_t TIDESDB_TTL_NONE = (time_t)-1;
 
-/* ----- Default block cache size (bytes) ------------------------------------------------------ */
+/* ----- Default block cache size (bytes) ------------------------------------------------------- */
 static constexpr ulonglong TIDESDB_DEFAULT_BLOCK_CACHE = 256ULL * 1024 * 1024;
 
 /*
@@ -121,7 +124,7 @@ class TidesDB_share : public Handler_share
     std::atomic<uint64_t> cached_idx_data_size{0}; /* sum of secondary CF sizes */
     std::atomic<uint32_t> cached_mean_rec_len{0};  /* avg_key_size + avg_value_size */
     std::atomic<long long> stats_refresh_us{0};    /* last refresh timestamp (µs) */
-    double cached_read_amp{1.0};                   /* read amplification factor */
+    std::atomic<double> cached_read_amp{1.0};      /* read amplification factor */
 
     /* Precomputed comparable key length per index (avoids per-row recomputation) */
     uint idx_comp_key_len[MAX_KEY];
@@ -210,6 +213,7 @@ class ha_tidesdb : public handler
 
     /* Bulk insert state */
     bool in_bulk_insert_;
+    ha_rows bulk_insert_ops_; /* ops buffered since last mid-txn commit */
 
     /* Covering-index mode (HA_EXTRA_KEYREAD) */
     bool keyread_only_;
@@ -319,7 +323,8 @@ class ha_tidesdb : public handler
            Range scans amortize the merge-heap cost across rows. */
         IO_AND_CPU_COST cost;
         cost.io = 0;
-        double amp = share ? share->cached_read_amp : TIDESDB_DEFAULT_READ_AMP;
+        double amp = share ? share->cached_read_amp.load(std::memory_order_relaxed)
+                           : TIDESDB_DEFAULT_READ_AMP;
         cost.cpu =
             (double)rows * TIDESDB_COST_KEY_READ * amp + (double)ranges * TIDESDB_COST_RANGE_SETUP;
         return cost;
@@ -331,7 +336,8 @@ class ha_tidesdb : public handler
            More expensive than sequential due to read amplification. */
         IO_AND_CPU_COST cost;
         cost.io = 0;
-        double amp = share ? share->cached_read_amp : TIDESDB_DEFAULT_READ_AMP;
+        double amp = share ? share->cached_read_amp.load(std::memory_order_relaxed)
+                           : TIDESDB_DEFAULT_READ_AMP;
         cost.cpu = (double)rows * TIDESDB_COST_SEQ_READ * amp;
         return cost;
     }
