@@ -43,6 +43,55 @@ static inline long long tdb_now_us()
     return (long long)microsecond_interval_timer();
 }
 
+/* Declared early so tdb_rc_to_ha() can reference it; default 0,
+   toggled at runtime via SET GLOBAL tidesdb_debug_trace. */
+static my_bool srv_debug_trace = 0;
+
+/*
+  Map TidesDB library error codes to MariaDB handler error codes.
+  Transient errors (conflict, lock contention, memory pressure) are mapped
+  to HA_ERR_LOCK_DEADLOCK so that MariaDB's deadlock-retry logic kicks in
+  and applications (sysbench, ORMs) can retry automatically instead of
+  receiving the opaque HA_ERR_GENERIC / ER_GET_ERRNO 1030.
+*/
+static int tdb_rc_to_ha(int rc, const char *ctx)
+{
+    switch (rc)
+    {
+        case TDB_SUCCESS:
+            return 0;
+        /* Transient errors -- expected under concurrency, mapped to deadlock
+           so MariaDB retries automatically.  Only log under debug_trace to
+           avoid flooding the error log at high concurrency. */
+        case TDB_ERR_CONFLICT:
+            if (unlikely(srv_debug_trace))
+                sql_print_information("TIDESDB: %s: TDB_ERR_CONFLICT (-7), mapped to deadlock",
+                                      ctx);
+            return HA_ERR_LOCK_DEADLOCK;
+        case TDB_ERR_LOCKED:
+            if (unlikely(srv_debug_trace))
+                sql_print_information(
+                    "TIDESDB: %s: TDB_ERR_LOCKED (-12), mapped to deadlock (backpressure)", ctx);
+            return HA_ERR_LOCK_DEADLOCK;
+        case TDB_ERR_MEMORY_LIMIT:
+            if (unlikely(srv_debug_trace))
+                sql_print_information(
+                    "TIDESDB: %s: TDB_ERR_MEMORY_LIMIT (-9), mapped to deadlock (memory pressure)",
+                    ctx);
+            return HA_ERR_LOCK_DEADLOCK;
+        case TDB_ERR_MEMORY:
+            sql_print_error("TIDESDB: %s: TDB_ERR_MEMORY (-1)", ctx);
+            return HA_ERR_OUT_OF_MEM;
+        case TDB_ERR_NOT_FOUND:
+            return HA_ERR_KEY_NOT_FOUND;
+        case TDB_ERR_EXISTS:
+            return HA_ERR_FOUND_DUPP_KEY;
+        default:
+            sql_print_warning("TIDESDB: %s: unexpected TidesDB error rc=%d", ctx, rc);
+            return HA_ERR_GENERIC;
+    }
+}
+
 /* Hex-dump helper for trace logging (up to 32 bytes) */
 static inline void tdb_hex(const uchar *data, uint len, char *out, uint out_sz)
 {
@@ -73,7 +122,7 @@ static const char *ha_tidesdb_exts[] = {NullS};
 static ulong srv_flush_threads = 4;
 static ulong srv_compaction_threads = 4;
 static ulong srv_log_level = 0;                                      /* TDB_LOG_DEBUG */
-static my_bool srv_debug_trace = 0;                                  /* per-op trace logging */
+/* srv_debug_trace declared earlier for tdb_rc_to_ha()  */           /* per-op trace logging */
 static ulonglong srv_block_cache_size = TIDESDB_DEFAULT_BLOCK_CACHE; /* 256MB */
 static ulong srv_max_open_sstables = 256;
 static ulonglong srv_max_memory_usage = 0; /* 0 = auto (library decides) */
@@ -370,7 +419,7 @@ static tidesdb_trx_t *get_or_create_trx(THD *thd, handlerton *hton, tidesdb_isol
             int rc = tidesdb_txn_begin_with_isolation(tdb_global, iso, &trx->txn);
             if (rc != TDB_SUCCESS)
             {
-                sql_print_warning("TIDESDB: get_or_create_trx txn_begin failed rc=%d", rc);
+                (void)tdb_rc_to_ha(rc, "get_or_create_trx txn_begin(reuse)");
                 return NULL;
             }
             trx->dirty = false;
@@ -386,7 +435,7 @@ static tidesdb_trx_t *get_or_create_trx(THD *thd, handlerton *hton, tidesdb_isol
     if (rc != TDB_SUCCESS)
     {
         my_free(trx);
-        sql_print_warning("TIDESDB: get_or_create_trx txn_begin failed rc=%d", rc);
+        (void)tdb_rc_to_ha(rc, "get_or_create_trx txn_begin(new)");
         return NULL;
     }
     trx->dirty = false;
@@ -412,7 +461,7 @@ static int tidesdb_savepoint_set(THD *thd, void *sv)
 
     int rc = tidesdb_txn_savepoint(trx->txn, sp->name);
     if (rc == TDB_SUCCESS) return 0;
-    return HA_ERR_GENERIC;
+    return tdb_rc_to_ha(rc, "savepoint_set");
 }
 
 static int tidesdb_savepoint_rollback(THD *thd, void *sv)
@@ -433,7 +482,7 @@ static int tidesdb_savepoint_rollback(THD *thd, void *sv)
         return 0;
     }
     if (rc == TDB_ERR_NOT_FOUND) return HA_ERR_NO_SAVEPOINT;
-    return HA_ERR_GENERIC;
+    return tdb_rc_to_ha(rc, "savepoint_rollback");
 }
 
 static bool tidesdb_savepoint_rollback_can_release_mdl(THD *)
@@ -452,7 +501,7 @@ static int tidesdb_savepoint_release(THD *thd, void *sv)
     int rc = tidesdb_txn_release_savepoint(trx->txn, sp->name);
     if (rc == TDB_SUCCESS) return 0;
     if (rc == TDB_ERR_NOT_FOUND) return HA_ERR_NO_SAVEPOINT;
-    return HA_ERR_GENERIC;
+    return tdb_rc_to_ha(rc, "savepoint_release");
 }
 
 #if MYSQL_VERSION_ID >= 120000
@@ -507,19 +556,12 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
         int rc = tidesdb_txn_commit(trx->txn);
         if (rc != TDB_SUCCESS)
         {
-            sql_print_warning("TIDESDB: hton commit failed rc=%d", rc);
             tidesdb_txn_rollback(trx->txn);
             tidesdb_txn_free(trx->txn);
             trx->txn = NULL;
             trx->dirty = false;
             trx->stmt_savepoint_active = false;
-            /* TDB_ERR_CONFLICT (-7) is a transient write-write conflict
-               in TidesDB's optimistic concurrency layer.  Map it to
-               HA_ERR_LOCK_DEADLOCK; MariaDB wraps this as
-               ER_ERROR_DURING_COMMIT (ERROR 1180), the application(like sysbench for example)
-               must catch it and retry.  All other errors are fatal. */
-            if (rc == TDB_ERR_CONFLICT) return HA_ERR_LOCK_DEADLOCK;
-            return HA_ERR_GENERIC;
+            return tdb_rc_to_ha(rc, "hton_commit");
         }
         /* We free the txn so that the next get_or_create_trx() starts
            a fresh transaction with a new read snapshot and a distinct
@@ -1333,7 +1375,7 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
             {
                 sql_print_error("TIDESDB: encryption key %u not available",
                                 share->encryption_key_id);
-                DBUG_RETURN(HA_ERR_GENERIC);
+                DBUG_RETURN(HA_ERR_NO_SUCH_TABLE);
             }
             share->encryption_key_version = ver;
         }
@@ -1434,7 +1476,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
         if (rc != TDB_SUCCESS)
         {
             sql_print_error("TIDESDB: Failed to create CF '%s' (err=%d)", cf_name.c_str(), rc);
-            DBUG_RETURN(HA_ERR_GENERIC);
+            DBUG_RETURN(tdb_rc_to_ha(rc, "create main_cf"));
         }
     }
 
@@ -1451,7 +1493,7 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
             {
                 sql_print_error("TIDESDB: Failed to create index CF '%s' (err=%d)", idx_cf.c_str(),
                                 rc);
-                DBUG_RETURN(HA_ERR_GENERIC);
+                DBUG_RETURN(tdb_rc_to_ha(rc, "create idx_cf"));
             }
         }
     }
@@ -1902,8 +1944,7 @@ int ha_tidesdb::write_row(const uchar *buf)
                 if (crc != TDB_SUCCESS)
                 {
                     tmp_restore_column_map(&table->read_set, old_map);
-                    sql_print_error("TIDESDB: bulk insert mid-commit txn_begin failed rc=%d", crc);
-                    DBUG_RETURN(HA_ERR_GENERIC);
+                    DBUG_RETURN(tdb_rc_to_ha(crc, "bulk_insert txn_begin"));
                 }
                 stmt_txn = trx->txn;
             }
@@ -1917,8 +1958,7 @@ int ha_tidesdb::write_row(const uchar *buf)
 
 err:
     tmp_restore_column_map(&table->read_set, old_map);
-    sql_print_warning("TIDESDB: write_row put failed rc=%d", rc);
-    DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
+    DBUG_RETURN(tdb_rc_to_ha(rc, "write_row"));
 }
 
 /* ******************** AUTO_INCREMENT (O(1) atomic counter) ******************** */
@@ -1986,7 +2026,7 @@ int ha_tidesdb::rnd_init(bool scan)
         if (rc != TDB_SUCCESS)
         {
             scan_txn = NULL;
-            DBUG_RETURN(HA_ERR_GENERIC);
+            DBUG_RETURN(tdb_rc_to_ha(rc, "rnd_init txn_begin"));
         }
         scan_iter_cf_ = share->cf;
         scan_iter_txn_ = scan_txn;
@@ -2073,6 +2113,7 @@ int ha_tidesdb::index_init(uint idx, bool sorted)
     {
         scan_txn = NULL;
         scan_cf_ = NULL;
+        sql_print_error("TIDESDB: index_init: no CF for index %u", idx);
         DBUG_RETURN(HA_ERR_GENERIC);
     }
 
@@ -2101,12 +2142,16 @@ int ha_tidesdb::index_init(uint idx, bool sorted)
 
 /*
   Lazily create the scan iterator from scan_cf_ when first needed.
-  Returns 0 on success or HA_ERR_GENERIC.
+  Returns 0 on success or a handler error code.
 */
 int ha_tidesdb::ensure_scan_iter()
 {
     if (scan_iter) return 0;
-    if (!scan_txn || !scan_cf_) return HA_ERR_GENERIC;
+    if (!scan_txn || !scan_cf_)
+    {
+        sql_print_error("TIDESDB: ensure_scan_iter: no txn or CF");
+        return HA_ERR_GENERIC;
+    }
     int rc = tidesdb_iter_new(scan_txn, scan_cf_, &scan_iter);
     if (rc == TDB_SUCCESS)
     {
@@ -2114,7 +2159,7 @@ int ha_tidesdb::ensure_scan_iter()
         scan_iter_txn_ = scan_txn;
         return 0;
     }
-    return HA_ERR_GENERIC;
+    return tdb_rc_to_ha(rc, "ensure_scan_iter");
 }
 
 int ha_tidesdb::index_end()
@@ -2791,8 +2836,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
 
 err:
     tmp_restore_column_map(&table->read_set, old_map);
-    sql_print_warning("TIDESDB: update_row put/delete failed rc=%d", rc);
-    DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
+    DBUG_RETURN(tdb_rc_to_ha(rc, "update_row"));
 }
 
 /* ******************** delete_row (DELETE) ******************** */
@@ -2831,8 +2875,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
     if (rc != TDB_SUCCESS)
     {
         tmp_restore_column_map(&table->read_set, old_map);
-        sql_print_warning("TIDESDB: delete_row failed rc=%d", rc);
-        DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
+        DBUG_RETURN(tdb_rc_to_ha(rc, "delete_row"));
     }
 
     /* We delete secondary index entries */
@@ -2848,8 +2891,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
             if (rc != TDB_SUCCESS)
             {
                 tmp_restore_column_map(&table->read_set, old_map);
-                sql_print_warning("TIDESDB: delete_row idx delete failed idx=%u rc=%d", i, rc);
-                DBUG_RETURN(rc == TDB_ERR_CONFLICT ? HA_ERR_LOCK_DEADLOCK : HA_ERR_GENERIC);
+                DBUG_RETURN(tdb_rc_to_ha(rc, "delete_row idx"));
             }
         }
 
@@ -2902,7 +2944,7 @@ int ha_tidesdb::delete_all_rows(void)
         {
             sql_print_error("TIDESDB: truncate: failed to drop CF '%s' (err=%d)", cf_name.c_str(),
                             rc);
-            DBUG_RETURN(HA_ERR_GENERIC);
+            DBUG_RETURN(tdb_rc_to_ha(rc, "truncate drop_cf"));
         }
 
         rc = tidesdb_create_column_family(tdb_global, cf_name.c_str(), &cfg);
@@ -2910,7 +2952,7 @@ int ha_tidesdb::delete_all_rows(void)
         {
             sql_print_error("TIDESDB: truncate: failed to recreate CF '%s' (err=%d)",
                             cf_name.c_str(), rc);
-            DBUG_RETURN(HA_ERR_GENERIC);
+            DBUG_RETURN(tdb_rc_to_ha(rc, "truncate create_cf"));
         }
 
         share->cf = tidesdb_get_column_family(tdb_global, cf_name.c_str());
@@ -3392,7 +3434,7 @@ int ha_tidesdb::ensure_stmt_txn()
     tidesdb_isolation_level_t effective_iso =
         in_multi_stmt_txn ? share->isolation_level : TDB_ISOLATION_READ_COMMITTED;
     tidesdb_trx_t *trx = get_or_create_trx(thd, ht, effective_iso);
-    if (!trx) return HA_ERR_GENERIC;
+    if (!trx) return HA_ERR_OUT_OF_MEM;
 
     stmt_txn = trx->txn;
     if (unlikely(srv_debug_trace)) TDB_TRACE("txn from conn ctx took %lldus", tdb_now_us() - t0);
@@ -3424,7 +3466,7 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
         tidesdb_isolation_level_t effective_iso =
             in_multi_stmt_txn ? share->isolation_level : TDB_ISOLATION_READ_COMMITTED;
         tidesdb_trx_t *trx = get_or_create_trx(thd, ht, effective_iso);
-        if (!trx) DBUG_RETURN(HA_ERR_GENERIC);
+        if (!trx) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
 
         stmt_txn = trx->txn;
         stmt_txn_dirty = false;
@@ -3954,7 +3996,7 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
     {
         sql_print_error("TIDESDB: Failed to rename CF '%s' -> '%s' (err=%d)", old_cf.c_str(),
                         new_cf.c_str(), rc);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        DBUG_RETURN(tdb_rc_to_ha(rc, "rename_table"));
     }
 
     /* We rename secondary index CFs by enumerating all CFs with the old prefix. */
@@ -4046,7 +4088,7 @@ int ha_tidesdb::delete_table(const char *name)
     if (rc != TDB_SUCCESS && rc != TDB_ERR_NOT_FOUND)
     {
         sql_print_error("TIDESDB: Failed to drop CF '%s' (err=%d)", cf_name.c_str(), rc);
-        DBUG_RETURN(HA_ERR_GENERIC);
+        DBUG_RETURN(tdb_rc_to_ha(rc, "delete_table"));
     }
 
     for (const auto &idx_name : idx_cf_names)
@@ -4076,8 +4118,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30304,
+    0x30305,
     NULL,
     tidesdb_system_variables,
-    "3.3.4",
+    "3.3.5",
     MariaDB_PLUGIN_MATURITY_EXPERIMENTAL} maria_declare_plugin_end;

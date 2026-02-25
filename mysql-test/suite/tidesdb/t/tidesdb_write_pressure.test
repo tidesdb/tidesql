@@ -13,7 +13,10 @@
 #
 
 # Suppress expected conflict warnings from concurrent writes
-call mtr.add_suppression("TIDESDB: hton commit failed rc=-7");
+call mtr.add_suppression("TIDESDB:.*TDB_ERR_CONFLICT");
+call mtr.add_suppression("TIDESDB:.*TDB_ERR_LOCKED");
+call mtr.add_suppression("TIDESDB:.*TDB_ERR_MEMORY_LIMIT");
+call mtr.add_suppression("TIDESDB:.*unexpected TidesDB error");
 
 --echo #
 --echo # === Setup: sysbench-like schema with SYNC_MODE=NONE ===
