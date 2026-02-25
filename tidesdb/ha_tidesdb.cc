@@ -397,6 +397,64 @@ static tidesdb_trx_t *get_or_create_trx(THD *thd, handlerton *hton, tidesdb_isol
 
 /* ******************** Handlerton transaction callbacks ******************** */
 
+struct tidesdb_savepoint_t
+{
+    char name[32];
+};
+
+static int tidesdb_savepoint_set(THD *thd, void *sv)
+{
+    tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
+    if (!trx || !trx->txn || !sv) return 0;
+
+    tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)sv;
+    snprintf(sp->name, sizeof(sp->name), "sv_%p", sv);
+
+    int rc = tidesdb_txn_savepoint(trx->txn, sp->name);
+    if (rc == TDB_SUCCESS) return 0;
+    return HA_ERR_GENERIC;
+}
+
+static int tidesdb_savepoint_rollback(THD *thd, void *sv)
+{
+    tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
+    if (!trx || !trx->txn || !sv) return 0;
+
+    tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)sv;
+    if (!sp->name[0]) snprintf(sp->name, sizeof(sp->name), "sv_%p", sv);
+
+    int rc = tidesdb_txn_rollback_to_savepoint(trx->txn, sp->name);
+    if (rc == TDB_SUCCESS)
+    {
+        /* The TidesDB library may drop the savepoint as part of the rollback.
+           SQL semantics require the savepoint to still exist after rollback,
+           so we re-create it here to allow RELEASE SAVEPOINT to succeed. */
+        (void)tidesdb_txn_savepoint(trx->txn, sp->name);
+        return 0;
+    }
+    if (rc == TDB_ERR_NOT_FOUND) return HA_ERR_NO_SAVEPOINT;
+    return HA_ERR_GENERIC;
+}
+
+static bool tidesdb_savepoint_rollback_can_release_mdl(THD *)
+{
+    return true;
+}
+
+static int tidesdb_savepoint_release(THD *thd, void *sv)
+{
+    tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
+    if (!trx || !trx->txn || !sv) return 0;
+
+    tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)sv;
+    if (!sp->name[0]) snprintf(sp->name, sizeof(sp->name), "sv_%p", sv);
+
+    int rc = tidesdb_txn_release_savepoint(trx->txn, sp->name);
+    if (rc == TDB_SUCCESS) return 0;
+    if (rc == TDB_ERR_NOT_FOUND) return HA_ERR_NO_SAVEPOINT;
+    return HA_ERR_GENERIC;
+}
+
 #if MYSQL_VERSION_ID >= 120000
 static int tidesdb_commit(THD *thd, bool all)
 #else
@@ -558,6 +616,7 @@ static int tidesdb_init_func(void *p)
     tidesdb_hton = (handlerton *)p;
     tidesdb_hton->create = tidesdb_create_handler;
     tidesdb_hton->flags = 0;
+    tidesdb_hton->savepoint_offset = sizeof(tidesdb_savepoint_t);
     tidesdb_hton->tablefile_extensions = ha_tidesdb_exts;
     tidesdb_hton->table_options = tidesdb_table_option_list;
     tidesdb_hton->field_options = tidesdb_field_option_list;
@@ -567,6 +626,11 @@ static int tidesdb_init_func(void *p)
     tidesdb_hton->commit = tidesdb_commit;
     tidesdb_hton->rollback = tidesdb_rollback;
     tidesdb_hton->close_connection = tidesdb_close_connection;
+
+    tidesdb_hton->savepoint_set = tidesdb_savepoint_set;
+    tidesdb_hton->savepoint_rollback = tidesdb_savepoint_rollback;
+    tidesdb_hton->savepoint_rollback_can_release_mdl = tidesdb_savepoint_rollback_can_release_mdl;
+    tidesdb_hton->savepoint_release = tidesdb_savepoint_release;
 
     tidesdb_init(NULL, NULL, NULL, NULL);
 
@@ -4012,8 +4076,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30303,
+    0x30304,
     NULL,
     tidesdb_system_variables,
-    "3.3.3",
+    "3.3.4",
     MariaDB_PLUGIN_MATURITY_EXPERIMENTAL} maria_declare_plugin_end;
