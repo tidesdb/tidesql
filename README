@@ -183,13 +183,16 @@ FEATURES
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 Core:
-- Per-statement transactions with snapshot isolation
+- MVCC transactions with per-table isolation (autocommit uses READ_COMMITTED;
+  multi-statement transactions use the table's configured level)
 - Lock-free concurrency (no THR_LOCK, TidesDB handles isolation internally)
 - LSM-tree storage with optional B+tree SSTable format
 - Compression (NONE, LZ4, LZ4_FAST, ZSTD, Snappy)
 - Bloom filters for fast key lookups
 - Block cache for frequently accessed data
-- Primary key and secondary index support
+- Primary key (single and composite) and secondary index support
+- Index Condition Pushdown (ICP) for secondary index scans
+- AUTO_INCREMENT with O(1) atomic counter (no iterator per INSERT)
 - TTL (time-to-live) per-row and per-table expiration
 - Virtual/generated columns
 - Online backup (SET GLOBAL tidesdb_backup_dir = '/path')
@@ -317,6 +320,8 @@ Available tests:
   tidesdb_analyze         ANALYZE TABLE with CF statistics output
   tidesdb_rename          Table rename
   tidesdb_stress          Concurrent transactions, conflicts, truncate cycles
+  tidesdb_sql             Comprehensive SQL: 40 cases (aggregates, JOINs,
+                          subqueries, UNION, transactions, NULL handling, etc.)
   tidesdb_write_pressure  oltp_write_only OOM reproduction (multi-connection)
 
 Run with verbose output:
