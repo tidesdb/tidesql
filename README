@@ -185,6 +185,7 @@ FEATURES
 Core:
 - MVCC transactions with per-table isolation (autocommit uses READ_COMMITTED;
   multi-statement transactions use the table's configured level)
+- SQL savepoints (SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT)
 - Lock-free concurrency (no THR_LOCK, TidesDB handles isolation internally)
 - LSM-tree storage with optional B+tree SSTable format
 - Compression (NONE, LZ4, LZ4_FAST, ZSTD, Snappy)
@@ -322,6 +323,8 @@ Available tests:
   tidesdb_stress          Concurrent transactions, conflicts, truncate cycles
   tidesdb_sql             Comprehensive SQL: 40 cases (aggregates, JOINs,
                           subqueries, UNION, transactions, NULL handling, etc.)
+  tidesdb_json            JSON querying + generated-column JSON path indexing
+  tidesdb_savepoint       SQL SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT
   tidesdb_write_pressure  oltp_write_only OOM reproduction (multi-connection)
 
 Run with verbose output:
