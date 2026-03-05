@@ -449,17 +449,19 @@ min_s	max_s
 COMMIT;
 #
 # ============================================
-# TEST 19: Duplicate PK insert in transaction (upsert semantics)
-#   TidesDB uses KV put-overwrites, so a duplicate PK INSERT
-#   acts as an upsert.  Verify the txn continues and the
-#   last write wins.
+# TEST 19: PK uniqueness enforcement and REPLACE INTO
+#   Duplicate PK INSERT must return an error.
+#   REPLACE INTO overwrites the existing row.
 # ============================================
 #
 CREATE TABLE stress_uniq (id INT PRIMARY KEY, val VARCHAR(50)) ENGINE=TIDESDB;
 INSERT INTO stress_uniq VALUES (1, 'first');
+INSERT INTO stress_uniq VALUES (1, 'should_fail');
+ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+REPLACE INTO stress_uniq VALUES (1, 'replaced');
 BEGIN;
 INSERT INTO stress_uniq VALUES (2, 'second');
-INSERT INTO stress_uniq VALUES (1, 'overwritten');
+REPLACE INTO stress_uniq VALUES (1, 'overwritten');
 INSERT INTO stress_uniq VALUES (3, 'third');
 COMMIT;
 SELECT * FROM stress_uniq ORDER BY id;

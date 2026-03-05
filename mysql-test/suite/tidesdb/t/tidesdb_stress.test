@@ -501,20 +501,25 @@ COMMIT;
 
 --echo #
 --echo # ============================================
---echo # TEST 19: Duplicate PK insert in transaction (upsert semantics)
---echo #   TidesDB uses KV put-overwrites, so a duplicate PK INSERT
---echo #   acts as an upsert.  Verify the txn continues and the
---echo #   last write wins.
+--echo # TEST 19: PK uniqueness enforcement and REPLACE INTO
+--echo #   Duplicate PK INSERT must return an error.
+--echo #   REPLACE INTO overwrites the existing row.
 --echo # ============================================
 --echo #
 
 CREATE TABLE stress_uniq (id INT PRIMARY KEY, val VARCHAR(50)) ENGINE=TIDESDB;
 INSERT INTO stress_uniq VALUES (1, 'first');
 
+# Duplicate PK INSERT must fail
+--error ER_DUP_ENTRY
+INSERT INTO stress_uniq VALUES (1, 'should_fail');
+
+# REPLACE INTO should overwrite
+REPLACE INTO stress_uniq VALUES (1, 'replaced');
+
 BEGIN;
 INSERT INTO stress_uniq VALUES (2, 'second');
-# Duplicate PK -- TidesDB overwrites (upsert), no error
-INSERT INTO stress_uniq VALUES (1, 'overwritten');
+REPLACE INTO stress_uniq VALUES (1, 'overwritten');
 INSERT INTO stress_uniq VALUES (3, 'third');
 COMMIT;
 
