@@ -121,5 +121,79 @@ t_ttl_show	CREATE TABLE `t_ttl_show` (
 ) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci `TTL`=3600
 DROP TABLE t_ttl_show;
 #
+# ============================================
+# TEST 7: Session TTL override (SET SESSION)
+#   Table has no TTL; session variable applies
+# ============================================
+#
+CREATE TABLE t_ttl_sess (
+id INT PRIMARY KEY,
+val VARCHAR(50)
+) ENGINE=TIDESDB;
+# Default session TTL is 0 (no override)
+SELECT @@session.tidesdb_ttl;
+@@session.tidesdb_ttl
+0
+SET SESSION tidesdb_ttl = 2;
+INSERT INTO t_ttl_sess VALUES (1, 'session_ttl'), (2, 'also_session');
+# Rows visible immediately
+SELECT * FROM t_ttl_sess ORDER BY id;
+id	val
+1	session_ttl
+2	also_session
+SET SESSION tidesdb_ttl = 0;
+# Wait for session TTL to expire (3s > 2s)
+# Rows should now be expired
+SELECT * FROM t_ttl_sess ORDER BY id;
+id	val
+DROP TABLE t_ttl_sess;
+#
+# ============================================
+# TEST 8: SET STATEMENT tidesdb_ttl=N FOR ...
+#   Only the single statement gets TTL
+# ============================================
+#
+CREATE TABLE t_ttl_stmt (
+id INT PRIMARY KEY,
+val VARCHAR(50)
+) ENGINE=TIDESDB;
+SET STATEMENT tidesdb_ttl=2 FOR
+INSERT INTO t_ttl_stmt VALUES (1, 'short_lived');
+INSERT INTO t_ttl_stmt VALUES (2, 'permanent');
+# Both rows visible immediately
+SELECT * FROM t_ttl_stmt ORDER BY id;
+id	val
+1	short_lived
+2	permanent
+# Row 1 expired (session TTL=2); row 2 still alive (no TTL)
+SELECT * FROM t_ttl_stmt ORDER BY id;
+id	val
+2	permanent
+DROP TABLE t_ttl_stmt;
+#
+# ============================================
+# TEST 9: Session TTL does NOT override per-row TTL_COL
+# ============================================
+#
+CREATE TABLE t_ttl_priority (
+id INT PRIMARY KEY,
+val VARCHAR(50),
+row_ttl INT `TTL`=1
+) ENGINE=TIDESDB;
+SET SESSION tidesdb_ttl = 86400;
+INSERT INTO t_ttl_priority VALUES (1, 'per_row_wins', 2);
+INSERT INTO t_ttl_priority VALUES (2, 'uses_session', 0);
+SET SESSION tidesdb_ttl = 0;
+# Both visible immediately
+SELECT id, val FROM t_ttl_priority ORDER BY id;
+id	val
+1	per_row_wins
+2	uses_session
+# Row 1 expired (per-row TTL=2 wins); row 2 still alive (session TTL=86400)
+SELECT id, val FROM t_ttl_priority ORDER BY id;
+id	val
+2	uses_session
+DROP TABLE t_ttl_priority;
+#
 #
 # Done.

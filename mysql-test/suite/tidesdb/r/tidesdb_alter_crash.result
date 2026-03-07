@@ -1,0 +1,48 @@
+#
+# Issue #70: ALTER TABLE sometimes crashes MariaDB
+# The crash was caused by unbounded read-set growth during
+# ALTER TABLE's copy-phase scan under REPEATABLE_READ.
+#
+CREATE TABLE t_alt70 (
+a INT AUTO_INCREMENT PRIMARY KEY,
+b INT
+) ENGINE=TidesDB;
+INSERT INTO t_alt70 (a, b) VALUES (DEFAULT, 10), (DEFAULT, 20), (DEFAULT, 30);
+# Double the rows repeatedly to get ~100K rows
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+SELECT COUNT(*) FROM t_alt70;
+COUNT(*)
+98304
+# Switch to autocommit=0 so transactions use REPEATABLE_READ
+# (this is the scenario that triggered the crash)
+SET autocommit=0;
+# These ALTER TABLE statements reproduce the original bug sequence
+ALTER TABLE t_alt70 ADD PRIMARY KEY (a);
+ERROR 42000: Multiple primary key defined
+ALTER TABLE t_alt70 DROP PRIMARY KEY;
+ERROR 42000: Incorrect table definition; there can be only one auto column and it must be defined as a key
+# This copy-based ALTER TABLE scans ~100K rows; before the fix
+# it would crash in tidesdb_txn_add_to_read_set due to unbounded
+# read-set growth under REPEATABLE_READ.
+ALTER TABLE t_alt70 DROP PRIMARY KEY, CHANGE a a INT;
+SELECT COUNT(*) FROM t_alt70;
+COUNT(*)
+98304
+SET autocommit=1;
+DROP TABLE t_alt70;
+#
+# Done.

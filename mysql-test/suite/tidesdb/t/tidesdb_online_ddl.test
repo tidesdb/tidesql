@@ -90,3 +90,22 @@ SELECT a, b FROM t_nopk WHERE a = 2;
 ALTER TABLE t_nopk DROP INDEX idx_a, ALGORITHM=INPLACE;
 
 DROP TABLE t_nopk;
+
+--echo # ---- ADD UNIQUE must reject duplicates ----
+CREATE TABLE t_dup (
+  i INT NOT NULL,
+  j INT NOT NULL DEFAULT 0
+) ENGINE=TidesDB;
+
+INSERT INTO t_dup VALUES (1, 0);
+INSERT INTO t_dup VALUES (2, 0);
+SELECT * FROM t_dup ORDER BY i;
+
+--error ER_DUP_ENTRY
+ALTER TABLE t_dup ADD UNIQUE unq_j (j);
+
+# Both rows must still be present after the failed ALTER
+SELECT * FROM t_dup ORDER BY i;
+SELECT COUNT(*) FROM t_dup;
+
+DROP TABLE t_dup;

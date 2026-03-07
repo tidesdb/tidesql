@@ -136,6 +136,14 @@ static ulonglong srv_block_cache_size = TIDESDB_DEFAULT_BLOCK_CACHE; /* 256MB */
 static ulong srv_max_open_sstables = 256;
 static ulonglong srv_max_memory_usage = 0; /* 0 = auto (library decides) */
 
+/* Per-session TTL override (seconds).  0 = use table default. */
+static MYSQL_THDVAR_ULONGLONG(ttl, PLUGIN_VAR_RQCMDARG,
+                              "Per-session TTL in seconds applied to INSERT/UPDATE; "
+                              "0 means use the table-level TTL option; "
+                              "can be set with SET [SESSION] tidesdb_ttl=N or "
+                              "SET STATEMENT tidesdb_ttl=N FOR INSERT",
+                              NULL, NULL, 0, 0, ULONGLONG_MAX, 0);
+
 static const char *log_level_names[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL", "NONE", NullS};
 #if MYSQL_VERSION_ID >= 110800
 static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_level_typelib",
@@ -230,6 +238,7 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {MYSQL_SYSVAR(flush
                                                               MYSQL_SYSVAR(max_memory_usage),
                                                               MYSQL_SYSVAR(backup_dir),
                                                               MYSQL_SYSVAR(debug_trace),
+                                                              MYSQL_SYSVAR(ttl),
                                                               NULL};
 
 /* ******************** Table options (per-table CF config) ******************** */
@@ -658,7 +667,28 @@ static int tidesdb_close_connection(handlerton *, THD *thd)
     return 0;
 }
 
+/*
+  START TRANSACTION WITH CONSISTENT SNAPSHOT callback.
+  Eagerly creates a TidesDB transaction with REPEATABLE_READ isolation
+  so the snapshot sequence number is captured now, not lazily at first
+  data access.  Without this, rows committed by other connections between
+  START TRANSACTION and the first SELECT would be visible.
+*/
+static int tidesdb_start_consistent_snapshot(THD *thd)
+{
+    tidesdb_trx_t *trx = get_or_create_trx(thd, tidesdb_hton, TDB_ISOLATION_REPEATABLE_READ);
+    if (!trx) return 1;
+
+    /* Register at both statement and transaction level so the server
+       knows TidesDB is participating in this BEGIN block. */
+    trans_register_ha(thd, false, tidesdb_hton, 0);
+    trans_register_ha(thd, true, tidesdb_hton, 0);
+    return 0;
+}
+
 /* ******************** Plugin init / deinit ******************** */
+
+static int tidesdb_hton_drop_table(handlerton *, const char *path);
 
 static int tidesdb_init_func(void *p)
 {
@@ -671,7 +701,7 @@ static int tidesdb_init_func(void *p)
     tidesdb_hton->tablefile_extensions = ha_tidesdb_exts;
     tidesdb_hton->table_options = tidesdb_table_option_list;
     tidesdb_hton->field_options = tidesdb_field_option_list;
-    tidesdb_hton->drop_table = [](handlerton *, const char *) { return -1; };
+    tidesdb_hton->drop_table = tidesdb_hton_drop_table;
 
     /* Handlerton transaction callbacks -- one TidesDB txn per BEGIN..COMMIT */
     tidesdb_hton->commit = tidesdb_commit;
@@ -682,6 +712,7 @@ static int tidesdb_init_func(void *p)
     tidesdb_hton->savepoint_rollback = tidesdb_savepoint_rollback;
     tidesdb_hton->savepoint_rollback_can_release_mdl = tidesdb_savepoint_rollback_can_release_mdl;
     tidesdb_hton->savepoint_release = tidesdb_savepoint_release;
+    tidesdb_hton->start_consistent_snapshot = tidesdb_start_consistent_snapshot;
 
     tidesdb_init(NULL, NULL, NULL, NULL);
 
@@ -1762,6 +1793,14 @@ time_t ha_tidesdb::compute_row_ttl(const uchar *buf)
         }
     }
 
+    /* Session TTL override (SET SESSION tidesdb_ttl=N) takes precedence
+       over the table-level default but not over per-row TTL_COL. */
+    if (ttl_seconds <= 0)
+    {
+        ulonglong sess = THDVAR(ha_thd(), ttl);
+        if (sess > 0) ttl_seconds = (long long)sess;
+    }
+
     if (ttl_seconds <= 0 && share->default_ttl > 0) ttl_seconds = (long long)share->default_ttl;
 
     if (ttl_seconds <= 0) return TIDESDB_TTL_NONE;
@@ -1957,8 +1996,9 @@ int ha_tidesdb::write_row(const uchar *buf)
         }
     }
 
-    /* We compute TTL only when the table has TTL configured */
-    time_t row_ttl = share->has_ttl ? compute_row_ttl(buf) : TIDESDB_TTL_NONE;
+    /* We compute TTL when the table has TTL configured or the session overrides it */
+    time_t row_ttl =
+        (share->has_ttl || THDVAR(ha_thd(), ttl) > 0) ? compute_row_ttl(buf) : TIDESDB_TTL_NONE;
 
     /* We insert data row */
     int rc = tidesdb_txn_put(txn, share->cf, dk, dk_len, row_ptr, row_len, row_ttl);
@@ -2844,8 +2884,9 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     int rc;
     bool pk_changed = (old_pk_len != new_pk_len || memcmp(old_pk, new_pk, old_pk_len) != 0);
 
-    /* We compute TTL only when the table has TTL configured */
-    time_t row_ttl = share->has_ttl ? compute_row_ttl(new_data) : TIDESDB_TTL_NONE;
+    /* We compute TTL when the table has TTL configured or the session overrides it */
+    time_t row_ttl = (share->has_ttl || THDVAR(ha_thd(), ttl) > 0) ? compute_row_ttl(new_data)
+                                                                   : TIDESDB_TTL_NONE;
 
     /* If PK changed, we delete old entry and insert new */
     if (pk_changed)
@@ -3533,6 +3574,13 @@ int ha_tidesdb::ensure_stmt_txn()
     bool in_multi_stmt_txn = thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
     tidesdb_isolation_level_t effective_iso =
         in_multi_stmt_txn ? share->isolation_level : TDB_ISOLATION_READ_COMMITTED;
+
+    /* Force READ_COMMITTED for DDL to avoid unbounded read-set growth */
+    int sql_cmd = thd_sql_command(thd);
+    if (sql_cmd == SQLCOM_ALTER_TABLE || sql_cmd == SQLCOM_CREATE_INDEX ||
+        sql_cmd == SQLCOM_DROP_INDEX || sql_cmd == SQLCOM_TRUNCATE || sql_cmd == SQLCOM_OPTIMIZE ||
+        sql_cmd == SQLCOM_CREATE_TABLE || sql_cmd == SQLCOM_DROP_TABLE)
+        effective_iso = TDB_ISOLATION_READ_COMMITTED;
     tidesdb_trx_t *trx = get_or_create_trx(thd, ht, effective_iso);
     if (!trx) return HA_ERR_OUT_OF_MEM;
 
@@ -3561,10 +3609,26 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
 
            For multi-statement transactions (BEGIN...COMMIT) we keep
            the table's configured isolation level so that application-
-           level retry logic handles the (rare) OCC conflicts. */
+           level retry logic handles the (rare) OCC conflicts.
+
+           DDL operations (ALTER TABLE, CREATE/DROP INDEX, TRUNCATE,
+           OPTIMIZE, etc.) always use READ_COMMITTED regardless of
+           transaction context.  The copy-based ALTER TABLE scan can
+           read hundreds of thousands of rows; REPEATABLE_READ would
+           add each key to the read-set for conflict detection,
+           causing unbounded memory growth and heap corruption
+           (issue #70).  DDL never needs OCC conflict checks. */
         bool in_multi_stmt_txn = thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
         tidesdb_isolation_level_t effective_iso =
             in_multi_stmt_txn ? share->isolation_level : TDB_ISOLATION_READ_COMMITTED;
+
+        /* Force READ_COMMITTED for DDL to avoid unbounded read-set growth */
+        int sql_cmd = thd_sql_command(thd);
+        if (sql_cmd == SQLCOM_ALTER_TABLE || sql_cmd == SQLCOM_CREATE_INDEX ||
+            sql_cmd == SQLCOM_DROP_INDEX || sql_cmd == SQLCOM_TRUNCATE ||
+            sql_cmd == SQLCOM_OPTIMIZE || sql_cmd == SQLCOM_CREATE_TABLE ||
+            sql_cmd == SQLCOM_DROP_TABLE)
+            effective_iso = TDB_ISOLATION_READ_COMMITTED;
         tidesdb_trx_t *trx = get_or_create_trx(thd, ht, effective_iso);
         if (!trx) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
 
@@ -4188,11 +4252,17 @@ static void force_remove_cf_dir(const std::string &cf_name)
         TDB_TRACE("force-removed stale CF dir %s", dir);
 }
 
-int ha_tidesdb::delete_table(const char *name)
+/*
+  Shared drop logic used by both the handlerton callback (hton->drop_table)
+  and the handler method (ha_tidesdb::delete_table).  Drops the main data CF
+  and all secondary index CFs, then force-removes their directories.
+  Returns 0 on success.
+*/
+static int tidesdb_drop_table_impl(const char *path)
 {
-    DBUG_ENTER("ha_tidesdb::delete_table");
+    if (!tdb_global) return 0;
 
-    std::string cf_name = path_to_cf_name(name);
+    std::string cf_name = ha_tidesdb::path_to_cf_name(path);
 
     /* We collect secondary index CF names before dropping so we can
        force-remove their directories afterwards. */
@@ -4218,7 +4288,7 @@ int ha_tidesdb::delete_table(const char *name)
     if (rc != TDB_SUCCESS && rc != TDB_ERR_NOT_FOUND)
     {
         sql_print_error("TIDESDB: Failed to drop CF '%s' (err=%d)", cf_name.c_str(), rc);
-        DBUG_RETURN(tdb_rc_to_ha(rc, "delete_table"));
+        return rc;
     }
 
     for (const auto &idx_name : idx_cf_names)
@@ -4232,7 +4302,22 @@ int ha_tidesdb::delete_table(const char *name)
     force_remove_cf_dir(cf_name);
     for (const auto &idx_name : idx_cf_names) force_remove_cf_dir(idx_name);
 
-    DBUG_RETURN(0);
+    return 0;
+}
+
+/*
+  Handlerton-level drop_table callback.  MariaDB 12.x calls hton->drop_table
+  instead of handler::delete_table.  Must return 0 on success, not -1.
+*/
+static int tidesdb_hton_drop_table(handlerton *, const char *path)
+{
+    return tidesdb_drop_table_impl(path);
+}
+
+int ha_tidesdb::delete_table(const char *name)
+{
+    DBUG_ENTER("ha_tidesdb::delete_table");
+    DBUG_RETURN(tidesdb_drop_table_impl(name));
 }
 
 /* ******************** Plugin declaration ******************** */

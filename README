@@ -24,7 +24,7 @@ themselves, though with the install script you can modify configuration files
 after the fact.
 
 LINUX (Ubuntu/Debian)
----------------------
+░░░░░░░░░░░░░░░░░░░░░░░░
 
 1. Install dependencies:
 
@@ -63,7 +63,7 @@ LINUX (Ubuntu/Debian)
 
 
 MACOS
------
+░░░░░░░░░░░░░░░░░░░░░░░░
 
 1. Install dependencies:
 
@@ -121,7 +121,7 @@ MACOS
 
 
 WINDOWS
--------
+░░░░░░░░░░░░░░░░░░░░░░░░
 
 1. Install prerequisites:
 
@@ -173,7 +173,7 @@ WINDOWS
 
 
 ENABLE PLUGIN
--------------
+░░░░░░░░░░░░░░░░░░░░░░░░
 
 After building, enable the plugin in MariaDB:
 
@@ -215,7 +215,7 @@ TidesDB stores its data as a sibling of the MariaDB data directory:
 
 
 SYSTEM VARIABLES (SET GLOBAL tidesdb_...)
------------------------------------------
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 All are read-only (set at startup) unless noted otherwise.
 
@@ -234,7 +234,7 @@ reduce log volume.
 
 
 TABLE OPTIONS (CREATE TABLE ... ENGINE=TidesDB <option>=<value>)
-----------------------------------------------------------------
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 These are per-table options baked into the column family at creation time.
 Changing them via ALTER TABLE only updates the .frm; it does not reconfigure
@@ -286,7 +286,7 @@ Encryption:
 
 
 FIELD OPTIONS (per-column)
---------------------------
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
   TTL                       Marks column as per-row TTL source (seconds)
 
@@ -328,6 +328,7 @@ Available tests:
   tidesdb_json            JSON querying + generated-column JSON path indexing
   tidesdb_savepoint       SQL SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT
   tidesdb_write_pressure  oltp_write_only OOM reproduction (multi-connection)
+  ...
 
 Run with verbose output:
 

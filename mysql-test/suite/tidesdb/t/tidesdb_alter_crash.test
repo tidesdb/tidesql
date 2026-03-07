@@ -1,0 +1,46 @@
+--echo #
+--echo # Issue #70: ALTER TABLE sometimes crashes MariaDB
+--echo # The crash was caused by unbounded read-set growth during
+--echo # ALTER TABLE's copy-phase scan under REPEATABLE_READ.
+--echo #
+
+CREATE TABLE t_alt70 (
+    a INT AUTO_INCREMENT PRIMARY KEY,
+    b INT
+) ENGINE=TidesDB;
+
+INSERT INTO t_alt70 (a, b) VALUES (DEFAULT, 10), (DEFAULT, 20), (DEFAULT, 30);
+
+--echo # Double the rows repeatedly to get ~100K rows
+let $i = 15;
+while ($i)
+{
+  INSERT INTO t_alt70 (b) SELECT b FROM t_alt70;
+  dec $i;
+}
+
+SELECT COUNT(*) FROM t_alt70;
+
+--echo # Switch to autocommit=0 so transactions use REPEATABLE_READ
+--echo # (this is the scenario that triggered the crash)
+SET autocommit=0;
+
+--echo # These ALTER TABLE statements reproduce the original bug sequence
+--error ER_MULTIPLE_PRI_KEY
+ALTER TABLE t_alt70 ADD PRIMARY KEY (a);
+
+--error ER_WRONG_AUTO_KEY
+ALTER TABLE t_alt70 DROP PRIMARY KEY;
+
+--echo # This copy-based ALTER TABLE scans ~100K rows; before the fix
+--echo # it would crash in tidesdb_txn_add_to_read_set due to unbounded
+--echo # read-set growth under REPEATABLE_READ.
+ALTER TABLE t_alt70 DROP PRIMARY KEY, CHANGE a a INT;
+
+SELECT COUNT(*) FROM t_alt70;
+
+SET autocommit=1;
+DROP TABLE t_alt70;
+
+--echo #
+--echo # Done.

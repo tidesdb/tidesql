@@ -1,0 +1,69 @@
+--echo #
+--echo # Issue #61: Converting InnoDB tables with foreign keys to TidesDB
+--echo #
+
+--source include/have_innodb.inc
+
+--echo # Create an InnoDB table with a self-referencing foreign key
+CREATE TABLE t_fk61 (
+  a INT,
+  b INT NOT NULL,
+  INDEX idx_a (a),
+  CONSTRAINT `fk_self` FOREIGN KEY (b) REFERENCES t_fk61 (a)
+    ON DELETE CASCADE
+    ON UPDATE RESTRICT
+) ENGINE=InnoDB;
+
+INSERT INTO t_fk61 (a, b) VALUES (1, 1), (2, 1), (3, 2);
+
+SHOW CREATE TABLE t_fk61;
+
+--echo # Without FOREIGN_KEY_CHECKS=0, the conversion should fail
+--error ER_ROW_IS_REFERENCED
+ALTER TABLE t_fk61 ENGINE=TidesDB;
+
+--echo # With FOREIGN_KEY_CHECKS=0, the conversion should succeed
+SET FOREIGN_KEY_CHECKS=0;
+ALTER TABLE t_fk61 ENGINE=TidesDB;
+SET FOREIGN_KEY_CHECKS=1;
+
+--echo # Verify data survived the conversion
+SELECT * FROM t_fk61 ORDER BY a;
+
+--echo # Verify the table is now TidesDB and FKs are gone
+SHOW CREATE TABLE t_fk61;
+
+--echo # Verify we can still do DML
+INSERT INTO t_fk61 (a, b) VALUES (4, 99);
+SELECT * FROM t_fk61 ORDER BY a;
+
+DROP TABLE t_fk61;
+
+--echo # Test with parent-child FK relationship (two tables)
+CREATE TABLE t_parent61 (
+  id INT PRIMARY KEY
+) ENGINE=InnoDB;
+
+CREATE TABLE t_child61 (
+  id INT PRIMARY KEY,
+  parent_id INT,
+  CONSTRAINT `fk_parent` FOREIGN KEY (parent_id) REFERENCES t_parent61 (id)
+) ENGINE=InnoDB;
+
+INSERT INTO t_parent61 VALUES (1), (2), (3);
+INSERT INTO t_child61 VALUES (10, 1), (20, 2);
+
+--echo # Convert parent table with FK_CHECKS=0
+SET FOREIGN_KEY_CHECKS=0;
+ALTER TABLE t_parent61 ENGINE=TidesDB;
+ALTER TABLE t_child61 ENGINE=TidesDB;
+SET FOREIGN_KEY_CHECKS=1;
+
+SELECT * FROM t_parent61 ORDER BY id;
+SELECT * FROM t_child61 ORDER BY id;
+
+DROP TABLE t_child61;
+DROP TABLE t_parent61;
+
+--echo #
+--echo # Done.

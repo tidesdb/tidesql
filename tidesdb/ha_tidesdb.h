@@ -230,8 +230,6 @@ class ha_tidesdb : public handler
     const std::string &serialize_row(const uchar *buf);
     void deserialize_row(uchar *buf, const uchar *data, size_t len);
     void deserialize_row(uchar *buf, const std::string &row);
-    static std::string path_to_cf_name(const char *path);
-
     /* Build memcmp-comparable key bytes into out[]; returns byte count */
     uint make_comparable_key(KEY *key_info, const uchar *record, uint num_parts, uchar *out);
 
@@ -346,6 +344,9 @@ class ha_tidesdb : public handler
         cost.cpu = (double)rows * TIDESDB_COST_SEQ_READ * amp;
         return cost;
     }
+
+    /* Convert a MariaDB table path to a TidesDB column family name */
+    static std::string path_to_cf_name(const char *path);
 
     /* DDL */
     int open(const char *name, int mode, uint test_if_locked) override;

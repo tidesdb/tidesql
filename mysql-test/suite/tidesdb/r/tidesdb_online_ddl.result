@@ -114,3 +114,24 @@ a	b
 # Drop it
 ALTER TABLE t_nopk DROP INDEX idx_a, ALGORITHM=INPLACE;
 DROP TABLE t_nopk;
+# ---- ADD UNIQUE must reject duplicates ----
+CREATE TABLE t_dup (
+i INT NOT NULL,
+j INT NOT NULL DEFAULT 0
+) ENGINE=TidesDB;
+INSERT INTO t_dup VALUES (1, 0);
+INSERT INTO t_dup VALUES (2, 0);
+SELECT * FROM t_dup ORDER BY i;
+i	j
+1	0
+2	0
+ALTER TABLE t_dup ADD UNIQUE unq_j (j);
+ERROR 23000: Duplicate entry '0' for key 'unq_j'
+SELECT * FROM t_dup ORDER BY i;
+i	j
+1	0
+2	0
+SELECT COUNT(*) FROM t_dup;
+COUNT(*)
+2
+DROP TABLE t_dup;
