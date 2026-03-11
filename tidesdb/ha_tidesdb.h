@@ -133,6 +133,10 @@ class TidesDB_share : public Handler_share
     /* Precomputed comparable key length per index (avoids per-row recomputation) */
     uint idx_comp_key_len[MAX_KEY];
 
+    /* Cached rec_per_key for secondary indexes (populated by ANALYZE TABLE).
+       0 = not yet computed, use heuristic; >0 = sampled value. */
+    std::atomic<ulong> cached_rec_per_key[MAX_KEY];
+
     /* Secondary index CFs (one per secondary key) */
     std::vector<tidesdb_column_family_t *> idx_cfs;
     std::vector<std::string> idx_cf_names;
@@ -217,13 +221,50 @@ class ha_tidesdb : public handler
     uchar idx_search_comp_[MAX_KEY_LENGTH];
     uint idx_search_comp_len_;
 
+    /* Reusable buffers for secondary index key construction in update_row.
+       Avoids heap allocation per row and keeps the stack frame small. */
+    uchar upd_old_ik_[MAX_KEY_LENGTH * 2 + 2];
+    uchar upd_new_ik_[MAX_KEY_LENGTH * 2 + 2];
+
+    /* Cached dup-check iterators for UNIQUE secondary indexes.
+       tidesdb_iter_new() is O(num_sstables) -- caching avoids rebuilding
+       the merge heap on every INSERT for tables with unique indexes. */
+    tidesdb_iter_t *dup_iter_cache_[MAX_KEY];
+    tidesdb_txn_t *dup_iter_txn_[MAX_KEY]; /* txn each was created on */
+    uint64_t dup_iter_txn_gen_[MAX_KEY];   /* txn_generation when created */
+    uint dup_iter_count_;                  /* number of slots populated */
+
+    /* Reusable buffer for tidesdb_txn_get values -- avoids malloc/free per
+       point-lookup.  Retains heap capacity across calls. */
+    std::string get_val_buf_;
+
+    /* Separate encryption output buffer so row_buf_ retains its capacity
+       across calls (tidesdb_encrypt_row used to replace row_buf_). */
+    std::string enc_buf_;
+
+    /* Per-statement cached encryption key version -- avoids calling
+       encryption_key_get_latest_version() on every single row write. */
+    uint cached_enc_key_ver_;
+    bool enc_key_ver_valid_;
+
+    /* Per-statement cached time(NULL) -- avoids the vDSO/syscall on every
+       row for TTL computation.  1-second granularity is sufficient for TTL. */
+    time_t cached_time_;
+    bool cached_time_valid_;
+
+    /* Per-statement cached THDVAR lookups -- avoids the indirect
+       thd_get_ha_data + offset computation on every row. */
+    ulonglong cached_sess_ttl_;
+    bool cached_skip_unique_;
+    bool cached_thdvars_valid_;
+
     /* Bulk insert state */
     bool in_bulk_insert_;
     ha_rows bulk_insert_ops_; /* ops buffered since last mid-txn commit */
 
     /* Covering-index mode (HA_EXTRA_KEYREAD) */
     bool keyread_only_;
-    bool write_can_replace_; /* true during REPLACE INTO / INSERT ON DUPLICATE KEY UPDATE */
+    bool write_can_replace_; /* true during REPLACE INTO (HA_EXTRA_WRITE_CAN_REPLACE) */
 
     /* ----- private helpers ----------------------------------------------------------------------
      */
@@ -283,6 +324,15 @@ class ha_tidesdb : public handler
        field format.  Returns true on success, false for unsupported types. */
     static bool decode_int_sort_key(const uint8_t *src, uint sort_len, Field *f, uchar *buf);
 
+    /* Extended sort-key decoder -- handles integers, DATE, DATETIME,
+       TIMESTAMP, YEAR, and fixed-length CHAR/BINARY.  Returns true on
+       success, false for unsupported types.  Used by covering index
+       reads and ICP evaluation to avoid PK point-lookups. */
+    static bool decode_sort_key_part(const uint8_t *src, uint sort_len, Field *f, uchar *buf);
+
+    /* Free all cached dup-check iterators */
+    void free_dup_iter_cache();
+
     /* Recover hidden-PK counter by scanning the CF */
     void recover_counters();
 
@@ -300,10 +350,9 @@ class ha_tidesdb : public handler
                HA_CAN_TABLES_WITHOUT_ROLLBACK;
     }
 
-    ulong index_flags(uint idx, uint part, bool all_parts) const override
-    {
-        return HA_READ_NEXT | HA_READ_PREV | HA_READ_ORDER | HA_READ_RANGE | HA_KEYREAD_ONLY;
-    }
+    ulong index_flags(uint idx, uint part, bool all_parts) const override;
+
+    const char *index_type(uint key_number) override;
 
     uint max_supported_record_length() const override
     {

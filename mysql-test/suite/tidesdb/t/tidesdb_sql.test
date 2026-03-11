@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 #
 # Comprehensive SQL coverage test for the TIDESDB storage engine.
 # Exercises aggregates, joins, subqueries, GROUP BY, HAVING, UNION,

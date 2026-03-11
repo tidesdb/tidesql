@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 --echo #
 --echo # ANALYZE TABLE for TidesDB -- verifies CF stats output
 --echo #

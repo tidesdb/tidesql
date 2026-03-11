@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 --echo #
 --echo # Issue #57: Data survives DROP + CREATE
 --echo #

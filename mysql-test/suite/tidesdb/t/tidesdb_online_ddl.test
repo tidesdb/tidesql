@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 #
 # TidesDB Online DDL tests
 # Tests INSTANT, INPLACE (add/drop index), and COPY fallback
@@ -57,17 +58,23 @@ SHOW INDEX FROM t_ddl;
 EXPLAIN SELECT id, a FROM t_ddl WHERE a = 20;
 SELECT id, a FROM t_ddl WHERE a = 20;
 
---echo # ---- COPY fallback: add column ----
-ALTER TABLE t_ddl ADD COLUMN d INT DEFAULT 0;
+--echo # ---- INSTANT: add column (NOT NULL DEFAULT) ----
+ALTER TABLE t_ddl ADD COLUMN d INT NOT NULL DEFAULT 0, ALGORITHM=INSTANT;
 SELECT id, d FROM t_ddl WHERE id = 1;
 
---echo # ---- COPY fallback: drop column ----
-ALTER TABLE t_ddl DROP COLUMN d;
+--echo # ---- Verify old rows readable after ADD COLUMN ----
+SELECT id, a, b_name, c, d FROM t_ddl ORDER BY id;
+
+--echo # ---- Insert with new schema and verify ----
+INSERT INTO t_ddl VALUES (7, 70, 'eta', 700, 42);
+SELECT id, d FROM t_ddl WHERE id IN (1, 7) ORDER BY id;
+
+--echo # ---- INSTANT: drop column ----
+ALTER TABLE t_ddl DROP COLUMN d, ALGORITHM=INSTANT;
 SELECT * FROM t_ddl WHERE id = 1;
 
---echo # ---- Verify ALGORITHM=INPLACE rejected for column changes ----
---error ER_ALTER_OPERATION_NOT_SUPPORTED
-ALTER TABLE t_ddl ADD COLUMN e INT, ALGORITHM=INPLACE;
+--echo # ---- Verify all rows readable after DROP COLUMN ----
+SELECT id, a, b_name, c FROM t_ddl ORDER BY id;
 
 --echo # ---- Cleanup ----
 DROP TABLE t_ddl;

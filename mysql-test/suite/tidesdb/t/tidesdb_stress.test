@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 #
 # TidesDB stress test -- concurrent operations, transaction paths, iterator
 # reuse, rollback, TRUNCATE races, secondary index maintenance, and large

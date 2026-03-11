@@ -17,8 +17,404 @@ Note	1071	Specified key was too long; max key length is 255 bytes
 SELECT COUNT(*) FROM t_info_schema;
 COUNT(*)
 3
+Warnings:
+Warning	4202	3 values were longer than max_sort_length. Sorting used only the first 1024 bytes
 OK: INDEX_LENGTH > 0
 # ---- verify after bulk insert ----
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
+Warnings:
+Warning	4202	1 values were longer than max_sort_length. Sorting used only the first 1024 bytes
 SELECT COUNT(*) FROM t_info_schema;
 COUNT(*)
 200

@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 #
 # TidesDB information_schema.TABLES size reporting
 # Verify DATA_LENGTH and INDEX_LENGTH are non-zero after inserts

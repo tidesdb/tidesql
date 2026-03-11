@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 #
 # Test suite for TIDESDB rename_table functionality.
 # Covers: RENAME TABLE, ALTER TABLE (table copy), ALTER TABLE with option changes,

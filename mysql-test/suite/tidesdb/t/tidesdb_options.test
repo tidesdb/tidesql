@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 #
 # Test suite for TIDESDB storage engine options.
 # Exercises system variables and per-table CREATE TABLE options.

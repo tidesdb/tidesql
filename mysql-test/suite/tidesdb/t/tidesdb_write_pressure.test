@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 #
 # TidesDB write-pressure stress test
 #

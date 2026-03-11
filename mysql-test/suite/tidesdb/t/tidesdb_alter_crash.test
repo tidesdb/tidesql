@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 --echo #
 --echo # Issue #70: ALTER TABLE sometimes crashes MariaDB
 --echo # The crash was caused by unbounded read-set growth during

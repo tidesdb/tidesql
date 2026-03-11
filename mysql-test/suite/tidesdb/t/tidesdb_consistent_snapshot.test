@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 --echo #
 --echo # Issue #64: WITH CONSISTENT SNAPSHOT doesn't work
 --echo #

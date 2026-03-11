@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 --disable_warnings
 DROP TABLE IF EXISTS t_pk, t_autoinc, t_secidx, t_combined;
 --enable_warnings

@@ -1,3 +1,4 @@
+--source include/have_tidesdb.inc
 #
 # Test suite for the TIDESDB storage engine.
 # Exercises every CRUD capability and edge case.
