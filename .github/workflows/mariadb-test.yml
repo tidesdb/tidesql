@@ -152,8 +152,8 @@ jobs:
       id: mariadb-release
       shell: bash
       run: |
-        echo "tag=mariadb-12.1.2" >> $GITHUB_OUTPUT
-        echo "MariaDB version: mariadb-12.1.2"
+        echo "tag=mariadb-12.2.2" >> $GITHUB_OUTPUT
+        echo "MariaDB version: mariadb-12.2.2"
 
     - name: Clone MariaDB server
       shell: bash
