@@ -157,6 +157,81 @@ static MYSQL_THDVAR_BOOL(default_use_btree, PLUGIN_VAR_RQCMDARG,
 static MYSQL_THDVAR_BOOL(default_block_indexes, PLUGIN_VAR_RQCMDARG,
                          "Default block indexes setting for new tables", NULL, NULL, 1);
 
+static const char *sync_mode_names[] = {"NONE", "INTERVAL", "FULL", NullS};
+static TYPELIB sync_mode_typelib = {array_elements(sync_mode_names) - 1, "sync_mode_typelib",
+                                    sync_mode_names, NULL, NULL};
+
+static MYSQL_THDVAR_ENUM(default_sync_mode, PLUGIN_VAR_RQCMDARG,
+                         "Default sync mode for new tables (NONE, INTERVAL, FULL)", NULL, NULL,
+                         2 /* FULL */, &sync_mode_typelib);
+
+static MYSQL_THDVAR_ULONGLONG(default_sync_interval_us, PLUGIN_VAR_RQCMDARG,
+                              "Default sync interval in microseconds for new tables "
+                              "(used when SYNC_MODE=INTERVAL)",
+                              NULL, NULL, 128000, 0, ULONGLONG_MAX, 1);
+
+static MYSQL_THDVAR_ULONGLONG(default_bloom_fpr, PLUGIN_VAR_RQCMDARG,
+                              "Default bloom filter false positive rate for new tables "
+                              "(parts per 10000; 100 = 1%%)",
+                              NULL, NULL, 100, 1, 10000, 1);
+
+static MYSQL_THDVAR_ULONGLONG(default_klog_value_threshold, PLUGIN_VAR_RQCMDARG,
+                              "Default klog value threshold in bytes for new tables "
+                              "(values >= this go to vlog)",
+                              NULL, NULL, 512, 0, ULONGLONG_MAX, 1);
+
+static MYSQL_THDVAR_ULONGLONG(default_l0_queue_stall_threshold, PLUGIN_VAR_RQCMDARG,
+                              "Default L0 queue stall threshold for new tables", NULL, NULL, 4, 1,
+                              1024, 1);
+
+static MYSQL_THDVAR_ULONGLONG(default_l1_file_count_trigger, PLUGIN_VAR_RQCMDARG,
+                              "Default L1 file count compaction trigger for new tables", NULL, NULL,
+                              4, 1, 1024, 1);
+
+static MYSQL_THDVAR_ULONGLONG(default_level_size_ratio, PLUGIN_VAR_RQCMDARG,
+                              "Default level size ratio for new tables", NULL, NULL, 10, 2, 100, 1);
+
+static MYSQL_THDVAR_ULONGLONG(default_min_levels, PLUGIN_VAR_RQCMDARG,
+                              "Default minimum LSM-tree levels for new tables", NULL, NULL, 5, 1,
+                              64, 1);
+
+static MYSQL_THDVAR_ULONGLONG(default_dividing_level_offset, PLUGIN_VAR_RQCMDARG,
+                              "Default dividing level offset for new tables", NULL, NULL, 2, 0, 64,
+                              1);
+
+static MYSQL_THDVAR_ULONGLONG(default_skip_list_max_level, PLUGIN_VAR_RQCMDARG,
+                              "Default skip list max level for new tables", NULL, NULL, 12, 1, 64,
+                              1);
+
+static MYSQL_THDVAR_ULONGLONG(
+    default_skip_list_probability, PLUGIN_VAR_RQCMDARG,
+    "Default skip list probability for new tables (percentage; 25 = 0.25)", NULL, NULL, 25, 1, 100,
+    1);
+
+static MYSQL_THDVAR_ULONGLONG(default_index_sample_ratio, PLUGIN_VAR_RQCMDARG,
+                              "Default block index sample ratio for new tables", NULL, NULL, 1, 1,
+                              1024, 1);
+
+static MYSQL_THDVAR_ULONGLONG(default_block_index_prefix_len, PLUGIN_VAR_RQCMDARG,
+                              "Default block index prefix length for new tables", NULL, NULL, 16, 1,
+                              256, 1);
+
+static MYSQL_THDVAR_ULONGLONG(default_min_disk_space, PLUGIN_VAR_RQCMDARG,
+                              "Default minimum disk space in bytes for new tables", NULL, NULL,
+                              100ULL * 1024 * 1024, 0, ULONGLONG_MAX, 1024);
+
+static const char *isolation_level_names[] = {
+    "READ_UNCOMMITTED", "READ_COMMITTED", "REPEATABLE_READ", "SNAPSHOT", "SERIALIZABLE", NullS};
+static TYPELIB isolation_level_typelib = {array_elements(isolation_level_names) - 1,
+                                          "isolation_level_typelib", isolation_level_names, NULL,
+                                          NULL};
+
+static MYSQL_THDVAR_ENUM(default_isolation_level, PLUGIN_VAR_RQCMDARG,
+                         "Default isolation level for new tables "
+                         "(READ_UNCOMMITTED, READ_COMMITTED, REPEATABLE_READ, SNAPSHOT, "
+                         "SERIALIZABLE)",
+                         NULL, NULL, 2 /* REPEATABLE_READ */, &isolation_level_typelib);
+
 static const char *log_level_names[] = {"DEBUG", "INFO", "WARN", "ERROR", "FATAL", "NONE", NullS};
 static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_level_typelib",
                                     log_level_names, NULL, NULL};
@@ -195,7 +270,8 @@ static MYSQL_SYSVAR_ULONG(max_open_sstables, srv_max_open_sstables,
 
 static MYSQL_SYSVAR_ULONGLONG(max_memory_usage, srv_max_memory_usage,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                              "TidesDB global memory limit in bytes (0 = auto, ~80%% system RAM)",
+                              "TidesDB global memory limit in bytes "
+                              "(0 = auto, 50%% of system RAM; minimum 5%% of system RAM)",
                               NULL, NULL, 0, 0, ULONGLONG_MAX, 0);
 
 static MYSQL_SYSVAR_BOOL(log_to_file, srv_log_to_file, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -364,6 +440,21 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(default_bloom_filter),
     MYSQL_SYSVAR(default_use_btree),
     MYSQL_SYSVAR(default_block_indexes),
+    MYSQL_SYSVAR(default_sync_mode),
+    MYSQL_SYSVAR(default_sync_interval_us),
+    MYSQL_SYSVAR(default_bloom_fpr),
+    MYSQL_SYSVAR(default_klog_value_threshold),
+    MYSQL_SYSVAR(default_l0_queue_stall_threshold),
+    MYSQL_SYSVAR(default_l1_file_count_trigger),
+    MYSQL_SYSVAR(default_level_size_ratio),
+    MYSQL_SYSVAR(default_min_levels),
+    MYSQL_SYSVAR(default_dividing_level_offset),
+    MYSQL_SYSVAR(default_skip_list_max_level),
+    MYSQL_SYSVAR(default_skip_list_probability),
+    MYSQL_SYSVAR(default_index_sample_ratio),
+    MYSQL_SYSVAR(default_block_index_prefix_len),
+    MYSQL_SYSVAR(default_min_disk_space),
+    MYSQL_SYSVAR(default_isolation_level),
     MYSQL_SYSVAR(log_to_file),
     MYSQL_SYSVAR(log_truncation_at),
     NULL};
@@ -402,24 +493,27 @@ ha_create_table_option tidesdb_table_option_list[] = {
        (e.g. SET SESSION tidesdb_default_write_buffer_size=64*1024*1024).
        When not explicitly set in CREATE TABLE, the session default is used. */
     HA_TOPTION_SYSVAR("WRITE_BUFFER_SIZE", write_buffer_size, default_write_buffer_size),
-    HA_TOPTION_NUMBER("MIN_DISK_SPACE", min_disk_space, 100ULL * 1024 * 1024, 0, ULONGLONG_MAX,
-                      1024),
-    HA_TOPTION_NUMBER("KLOG_VALUE_THRESHOLD", klog_value_threshold, 512, 0, ULONGLONG_MAX, 1),
-    HA_TOPTION_NUMBER("SYNC_INTERVAL_US", sync_interval_us, 128000, 0, ULONGLONG_MAX, 1),
-    HA_TOPTION_NUMBER("INDEX_SAMPLE_RATIO", index_sample_ratio, 1, 1, 1024, 1),
-    HA_TOPTION_NUMBER("BLOCK_INDEX_PREFIX_LEN", block_index_prefix_len, 16, 1, 256, 1),
-    HA_TOPTION_NUMBER("LEVEL_SIZE_RATIO", level_size_ratio, 10, 2, 100, 1),
-    HA_TOPTION_NUMBER("MIN_LEVELS", min_levels, 5, 1, 64, 1),
-    HA_TOPTION_NUMBER("DIVIDING_LEVEL_OFFSET", dividing_level_offset, 2, 0, 64, 1),
-    HA_TOPTION_NUMBER("SKIP_LIST_MAX_LEVEL", skip_list_max_level, 12, 1, 64, 1),
-    HA_TOPTION_NUMBER("SKIP_LIST_PROBABILITY", skip_list_probability, 25, 1, 100, 1),
-    HA_TOPTION_NUMBER("BLOOM_FPR", bloom_fpr, 100, 1, 10000, 1),
-    HA_TOPTION_NUMBER("L1_FILE_COUNT_TRIGGER", l1_file_count_trigger, 4, 1, 1024, 1),
-    HA_TOPTION_NUMBER("L0_QUEUE_STALL_THRESHOLD", l0_queue_stall_threshold, 4, 1, 1024, 1),
+    HA_TOPTION_SYSVAR("MIN_DISK_SPACE", min_disk_space, default_min_disk_space),
+    HA_TOPTION_SYSVAR("KLOG_VALUE_THRESHOLD", klog_value_threshold, default_klog_value_threshold),
+    HA_TOPTION_SYSVAR("SYNC_INTERVAL_US", sync_interval_us, default_sync_interval_us),
+    HA_TOPTION_SYSVAR("INDEX_SAMPLE_RATIO", index_sample_ratio, default_index_sample_ratio),
+    HA_TOPTION_SYSVAR("BLOCK_INDEX_PREFIX_LEN", block_index_prefix_len,
+                      default_block_index_prefix_len),
+    HA_TOPTION_SYSVAR("LEVEL_SIZE_RATIO", level_size_ratio, default_level_size_ratio),
+    HA_TOPTION_SYSVAR("MIN_LEVELS", min_levels, default_min_levels),
+    HA_TOPTION_SYSVAR("DIVIDING_LEVEL_OFFSET", dividing_level_offset,
+                      default_dividing_level_offset),
+    HA_TOPTION_SYSVAR("SKIP_LIST_MAX_LEVEL", skip_list_max_level, default_skip_list_max_level),
+    HA_TOPTION_SYSVAR("SKIP_LIST_PROBABILITY", skip_list_probability,
+                      default_skip_list_probability),
+    HA_TOPTION_SYSVAR("BLOOM_FPR", bloom_fpr, default_bloom_fpr),
+    HA_TOPTION_SYSVAR("L1_FILE_COUNT_TRIGGER", l1_file_count_trigger,
+                      default_l1_file_count_trigger),
+    HA_TOPTION_SYSVAR("L0_QUEUE_STALL_THRESHOLD", l0_queue_stall_threshold,
+                      default_l0_queue_stall_threshold),
     HA_TOPTION_SYSVAR("COMPRESSION", compression, default_compression),
-    HA_TOPTION_ENUM("SYNC_MODE", sync_mode, "NONE,INTERVAL,FULL", 2),
-    HA_TOPTION_ENUM("ISOLATION_LEVEL", isolation_level,
-                    "READ_UNCOMMITTED,READ_COMMITTED,REPEATABLE_READ,SNAPSHOT,SERIALIZABLE", 2),
+    HA_TOPTION_SYSVAR("SYNC_MODE", sync_mode, default_sync_mode),
+    HA_TOPTION_SYSVAR("ISOLATION_LEVEL", isolation_level, default_isolation_level),
     HA_TOPTION_SYSVAR("BLOOM_FILTER", bloom_filter, default_bloom_filter),
     HA_TOPTION_SYSVAR("BLOCK_INDEXES", block_indexes, default_block_indexes),
     HA_TOPTION_SYSVAR("USE_BTREE", use_btree, default_use_btree),
@@ -4975,8 +5069,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30500,
+    0x30600,
     NULL,
     tidesdb_system_variables,
-    "3.5.0",
+    "3.6.0",
     MariaDB_PLUGIN_MATURITY_GAMMA} maria_declare_plugin_end;
