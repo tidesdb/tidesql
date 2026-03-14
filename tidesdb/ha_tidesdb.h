@@ -19,6 +19,7 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "handler.h"
@@ -179,6 +180,13 @@ struct tidesdb_trx_t
     bool stmt_was_dirty;                       /* true if current stmt had writes */
     tidesdb_isolation_level_t isolation_level; /* from first table opened */
     uint64_t txn_generation; /* monotonic counter; incremented each time a new txn is created */
+
+    /* Plugin-level row locks -- striped mutex indices held by this txn.
+       Acquired during SELECT FOR UPDATE / UPDATE / DELETE on hot rows,
+       released on commit/rollback.  This emulates pessimistic row locking
+       for workloads like TPC-C that require read-modify-write serialization
+       on the same key (TidesDB library uses optimistic MVCC only). */
+    std::unordered_set<uint32_t> *held_row_locks; /* heap-allocated, NULL until first lock */
 };
 
 /*
@@ -257,6 +265,10 @@ class ha_tidesdb : public handler
     ulonglong cached_sess_ttl_;
     bool cached_skip_unique_;
     bool cached_thdvars_valid_;
+
+    /* Write-lock mode -- set when external_lock(F_WRLCK) is called.
+       Used to decide whether to acquire row locks in index_read_map. */
+    bool stmt_has_write_lock_;
 
     /* Bulk insert state */
     bool in_bulk_insert_;

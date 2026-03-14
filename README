@@ -66,7 +66,7 @@ LINUX (Ubuntu/Debian)
 
 3. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch 12.1 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch mariadb-12.2.2 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
@@ -105,7 +105,7 @@ MACOS
 
 3. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch 12.1 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch mariadb-12.2.2 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
@@ -171,7 +171,7 @@ WINDOWS
 
 4. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch 12.1 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch mariadb-12.2.2 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    xcopy /E /I path\to\tidesql\tidesdb storage\tidesdb
@@ -210,17 +210,24 @@ Core:
 - MVCC transactions with per-table isolation (autocommit uses READ_COMMITTED;
   multi-statement transactions use the table's configured level)
 - SQL savepoints (SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT)
+- START TRANSACTION WITH CONSISTENT SNAPSHOT
 - Lock-free concurrency (no THR_LOCK, TidesDB handles isolation internally)
+- Optional pessimistic row locking (tidesdb_pessimistic_locking=ON) for
+  workloads that depend on SELECT ... FOR UPDATE serialization (e.g. TPC-C)
 - LSM-tree storage with optional B+tree SSTable format
 - Compression (NONE, LZ4, LZ4_FAST, ZSTD, Snappy)
 - Bloom filters for fast key lookups
 - Block cache for frequently accessed data
 - Primary key (single and composite) and secondary index support
 - Index Condition Pushdown (ICP) for secondary index scans
+- REPLACE INTO and INSERT ... ON DUPLICATE KEY UPDATE
 - AUTO_INCREMENT with O(1) atomic counter (no iterator per INSERT)
 - TTL (time-to-live) per-row and per-table expiration
 - Virtual/generated columns
 - Online backup (SET GLOBAL tidesdb_backup_dir = '/path')
+- Hard-link checkpoint (SET GLOBAL tidesdb_checkpoint_dir = '/path')
+- OPTIMIZE TABLE (synchronous purge + compact via tidesdb_purge_cf)
+- SHOW ENGINE TIDESDB STATUS (DB stats, memory, cache, conflict info)
 - Partitioning (RANGE, LIST, HASH, KEY)
 - Data-at-rest encryption (MariaDB encryption plugin integration)
 - Online DDL (instant metadata, inplace add/drop index, copy for columns)
@@ -239,7 +246,7 @@ TidesDB stores its data as a sibling of the MariaDB data directory:
 SYSTEM VARIABLES (SET GLOBAL tidesdb_...)
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-All are read-only (set at startup) unless noted otherwise.
+Read-only (set at startup):
 
   flush_threads             Background flush threads (default: 4)
   compaction_threads        Background compaction threads (default: 4)
@@ -247,8 +254,29 @@ All are read-only (set at startup) unless noted otherwise.
   block_cache_size          Global block cache in bytes (default: 256MB)
   max_open_sstables         Max cached SSTable files (default: 256)
   max_memory_usage          Global memory limit in bytes; 0 = auto (default: 0)
-  backup_dir                [dynamic] Set to a path to trigger online backup
-  debug_trace               [dynamic] Per-operation trace logging (default: OFF)
+  data_home_dir             Override TidesDB data directory (default: auto)
+  log_to_file               Write logs to file vs stderr (default: ON)
+  log_truncation_at         Log file truncation size (default: 24MB; 0 = off)
+  row_lock_stripes          Striped mutexes for pessimistic locking (default: 1024)
+
+Dynamic (SET GLOBAL at runtime):
+
+  backup_dir                Set to a path to trigger online backup
+  checkpoint_dir            Set to a path to trigger hard-link checkpoint
+  print_all_conflicts       Log all TDB_ERR_CONFLICT events (default: OFF)
+  pessimistic_locking       Enable plugin-level row locks for UPDATE/DELETE
+                            (default: OFF). Serializes concurrent writes to
+                            the same PK like InnoDB's row locks. Enable for
+                            TPC-C or workloads needing FOR UPDATE semantics.
+
+Session (SET SESSION tidesdb_...):
+
+  ttl                       Per-session TTL override in seconds (default: 0)
+  skip_unique_check         Skip PK/unique checks on INSERT (default: OFF)
+  default_compression       Default compression for new tables
+  default_write_buffer_size Default write buffer for new tables (32MB)
+  default_sync_mode         Default sync mode for new tables (FULL)
+  (and other default_* variables for all table options)
 
 Logging: TidesDB writes to <tidesdb_data>/LOG by default with automatic
 truncation at 24 MB.  Set log_level to WARN or higher in production to
@@ -258,9 +286,9 @@ reduce log volume.
 TABLE OPTIONS (CREATE TABLE ... ENGINE=TidesDB <option>=<value>)
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
-These are per-table options baked into the column family at creation time.
-Changing them via ALTER TABLE only updates the .frm; it does not reconfigure
-the live column family.
+These are per-table options set at creation time and applied to the column
+family configuration.  ALTER TABLE ... <option>=<value> updates both the .frm
+and the live column family via tidesdb_cf_update_runtime_config().
 
 Storage:
   WRITE_BUFFER_SIZE         Memtable size before flush (default: 32MB)
@@ -332,25 +360,37 @@ Run specific test:
 
   perl mtr --suite=tidesdb tidesdb_crud
 
-Available tests:
-  tidesdb_crud            Basic CRUD operations
-  tidesdb_pk_index        Primary key and secondary index scans
-  tidesdb_options         Table and field options
-  tidesdb_ttl             Time-to-live expiration
-  tidesdb_vcol            Virtual/generated columns
-  tidesdb_encryption      Data-at-rest encryption
-  tidesdb_backup          Online backup
-  tidesdb_partition       RANGE/LIST/HASH/KEY partitioning
-  tidesdb_online_ddl      Online DDL (instant, inplace, copy)
-  tidesdb_analyze         ANALYZE TABLE with CF statistics output
-  tidesdb_rename          Table rename
-  tidesdb_stress          Concurrent transactions, conflicts, truncate cycles
-  tidesdb_sql             Comprehensive SQL: 40 cases (aggregates, JOINs,
-                          subqueries, UNION, transactions, NULL handling, etc.)
-  tidesdb_json            JSON querying + generated-column JSON path indexing
-  tidesdb_savepoint       SQL SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT
-  tidesdb_write_pressure  oltp_write_only OOM reproduction (multi-connection)
-  ...
+Available tests (30 total):
+  tidesdb_alter_crash         Crash safety during ALTER TABLE operations
+  tidesdb_analyze             ANALYZE TABLE with CF statistics output
+  tidesdb_backup              Online backup via tidesdb_backup_dir
+  tidesdb_concurrent_conflict Concurrent write-write conflict handling
+  tidesdb_concurrent_errors   Multi-connection error handling and recovery
+  tidesdb_consistent_snapshot START TRANSACTION WITH CONSISTENT SNAPSHOT
+  tidesdb_crud                Basic CRUD operations
+  tidesdb_data_home_dir       tidesdb_data_home_dir sysvar
+  tidesdb_drop_create         Repeated DROP/CREATE/TRUNCATE cycles
+  tidesdb_encryption          Data-at-rest encryption
+  tidesdb_engine_status       SHOW ENGINE TIDESDB STATUS
+  tidesdb_index_stats         Index statistics and optimizer cost model
+  tidesdb_info_schema         information_schema integration
+  tidesdb_insert_conflict     Duplicate key detection and handling
+  tidesdb_isolation           Isolation level behavior
+  tidesdb_json                JSON querying + generated-column JSON indexing
+  tidesdb_online_ddl          Online DDL (instant, inplace, copy)
+  tidesdb_options             Table and field options
+  tidesdb_partition           RANGE/LIST/HASH/KEY partitioning
+  tidesdb_per_index_btree     Per-index USE_BTREE option
+  tidesdb_pk_index            Primary key and secondary index scans
+  tidesdb_rename              Table rename
+  tidesdb_replace_iodku       REPLACE INTO and INSERT ON DUPLICATE KEY UPDATE
+  tidesdb_savepoint           SQL SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT
+  tidesdb_sql                 40 SQL cases (aggregates, JOINs, subqueries, etc.)
+  tidesdb_stress              Concurrent transactions, conflicts, truncate cycles
+  tidesdb_tpcc_contention     TPC-C district counter contention (pessimistic locking)
+  tidesdb_ttl                 Time-to-live expiration
+  tidesdb_vcol                Virtual/generated columns
+  tidesdb_write_pressure      oltp_write_only pressure (multi-connection)
 
 Run with verbose output:
 

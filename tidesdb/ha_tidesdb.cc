@@ -16,6 +16,12 @@
 */
 #include "ha_tidesdb.h"
 
+extern "C"
+{
+#define XXH_INLINE_ALL
+#include <tidesdb/xxhash.h>
+}
+
 #include <mysql/plugin.h>
 
 #include <cstring>
@@ -38,6 +44,7 @@
 
 /* Forward-declared for tdb_rc_to_ha(); defined with sysvars below */
 static my_bool srv_print_all_conflicts = 0;
+static my_bool srv_pessimistic_locking = 0;
 static mysql_mutex_t last_conflict_mutex;
 static char last_conflict_info[1024] = "";
 
@@ -95,6 +102,54 @@ static tidesdb_t *tdb_global = NULL;
 static std::string tdb_path;
 
 static handlerton *tidesdb_hton;
+
+/* ******************** Plugin-level row locks ******************** */
+/*
+  Striped mutex array for emulating pessimistic row-level locking.
+  TidesDB library uses optimistic MVCC only -- write-write conflicts
+  are detected at commit time.  For workloads that depend on
+  SELECT ... FOR UPDATE semantics (e.g. TPC-C's district counter),
+  concurrent read-modify-write on the same row always conflicts.
+
+  This stripe array provides lightweight row-level serialization:
+  UPDATE/DELETE acquire the stripe mutex for their PK hash before
+  modifying the row.  The lock is held until COMMIT/ROLLBACK,
+  preventing a second transaction from reading a stale value and
+  creating a doomed write-write conflict.
+
+  The stripe count is configurable via tidesdb_row_lock_stripes (default 1024,
+  read-only).  1024 stripes provide sufficient parallelism (TPC-C with 1000
+  warehouses x 10 districts = 10000 rows spread across 1024 slots).
+  False sharing between different rows hashing to the same slot
+  causes brief serialization but not correctness issues.
+*/
+static ulong srv_row_lock_stripes = 1024;
+static mysql_mutex_t *row_lock_stripes = NULL;
+
+static inline uint32_t row_lock_stripe(const uchar *key, uint len)
+{
+    /* XXH3_64bits from TidesDB's bundled xxHash -- faster and better
+       distribution than FNV-1a, especially for short keys (PK bytes). */
+    uint64_t h = XXH3_64bits(key, len);
+    return (uint32_t)(h % srv_row_lock_stripes);
+}
+
+static void row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len)
+{
+    if (!row_lock_stripes) return; /* allocation failed at init */
+    uint32_t stripe = row_lock_stripe(key, len);
+    if (!trx->held_row_locks) trx->held_row_locks = new std::unordered_set<uint32_t>();
+    if (trx->held_row_locks->count(stripe)) return; /* already hold this stripe */
+    mysql_mutex_lock(&row_lock_stripes[stripe]);
+    trx->held_row_locks->insert(stripe);
+}
+
+static void row_locks_release_all(tidesdb_trx_t *trx)
+{
+    if (!trx->held_row_locks) return;
+    for (uint32_t s : *trx->held_row_locks) mysql_mutex_unlock(&row_lock_stripes[s]);
+    trx->held_row_locks->clear();
+}
 
 static handler *tidesdb_create_handler(handlerton *hton, TABLE_SHARE *table, MEM_ROOT *mem_root);
 
@@ -257,6 +312,24 @@ static MYSQL_SYSVAR_BOOL(print_all_conflicts, srv_print_all_conflicts, PLUGIN_VA
                          "Log all TidesDB conflict errors to the error log "
                          "(similar to innodb_print_all_deadlocks)",
                          NULL, NULL, 0);
+
+static MYSQL_SYSVAR_BOOL(pessimistic_locking, srv_pessimistic_locking, PLUGIN_VAR_RQCMDARG,
+                         "Enable plugin-level row locks for UPDATE/DELETE. "
+                         "OFF (default): pure optimistic MVCC -- concurrent writers on the "
+                         "same row are detected at COMMIT time (TDB_ERR_CONFLICT). "
+                         "ON: writers acquire a striped mutex per PK hash, serializing "
+                         "concurrent access to the same row like InnoDB's row locks. "
+                         "Enable for TPC-C or legacy workloads that depend on "
+                         "SELECT ... FOR UPDATE semantics",
+                         NULL, NULL, 0);
+
+static MYSQL_SYSVAR_ULONG(row_lock_stripes, srv_row_lock_stripes,
+                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+                          "Number of striped mutexes for pessimistic row locking. "
+                          "Higher values reduce false contention between unrelated rows "
+                          "at the cost of memory. Only meaningful when "
+                          "tidesdb_pessimistic_locking=ON",
+                          NULL, NULL, 1024, 64, 65536, 0);
 
 static MYSQL_SYSVAR_ULONGLONG(block_cache_size, srv_block_cache_size,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -432,6 +505,8 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(backup_dir),
     MYSQL_SYSVAR(checkpoint_dir),
     MYSQL_SYSVAR(print_all_conflicts),
+    MYSQL_SYSVAR(pessimistic_locking),
+    MYSQL_SYSVAR(row_lock_stripes),
     MYSQL_SYSVAR(data_home_dir),
     MYSQL_SYSVAR(ttl),
     MYSQL_SYSVAR(skip_unique_check),
@@ -889,6 +964,7 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
             trx->txn_generation++;
             trx->dirty = false;
             trx->stmt_savepoint_active = false;
+            row_locks_release_all(trx);
             return tdb_rc_to_ha(rc, "hton_commit");
         }
         tidesdb_txn_free(trx->txn);
@@ -905,6 +981,7 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
     }
     trx->dirty = false;
     trx->stmt_savepoint_active = false;
+    row_locks_release_all(trx);
     return 0;
 }
 
@@ -952,6 +1029,7 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
     trx->txn_generation++;
     trx->dirty = false;
     trx->stmt_savepoint_active = false;
+    row_locks_release_all(trx);
     return 0;
 }
 
@@ -964,6 +1042,9 @@ static int tidesdb_close_connection(handlerton *, THD *thd)
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (trx)
     {
+        row_locks_release_all(trx);
+        delete trx->held_row_locks;
+        trx->held_row_locks = NULL;
         if (trx->txn)
         {
             tidesdb_txn_rollback(trx->txn);
@@ -1113,6 +1194,15 @@ static int tidesdb_init_func(void *p)
 
     mysql_mutex_init(0, &last_conflict_mutex, MY_MUTEX_INIT_FAST);
 
+    /* Initialize striped row lock mutexes for pessimistic locking mode */
+    row_lock_stripes = (mysql_mutex_t *)my_malloc(
+        PSI_NOT_INSTRUMENTED, srv_row_lock_stripes * sizeof(mysql_mutex_t), MYF(MY_ZEROFILL));
+    if (row_lock_stripes)
+    {
+        for (ulong i = 0; i < srv_row_lock_stripes; i++)
+            mysql_mutex_init(0, &row_lock_stripes[i], MY_MUTEX_INIT_FAST);
+    }
+
     /* Use tidesdb_data_home_dir if set, otherwise compute
        a sibling directory of the MariaDB data directory. */
     if (srv_data_home_dir && srv_data_home_dir[0])
@@ -1169,6 +1259,12 @@ static int tidesdb_deinit_func(void *p)
     }
 
     mysql_mutex_destroy(&last_conflict_mutex);
+    if (row_lock_stripes)
+    {
+        for (ulong i = 0; i < srv_row_lock_stripes; i++) mysql_mutex_destroy(&row_lock_stripes[i]);
+        my_free(row_lock_stripes);
+        row_lock_stripes = NULL;
+    }
 
     sql_print_information("TIDESDB: TidesDB closed");
     DBUG_RETURN(0);
@@ -2911,6 +3007,16 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
             uint full_pk_comp_len = share->idx_comp_key_len[share->pk_index];
             if (comp_len >= full_pk_comp_len)
             {
+                /* When pessimistic locking is ON and this is a write statement
+                   (UPDATE/DELETE/SELECT FOR UPDATE), acquire the row lock BEFORE
+                   reading the row.  This serializes the entire read-modify-write
+                   cycle on the same PK, preventing lost updates. */
+                if (unlikely(srv_pessimistic_locking) && stmt_has_write_lock_)
+                {
+                    tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
+                    if (trx) row_lock_acquire(trx, comp_key, comp_len);
+                }
+
                 /* Full PK match -- point lookup only, no iterator needed.
                    If index_next is called later, ensure_scan_iter will create it. */
                 int ret = fetch_row_by_pk(scan_txn, comp_key, comp_len, buf);
@@ -3406,6 +3512,15 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     uint old_pk_len = current_pk_len_;
     memcpy(old_pk, current_pk_buf_, old_pk_len);
 
+    /* When pessimistic locking is enabled, acquire plugin-level row lock
+       on old PK to serialize concurrent UPDATE on the same row.
+       Held until COMMIT/ROLLBACK.  OFF by default -- pure optimistic MVCC. */
+    if (unlikely(srv_pessimistic_locking))
+    {
+        tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
+        if (trx) row_lock_acquire(trx, old_pk, old_pk_len);
+    }
+
     /* new_pk uses its own stack buffer so it survives the current_pk_buf_
        manipulations in the secondary index loop (avoids overlapping memcpy UB) */
     uchar new_pk[MAX_KEY_LENGTH];
@@ -3529,6 +3644,13 @@ int ha_tidesdb::delete_row(const uchar *buf)
     DBUG_ENTER("ha_tidesdb::delete_row");
 
     MY_BITMAP *old_map = tmp_use_all_columns(table, &table->read_set);
+
+    /* When pessimistic locking is enabled, acquire row lock before delete */
+    if (unlikely(srv_pessimistic_locking))
+    {
+        tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(ha_thd(), ht);
+        if (trx) row_lock_acquire(trx, current_pk_buf_, current_pk_len_);
+    }
 
     {
         int erc = ensure_stmt_txn();
@@ -4306,13 +4428,25 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
             sql_cmd == SQLCOM_OPTIMIZE || sql_cmd == SQLCOM_CREATE_TABLE ||
             sql_cmd == SQLCOM_DROP_TABLE)
             effective_iso = TDB_ISOLATION_READ_COMMITTED;
+        else if (unlikely(srv_pessimistic_locking))
+            /* When pessimistic locking is ON, the plugin's row-lock mutexes
+               already serialize concurrent access to the same row.  SNAPSHOT
+               conflict detection is redundant and causes spurious commit
+               failures on rows that were safely serialized by the mutex.
+               Use READ_COMMITTED so the library skips conflict checks. */
+            effective_iso = TDB_ISOLATION_READ_COMMITTED;
         else
             effective_iso = resolve_effective_isolation(thd, share->isolation_level);
         tidesdb_trx_t *trx = get_or_create_trx(thd, ht, effective_iso);
         if (!trx) DBUG_RETURN(HA_ERR_OUT_OF_MEM);
 
+        DBUG_PRINT("tidesdb_debug",
+                   ("external_lock: iso=%d txn=%p gen=%lu dirty=%d", (int)effective_iso, trx->txn,
+                    (unsigned long)trx->txn_generation, trx->dirty));
+
         stmt_txn = trx->txn;
         stmt_txn_dirty = false;
+        stmt_has_write_lock_ = (lock_type == F_WRLCK);
 
         /* We register at statement level (always) */
         trans_register_ha(thd, false, ht, 0);
@@ -5069,8 +5203,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30601,
+    0x30700,
     NULL,
     tidesdb_system_variables,
-    "3.6.1",
+    "3.7.0",
     MariaDB_PLUGIN_MATURITY_GAMMA} maria_declare_plugin_end;
