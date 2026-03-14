@@ -178,10 +178,10 @@ static MYSQL_THDVAR_ULONGLONG(default_bloom_fpr, PLUGIN_VAR_RQCMDARG,
 static MYSQL_THDVAR_ULONGLONG(default_klog_value_threshold, PLUGIN_VAR_RQCMDARG,
                               "Default klog value threshold in bytes for new tables "
                               "(values >= this go to vlog)",
-                              NULL, NULL, 512, 0, ULONGLONG_MAX, 1);
+                              NULL, NULL, 4096, 0, ULONGLONG_MAX, 1);
 
 static MYSQL_THDVAR_ULONGLONG(default_l0_queue_stall_threshold, PLUGIN_VAR_RQCMDARG,
-                              "Default L0 queue stall threshold for new tables", NULL, NULL, 4, 1,
+                              "Default L0 queue stall threshold for new tables", NULL, NULL, 8, 1,
                               1024, 1);
 
 static MYSQL_THDVAR_ULONGLONG(default_l1_file_count_trigger, PLUGIN_VAR_RQCMDARG,
@@ -271,7 +271,7 @@ static MYSQL_SYSVAR_ULONG(max_open_sstables, srv_max_open_sstables,
 static MYSQL_SYSVAR_ULONGLONG(max_memory_usage, srv_max_memory_usage,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                               "TidesDB global memory limit in bytes "
-                              "(0 = auto, 50%% of system RAM; minimum 5%% of system RAM)",
+                              "(0 = auto, 50% of system RAM; minimum 5% of system RAM)",
                               NULL, NULL, 0, 0, ULONGLONG_MAX, 0);
 
 static MYSQL_SYSVAR_BOOL(log_to_file, srv_log_to_file, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -5069,8 +5069,8 @@ maria_declare_plugin(tidesdb){
     PLUGIN_LICENSE_GPL,
     tidesdb_init_func,
     tidesdb_deinit_func,
-    0x30600,
+    0x30601,
     NULL,
     tidesdb_system_variables,
-    "3.6.0",
+    "3.6.1",
     MariaDB_PLUGIN_MATURITY_GAMMA} maria_declare_plugin_end;

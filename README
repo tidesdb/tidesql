@@ -265,7 +265,7 @@ the live column family.
 Storage:
   WRITE_BUFFER_SIZE         Memtable size before flush (default: 32MB)
   MIN_DISK_SPACE            Minimum free disk space (default: 100MB)
-  KLOG_VALUE_THRESHOLD      Values larger than this go to vlog (default: 512)
+  KLOG_VALUE_THRESHOLD      Values larger than this go to vlog (default: 4096)
 
 Compression:
   COMPRESSION               NONE/SNAPPY/LZ4/ZSTD/LZ4_FAST (default: LZ4)
@@ -288,7 +288,7 @@ LSM Tree:
   MIN_LEVELS                Minimum LSM levels (default: 5)
   DIVIDING_LEVEL_OFFSET     Compaction dividing level offset (default: 2)
   L1_FILE_COUNT_TRIGGER     L1 file count trigger for compaction (default: 4)
-  L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 4)
+  L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 8)
 
 Skip List:
   SKIP_LIST_MAX_LEVEL       Max skip list level (default: 12)

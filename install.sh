@@ -442,7 +442,7 @@ build_tidesdb() {
             fi
         fi
         if ! $found; then
-            warn "libtidesdb not found at ${TIDESDB_PREFIX}/lib — MariaDB build may fail"
+            warn "libtidesdb not found at ${TIDESDB_PREFIX}/lib - MariaDB build may fail"
         fi
         return
     fi
@@ -667,7 +667,7 @@ max_connections = 151
 
 # InnoDB
 default_storage_engine = InnoDB
-innodb_buffer_pool_size = 128M
+innodb_buffer_pool_size = 256M
 innodb_log_file_size = 48M
 innodb_flush_log_at_trx_commit = 1
 innodb_file_per_table = ON
@@ -681,16 +681,19 @@ long_query_time = 2
 character-set-server = utf8mb4
 collation-server = utf8mb4_general_ci
 
-# TidesDB plugin — loaded at startup
-plugin_maturity = experimental
+# TidesDB plugin - loaded at startup
+plugin_maturity = gamma
 plugin_load_add = ha_tidesdb.${plugin_ext}
 
-# TidesDB settings (defaults shown — tune as needed)
-tidesdb_flush_threads = 2
-tidesdb_compaction_threads = 2
+# TidesDB settings (defaults shown - tune as needed)
+tidesdb_flush_threads = 4
+tidesdb_compaction_threads = 4
 tidesdb_block_cache_size = 268435456
 tidesdb_max_open_sstables = 256
 tidesdb_log_level = WARN
+tidesdb_default_l0_queue_stall_threshold = 8
+tidesdb_default_klog_value_threshold = 4096
+tidesdb_max_open_sstables = 256
 
 [client]
 port = 3306
@@ -735,7 +738,7 @@ max_allowed_packet = 64M
     done
 
     if [[ -z "$install_db" ]]; then
-        warn "Could not find mariadb-install-db — skipping data directory init"
+        warn "Could not find mariadb-install-db - skipping data directory init"
         warn "You may need to run it manually after installation"
     elif [[ -d "${datadir}/mysql" ]]; then
         warn "Data directory already exists at ${datadir}, skipping initialization"
@@ -825,7 +828,7 @@ print_summary() {
     draw_box "${GREEN}" "Installation Complete!" _summary_lines
 }
 
-# ── PGO Phase 1 —— Instrument build ─────────────────────────────────
+# ── PGO Phase 1 -- Instrument build ─────────────────────────────────
 pgo_instrument() {
     info "PGO Phase 1/3: Building MariaDB with profiling instrumentation..."
 
@@ -907,7 +910,7 @@ pgo_instrument() {
     ok "PGO Phase 1/3: Instrumented build complete"
 }
 
-# ── PGO Phase 2 —— Train — run MTR to generate profile data ────────
+# ── PGO Phase 2 -- Train - run MTR to generate profile data ────────
 pgo_train() {
     info "PGO Phase 2/3: Running TidesDB test suite to generate profile data..."
 
@@ -915,7 +918,7 @@ pgo_train() {
     local mtr_dir="${mariadb_src}/build/mysql-test"
 
     if [[ ! -f "${mtr_dir}/mtr" ]]; then
-        die "MTR not found at ${mtr_dir}/mtr — instrumented build may have failed"
+        die "MTR not found at ${mtr_dir}/mtr - instrumented build may have failed"
     fi
 
     # Run the tidesdb test suite as the training workload
@@ -932,7 +935,7 @@ pgo_train() {
         # Clang generates .profraw files; merge them into a single .profdata
         profile_count="$(find "${profile_dir}" -name '*.profraw' 2>/dev/null | wc -l)"
         if [[ "${profile_count}" -eq 0 ]]; then
-            die "No profile data generated in ${profile_dir} — PGO training failed"
+            die "No profile data generated in ${profile_dir} - PGO training failed"
         fi
         info "Merging ${profile_count} .profraw files..."
         xcrun llvm-profdata merge -output="${profile_dir}/default.profdata" \
@@ -941,14 +944,14 @@ pgo_train() {
         # GCC generates .gcda files
         profile_count="$(find "${profile_dir}" -name '*.gcda' 2>/dev/null | wc -l)"
         if [[ "${profile_count}" -eq 0 ]]; then
-            die "No profile data generated in ${profile_dir} — PGO training failed"
+            die "No profile data generated in ${profile_dir} - PGO training failed"
         fi
     fi
 
     ok "PGO Phase 2/3: Training complete (${profile_count} profile files generated)"
 }
 
-# ── PGO Phase 3 —— Optimized rebuild using profile data ─────────────
+# ── PGO Phase 3 -- Optimized rebuild using profile data ─────────────
 pgo_optimize() {
     info "PGO Phase 3/3: Rebuilding MariaDB with profile-guided optimizations..."
 
@@ -1033,7 +1036,7 @@ main() {
     prepare_mariadb
 
     if $PGO_ENABLED; then
-        info "PGO enabled —— performing 3-phase build (instrument ⤍ train ⤍ optimize)"
+        info "PGO enabled -- performing 3-phase build (instrument ⤍ train ⤍ optimize)"
         pgo_instrument
         pgo_train
         pgo_optimize
