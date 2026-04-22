@@ -98,10 +98,20 @@ if [ -z "${TIDESDB_VERSION:-}" ]; then
     TIDESDB_VERSION="$_tidesdb_latest"
 fi
 
+# Memory allocator for libtidesdb.so.  One of: system (default), jemalloc, mimalloc, tcmalloc.
+# Forwarded to the Dockerfile as --build-arg ALLOCATOR=...  Affects only TidesDB's
+# internal allocations; for a process-wide swap also LD_PRELOAD at container startup.
+ALLOCATOR=${ALLOCATOR:-system}
+case "${ALLOCATOR}" in
+    system|jemalloc|mimalloc|tcmalloc) ;;
+    *) echo "Error: ALLOCATOR must be one of system|jemalloc|mimalloc|tcmalloc (got '${ALLOCATOR}')" >&2; exit 1 ;;
+esac
+
 echo "### 2. Building the new image..."
 BUILD_ARGS=(
     --build-arg "MARIADB_VERSION=${MARIADB_VERSION}"
     --build-arg "TIDESDB_VERSION=${TIDESDB_VERSION}"
+    --build-arg "ALLOCATOR=${ALLOCATOR}"
 )
 [ -n "$DISABLED_ENGINES" ] && BUILD_ARGS+=(--build-arg "DISABLED_ENGINES=${DISABLED_ENGINES}")
 docker build \

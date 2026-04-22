@@ -13,6 +13,10 @@ ARG WITH_TESTS=0
 ARG DISABLED_ENGINES=""
 # Set WITH_S3=1 to build with S3-compatible object store support (requires libcurl + OpenSSL).
 ARG WITH_S3=0
+# Memory allocator for libtidesdb.so: system (default), jemalloc, mimalloc, or tcmalloc.
+# Affects only TidesDB's internal allocations; mariadbd's allocator is unchanged.
+# Combine with LD_PRELOAD at container startup for a process-wide swap.
+ARG ALLOCATOR=system
 
 # Persist key paths as environment variables so they are available in every
 # RUN step and at container runtime.
@@ -21,14 +25,22 @@ ENV TIDESDB_PREFIX=${TIDESDB_PREFIX} \
     DEBIAN_FRONTEND=noninteractive
 ENV PATH="${MARIADB_PREFIX}/bin:${PATH}"
 
-# 1. Install system dependencies 
+# 1. Install system dependencies
 RUN apt-get update -qq && \
+    case "${ALLOCATOR}" in \
+        jemalloc) ALLOC_PKG=libjemalloc-dev ;; \
+        mimalloc) ALLOC_PKG=libmimalloc-dev ;; \
+        tcmalloc) ALLOC_PKG=libgoogle-perftools-dev ;; \
+        system|'') ALLOC_PKG= ;; \
+        *) echo "ERROR: ALLOCATOR must be one of system|jemalloc|mimalloc|tcmalloc (got '${ALLOCATOR}')"; exit 1 ;; \
+    esac && \
     apt-get install -y -qq \
         build-essential cmake ninja-build bison flex \
         libzstd-dev liblz4-dev libsnappy-dev \
         libncurses-dev libssl-dev libxml2-dev \
         libevent-dev libcurl4-openssl-dev \
-        pkg-config git gnutls-dev && \
+        pkg-config git gnutls-dev \
+        ${ALLOC_PKG} && \
     rm -rf /var/lib/apt/lists/*
 
 # 2. Copy TidesDB storage engine plugin and test suite from this repo 
@@ -38,14 +50,21 @@ COPY mysql-test/suite/tidesdb       /opt/tidesql/mysql-test/suite/tidesdb
 
 # 3. Build and install TidesDB library
 ARG WITH_S3=0
+ARG ALLOCATOR=system
 RUN TIDESDB_VER="${TIDESDB_VERSION}" && \
     if [ -z "$TIDESDB_VER" ]; then \
         TIDESDB_VER=$(curl -sf https://api.github.com/repos/tidesdb/tidesdb/releases/latest \
             | grep '"tag_name"' | head -1 | cut -d'"' -f4) || true; \
     fi && \
     if [ -z "$TIDESDB_VER" ]; then echo "ERROR: could not resolve TidesDB version"; exit 1; fi && \
-    echo "Building TidesDB version: $TIDESDB_VER" && \
+    echo "Building TidesDB version: $TIDESDB_VER with allocator=${ALLOCATOR}" && \
     S3_FLAG=$([ "${WITH_S3}" = "1" ] && echo "-DTIDESDB_WITH_S3=ON" || true) && \
+    case "${ALLOCATOR}" in \
+        jemalloc) ALLOC_FLAG="-DTIDESDB_WITH_JEMALLOC=ON" ;; \
+        mimalloc) ALLOC_FLAG="-DTIDESDB_WITH_MIMALLOC=ON" ;; \
+        tcmalloc) ALLOC_FLAG="-DTIDESDB_WITH_TCMALLOC=ON" ;; \
+        *)        ALLOC_FLAG="" ;; \
+    esac && \
     git clone --depth 1 --branch "$TIDESDB_VER" \
         https://github.com/tidesdb/tidesdb.git /tmp/tidesql-build/tidesdb-lib && \
     cmake \
@@ -55,11 +74,20 @@ RUN TIDESDB_VER="${TIDESDB_VERSION}" && \
         -DCMAKE_INSTALL_PREFIX="${TIDESDB_PREFIX}" \
         -DTIDESDB_BUILD_TESTS=OFF \
         -DBUILD_SHARED_LIBS=ON \
-        ${S3_FLAG} && \
+        ${S3_FLAG} \
+        ${ALLOC_FLAG} && \
     cmake --build /tmp/tidesql-build/tidesdb-lib/build \
         --config Release --parallel "$(nproc)" && \
     cmake --install /tmp/tidesql-build/tidesdb-lib/build --config Release && \
     ldconfig && \
+    if [ "${ALLOCATOR}" != "system" ]; then \
+        LINKED=$(ldd "${TIDESDB_PREFIX}/lib/libtidesdb.so" 2>/dev/null | grep -Eo '(jemalloc|mimalloc|tcmalloc)[^ ]*' | head -1 || true); \
+        if [ -n "$LINKED" ]; then \
+            echo "[OK] libtidesdb linked against ${LINKED}"; \
+        else \
+            echo "[WARNING] ALLOCATOR=${ALLOCATOR} requested but no allocator library appears in ldd output"; \
+        fi; \
+    fi && \
     rm -rf /tmp/tidesql-build/tidesdb-lib
 
 # 4. Clone MariaDB source and inject TidesDB storage engine plugin
