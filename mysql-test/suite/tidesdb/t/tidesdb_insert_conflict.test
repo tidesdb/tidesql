@@ -8,7 +8,7 @@
 # conflict detection.  If it fails, the library may need updating.
 #
 
-call mtr.add_suppression("TIDESDB:.*TDB_ERR_CONFLICT");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
 
 --echo #
 --echo # Issue #83: INSERT vs INSERT conflict detection

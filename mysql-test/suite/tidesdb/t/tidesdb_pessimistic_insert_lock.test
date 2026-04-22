@@ -10,7 +10,7 @@
 #   5. Concurrent INSERTs on different keys do not block
 #
 
-call mtr.add_suppression("TIDESDB:.*TDB_ERR_CONFLICT");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
 
 --echo #
 --echo # Setup

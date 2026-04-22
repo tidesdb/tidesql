@@ -21,10 +21,10 @@
 #
 
 # Suppress expected warnings from the new tdb_rc_to_ha() error mapper
-call mtr.add_suppression("TIDESDB:.*TDB_ERR_CONFLICT");
-call mtr.add_suppression("TIDESDB:.*TDB_ERR_LOCKED");
-call mtr.add_suppression("TIDESDB:.*TDB_ERR_MEMORY_LIMIT");
-call mtr.add_suppression("TIDESDB:.*unexpected TidesDB error");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_LOCKED");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_MEMORY_LIMIT");
+call mtr.add_suppression("\\[TIDESDB\\].*unexpected TidesDB error");
 
 --echo #
 --echo # === Setup: sysbench-like schema ===

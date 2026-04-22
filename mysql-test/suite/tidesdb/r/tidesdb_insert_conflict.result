@@ -1,4 +1,4 @@
-call mtr.add_suppression("TIDESDB:.*TDB_ERR_CONFLICT");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
 #
 # Issue #83: INSERT vs INSERT conflict detection
 #

@@ -85,6 +85,11 @@ Some of them currently cannot be changed by using the scripts.
   WITH_TESTS        Include MTR in the image. 1=yes, 0=no. Default: 0
   WITH_S3           Build with S3 object store support. 1=yes, 0=no. Default: 0
                     Requires libcurl and OpenSSL (already in the base image).
+  ALLOCATOR         Memory allocator to link libtidesdb.so against.
+                    One of: system (default), jemalloc, mimalloc, tcmalloc.
+                    Only affects TidesDB's internal allocations; mariadbd's
+                    allocator is unchanged.  Combine with LD_PRELOAD at
+                    container startup for a process-wide swap.
   DISABLED_ENGINES  Normally set indirectly via EXCLUDE_ENGINES /
                     INCLUDE_ENGINES in rebuild.sh (see REBUILD SCRIPT above).
 ```
@@ -116,6 +121,30 @@ Example - build with S3 object store support:
       --build-arg WITH_S3=1 \
       -t tidesql:11.8.6-s3 \
       .
+```
+
+Example - link libtidesdb against jemalloc:
+
+```
+  docker build \
+      -f docker/ubuntu/Dockerfile \
+      --build-arg MARIADB_VERSION=11.8.6 \
+      --build-arg TIDESDB_VERSION=v9.0.0 \
+      --build-arg ALLOCATOR=jemalloc \
+      -t tidesql:11.8.6-jemalloc \
+      .
+
+  # Or via setup.sh / rebuild.sh:
+  ALLOCATOR=jemalloc bash docker/rebuild.sh
+```
+
+For a process-wide allocator swap (covers mariadbd too), start the
+container with an LD_PRELOAD pointing at the same library:
+
+```
+  docker run -d --name tidesql \
+      -e LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 \
+      -p 3306:3306 tidesql:11.8.6-jemalloc
 ```
 
 

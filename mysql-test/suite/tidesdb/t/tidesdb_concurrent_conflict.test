@@ -5,7 +5,7 @@
 # two transactions modify the same row.
 #
 
-call mtr.add_suppression("TIDESDB:.*TDB_ERR_CONFLICT");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
 
 --echo #
 --echo # Issue #77: Concurrent conflict detection

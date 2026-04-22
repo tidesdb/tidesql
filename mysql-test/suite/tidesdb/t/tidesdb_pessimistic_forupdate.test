@@ -11,7 +11,7 @@
 #   - Zero conflict errors
 #
 
-call mtr.add_suppression("TIDESDB:.*TDB_ERR_CONFLICT");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
 
 # pessimistic_locking=ON is set via .opt file
 

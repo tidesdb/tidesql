@@ -3,7 +3,7 @@
 
 
 # Suppress expected error from Test 2 (backup to non-empty dir)
-CALL mtr.add_suppression("TIDESDB: Backup to .* failed");
+CALL mtr.add_suppression("\\[TIDESDB\\] Backup to .* failed");
 
 --echo #
 --echo # ============================================

@@ -53,6 +53,11 @@
 #   --rebuild-plugin             Rebuild only the TidesDB plugin (fast dev cycle)
 #   --pgo                       Enable Profile-Guided Optimization (3-phase build)
 #   --s3                        Build TidesDB with S3 object store connector (requires libcurl + OpenSSL)
+#   --allocator  NAME           Memory allocator for libtidesdb.so: system (default), jemalloc, mimalloc, or tcmalloc.
+#                               Only affects TidesDB's internal allocations; mariadbd's allocator is unchanged.
+#                               For a process-wide swap also LD_PRELOAD the allocator at mariadbd startup.
+#                               Note: --rebuild-plugin does NOT rebuild libtidesdb, so changing this flag
+#                               requires a full install run (omit --rebuild-plugin) to take effect.
 #   --help                      Show this help message
 #
 # Platform defaults:
@@ -169,6 +174,15 @@ REBUILD_PLUGIN=false
 PGO_ENABLED=false
 SKIP_ENGINES=""
 WITH_S3=false
+# Memory allocator to build libtidesdb against.  One of:
+#   system     glibc / platform default (no extra dep)
+#   jemalloc   routes TidesDB allocations through jemalloc (pkg: libjemalloc-dev)
+#   mimalloc   routes TidesDB allocations through mimalloc (pkg: libmimalloc-dev)
+#   tcmalloc   routes TidesDB allocations through tcmalloc (pkg: libgoogle-perftools-dev)
+# Note this affects only libtidesdb.so's internal allocations; mariadbd's own
+# allocator is unchanged.  For a process-wide swap, combine with
+# LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 at mariadbd startup.
+ALLOCATOR="system"
 
 # ── Ensure VCPKG_ROOT is set on Windows (needed even with --skip-deps) ────────
 if [[ "$OS" == "windows" ]]; then
@@ -249,6 +263,13 @@ while [[ $# -gt 0 ]]; do
         --list-engines)     list_engines ;;
         --pgo)              PGO_ENABLED=true;       shift   ;;
         --s3)               WITH_S3=true;           shift   ;;
+        --allocator)
+            ALLOCATOR="$2"
+            case "$ALLOCATOR" in
+                system|jemalloc|mimalloc|tcmalloc) ;;
+                *) die "--allocator must be one of system|jemalloc|mimalloc|tcmalloc (got '$ALLOCATOR')" ;;
+            esac
+            shift 2 ;;
         --help|-h)          usage ;;
         *) die "Unknown option: $1 (try --help)" ;;
     esac
@@ -318,6 +339,7 @@ _cfg_lines=(
     "Parallel jobs    : ${GREEN}${JOBS}${NC}"
     "Detected OS      : ${GREEN}${OS}${NC}"
     "PGO build        : ${GREEN}${PGO_ENABLED}${NC}"
+    "Allocator        : ${GREEN}${ALLOCATOR}${NC}"
 )
 if [[ -n "$SKIP_ENGINES" ]]; then
     _cfg_lines+=("Skip engines     : ${YELLOW}${SKIP_ENGINES}${NC}")
@@ -366,6 +388,24 @@ install_deps() {
 
     info "Installing system dependencies for ${OS}..."
 
+    # Per-OS package name for the selected allocator (empty for 'system').
+    local allocator_pkg=""
+    case "$OS:$ALLOCATOR" in
+        debian:jemalloc)  allocator_pkg="libjemalloc-dev" ;;
+        debian:mimalloc)  allocator_pkg="libmimalloc-dev" ;;
+        debian:tcmalloc)  allocator_pkg="libgoogle-perftools-dev" ;;
+        redhat:jemalloc)  allocator_pkg="jemalloc-devel" ;;
+        redhat:mimalloc)  allocator_pkg="mimalloc-devel" ;;
+        redhat:tcmalloc)  allocator_pkg="gperftools-devel" ;;
+        arch:jemalloc)    allocator_pkg="jemalloc" ;;
+        arch:mimalloc)    allocator_pkg="mimalloc" ;;
+        arch:tcmalloc)    allocator_pkg="gperftools" ;;
+        macos:jemalloc)   allocator_pkg="jemalloc" ;;
+        macos:mimalloc)   allocator_pkg="mimalloc" ;;
+        macos:tcmalloc)   allocator_pkg="gperftools" ;;
+    esac
+    [[ -n "$allocator_pkg" ]] && info "Allocator ${ALLOCATOR} -> installing ${allocator_pkg}"
+
     case "$OS" in
         debian)
             sudo apt-get update -qq
@@ -374,7 +414,8 @@ install_deps() {
                 libzstd-dev liblz4-dev libsnappy-dev \
                 libncurses-dev libssl-dev libxml2-dev \
                 libevent-dev libcurl4-openssl-dev \
-                pkg-config git gnutls-dev
+                pkg-config git gnutls-dev \
+                ${allocator_pkg}
             ;;
         redhat)
             sudo dnf install -y \
@@ -382,7 +423,8 @@ install_deps() {
                 libzstd-devel lz4-devel snappy-devel \
                 ncurses-devel openssl-devel libxml2-devel \
                 libevent-devel libcurl-devel \
-                pkg-config git gnutls-devel
+                pkg-config git gnutls-devel \
+                ${allocator_pkg}
             ;;
         arch)
             sudo pacman -Sy --noconfirm --needed \
@@ -390,14 +432,16 @@ install_deps() {
                 zstd lz4 snappy \
                 ncurses openssl libxml2 \
                 libevent curl \
-                pkg-config git gnutls
+                pkg-config git gnutls \
+                ${allocator_pkg}
             ;;
         macos)
             if ! command -v brew &>/dev/null; then
                 die "Homebrew is required on macOS. Install from https://brew.sh"
             fi
             brew install cmake ninja bison flex \
-                snappy lz4 zstd openssl@3 gnutls
+                snappy lz4 zstd openssl@3 gnutls \
+                ${allocator_pkg}
             ;;
         windows)
             if [[ -z "${VCPKG_ROOT:-}" ]]; then
@@ -479,6 +523,21 @@ build_tidesdb() {
         info "S3 object store connector enabled"
     fi
 
+    case "$ALLOCATOR" in
+        jemalloc)
+            cmake_args+=(-DTIDESDB_WITH_JEMALLOC=ON)
+            info "Building libtidesdb with jemalloc"
+            ;;
+        mimalloc)
+            cmake_args+=(-DTIDESDB_WITH_MIMALLOC=ON)
+            info "Building libtidesdb with mimalloc"
+            ;;
+        tcmalloc)
+            cmake_args+=(-DTIDESDB_WITH_TCMALLOC=ON)
+            info "Building libtidesdb with tcmalloc"
+            ;;
+    esac
+
     case "$OS" in
         macos)
             local sdk_root
@@ -496,6 +555,22 @@ build_tidesdb() {
     cmake "${cmake_args[@]}"
     cmake --build "${tidesdb_src}/build" --config Release --parallel "${JOBS}"
     run_privileged_tidesdb cmake --install "${tidesdb_src}/build" --config Release
+
+    # Show which allocator is actually linked so users can verify after a build.
+    if [[ "$ALLOCATOR" != "system" ]]; then
+        local installed_lib
+        installed_lib="$(ls -1 "${TIDESDB_PREFIX}/lib/libtidesdb."{so,dylib} 2>/dev/null | head -1 || true)"
+        if [[ -n "$installed_lib" ]] && command -v ldd &>/dev/null; then
+            local allocator_linkage
+            allocator_linkage="$(ldd "$installed_lib" 2>/dev/null | grep -Eo '(jemalloc|mimalloc|tcmalloc)[^ ]*' | head -1 || true)"
+            if [[ -n "$allocator_linkage" ]]; then
+                ok "libtidesdb is linked against ${allocator_linkage}"
+            else
+                warn "Requested allocator ${ALLOCATOR} but none of libjemalloc/libmimalloc/libtcmalloc appears in \`ldd ${installed_lib}\`."
+                warn "  Check cmake output above for missing packages."
+            fi
+        fi
+    fi
 
     # Update shared library cache on Linux
     case "$OS" in
@@ -810,6 +885,18 @@ print_summary() {
     if $PGO_ENABLED; then
         _summary_lines+=("Build type           : ${CYAN}Release + PGO${NC}")
     fi
+    if [[ "$ALLOCATOR" != "system" ]]; then
+        _summary_lines+=(
+            "Allocator            : ${CYAN}${ALLOCATOR}${NC}"
+            ""
+            "Verify the allocator is linked into libtidesdb:"
+            "  ldd ${TIDESDB_PREFIX}/lib/libtidesdb.so | grep -E 'jemalloc|mimalloc|tcmalloc'"
+            ""
+            "For a process-wide allocator swap also LD_PRELOAD at startup:"
+            "  LD_PRELOAD=\$(pkg-config --variable=libdir ${ALLOCATOR})/lib${ALLOCATOR}.so.2 \\"
+            "    ${start_cmd} --defaults-file=${MARIADB_PREFIX}/${cnf_name} &"
+        )
+    fi
     _summary_lines+=(
         ""
         "Start MariaDB:"
@@ -1123,6 +1210,15 @@ main() {
 
     # Fast path: rebuild only the plugin and exit
     if $REBUILD_PLUGIN; then
+        # Allocator choice is baked into libtidesdb.so by build_tidesdb().  The
+        # rebuild-plugin path only recompiles ha_tidesdb.so against the already
+        # installed library, so --allocator has no effect here -- warn so users
+        # don't silently get a stale allocator.
+        if [[ "$ALLOCATOR" != "system" ]]; then
+            warn "--allocator=${ALLOCATOR} has no effect with --rebuild-plugin."
+            warn "  libtidesdb.so keeps its prior allocator linkage; to change"
+            warn "  allocators, re-run install.sh without --rebuild-plugin."
+        fi
         rebuild_plugin
         return
     fi

@@ -24,6 +24,27 @@ To skip storage engines you don't need (saves build time and reduces warnings):
 ./install.sh --list-engines                       # see what can be skipped
 ./install.sh --skip-engines mroonga,rocksdb,connect,spider,oqgraph,columnstore
 
+To link libtidesdb against a non-default allocator (jemalloc is a common
+pick for write-heavy workloads):
+
+./install.sh --allocator jemalloc
+./install.sh --allocator mimalloc
+./install.sh --allocator tcmalloc
+
+The flag only affects libtidesdb.so's internal allocations; mariadbd's
+allocator is unchanged.  For a process-wide swap also LD_PRELOAD the
+allocator at mariadbd startup:
+
+  LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 \
+    /usr/local/mariadb/bin/mariadbd-safe \
+    --defaults-file=/usr/local/mariadb/my.cnf &
+
+Note that --rebuild-plugin does NOT rebuild libtidesdb, so changing the
+allocator requires a full install run (omit --rebuild-plugin) to take
+effect.  Verify the linkage with:
+
+  ldd /usr/local/lib/libtidesdb.so | grep -E 'jemalloc|mimalloc|tcmalloc'
+
 Skippable engines:
   archive        Archive storage engine (read-only row-format tables)
   blackhole      Blackhole engine (accepts writes, stores nothing)
@@ -221,8 +242,17 @@ Core:
 - Block cache for frequently accessed data
 - Primary key (single and composite) and secondary index support
 - Index Condition Pushdown (ICP) for secondary index scans
+- Multi-Range Read (MRR) with sorted point-lookup batching for queries of
+  the shape WHERE col IN (v1, v2, ..., vN).  Accepted only when every
+  range is a full-key point equality and there are 2+ ranges; keys are
+  sorted by comparable bytes so the LSM sees a monotone stream of seeks.
+- Bulk UPDATE / DELETE batching: multi-row UPDATE and DELETE statements
+  share the same mid-txn commit plumbing as bulk INSERT, keeping long
+  statements under TDB_MAX_TXN_OPS without ballooning txn memory
 - REPLACE INTO and INSERT ... ON DUPLICATE KEY UPDATE
-- AUTO_INCREMENT with O(1) atomic counter (no iterator per INSERT)
+- AUTO_INCREMENT with O(1) atomic counter (no iterator per INSERT).
+  TRUNCATE TABLE and ALTER TABLE ... AUTO_INCREMENT=N both correctly
+  reset the counter via the reset_auto_increment handler hook.
 - TTL (time-to-live) per-row and per-table expiration
 - Virtual/generated columns
 - Online backup (SET GLOBAL tidesdb_backup_dir = '/path')
@@ -235,6 +265,14 @@ Core:
 - SHOW ENGINE TIDESDB STATUS (DB stats, memory, cache, conflict info)
 - SHOW GLOBAL STATUS LIKE 'tidesdb%' (21 machine-readable status variables
   for monitoring tools: Prometheus, PMM, Datadog, etc.)
+- Handlerton lifecycle + administrative hooks wired:
+    drop_database    DROP DATABASE removes all TidesDB CFs for the db
+    flush_logs       FLUSH LOGS syncs the TidesDB WAL (safe before backup)
+    panic            orderly close on signal-driven shutdown
+    pre_shutdown     background thread quiesce before deinit
+    kill_query       KILL QUERY wakes waiters in row_lock_acquire and is
+                     checked inside rnd_next / index_next / spatial /
+                     ft_read so long scans return HA_ERR_ABORTED_BY_USER
 - Partitioning (RANGE, LIST, HASH, KEY)
 - Data-at-rest encryption (MariaDB encryption plugin integration)
 - Online DDL (instant metadata, inplace add/drop index, copy for columns)
@@ -419,7 +457,7 @@ Run specific test:
 
   perl mtr --suite=tidesdb tidesdb_crud
 
-Available tests (48 total, 280+ cases):
+Available tests (49 total, 280+ cases):
   tidesdb_alter_crash         Crash safety during ALTER TABLE operations
   tidesdb_analyze             ANALYZE TABLE with CF statistics output
   tidesdb_auto_increment      AUTO_INCREMENT edge cases (gaps, rollback, explicit values)
@@ -447,6 +485,7 @@ Available tests (48 total, 280+ cases):
   tidesdb_large_blob          Large BLOB/TEXT values (> 64KB, klog_value_threshold)
   tidesdb_load_data           Bulk insert path (multi-row INSERT, INSERT...SELECT)
   tidesdb_mixed_engine        Mixed-engine transactions (TidesDB + InnoDB in same txn)
+  tidesdb_mrr                 Multi-Range Read for WHERE col IN (...) on PK and secondary index
   tidesdb_object_store        Object store integration (CRUD, indexes, txns, bulk, compaction)
   tidesdb_online_ddl          Online DDL (instant, inplace, copy)
   tidesdb_options             Table and field options

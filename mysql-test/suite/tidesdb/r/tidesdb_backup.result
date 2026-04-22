@@ -1,4 +1,4 @@
-CALL mtr.add_suppression("TIDESDB: Backup to .* failed");
+CALL mtr.add_suppression("\\[TIDESDB\\] Backup to .* failed");
 #
 # ============================================
 # TEST 1: Online backup creates a valid copy
@@ -34,7 +34,7 @@ DROP TABLE t_backup;
 #
 # Re-running backup to same directory should fail (not empty)
 SET GLOBAL tidesdb_backup_dir = 'MYSQLTEST_VARDIR/tmp/tidesdb_backup_test';
-ERROR HY000: TIDESDB: Backup to 'MYSQLTEST_VARDIR/tmp/tidesdb_backup_test' failed (err=-6)
+ERROR HY000: [TIDESDB] Backup to 'MYSQLTEST_VARDIR/tmp/tidesdb_backup_test' failed (err=-6)
 #
 # ============================================
 # TEST 3: Clear backup_dir variable
