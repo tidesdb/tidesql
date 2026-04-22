@@ -70,6 +70,17 @@ INSERT INTO t_ai (v) VALUES ('fresh_start');
 SELECT * FROM t_ai;
 
 --echo #
+--echo # TEST 8: ALTER TABLE ... AUTO_INCREMENT=N takes effect
+--echo #
+
+CREATE TABLE t_ai_alter (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(10)) ENGINE=TidesDB;
+INSERT INTO t_ai_alter (v) VALUES ('a'), ('b');
+ALTER TABLE t_ai_alter AUTO_INCREMENT=1000;
+INSERT INTO t_ai_alter (v) VALUES ('jumped');
+SELECT * FROM t_ai_alter ORDER BY id;
+DROP TABLE t_ai_alter;
+
+--echo #
 --echo # Cleanup
 --echo #
 

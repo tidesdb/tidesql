@@ -403,8 +403,12 @@ class ha_tidesdb : public handler
     tidesdb_trx_t *cached_trx_; /* avoids thd_get_ha_data() hash lookup */
     bool trx_registered_;       /* true once trans_register_ha() called this txn */
 
-    /* Bulk insert state */
+    /* Bulk DML state.  The ops counter is shared across insert/update/delete
+       bulk modes since only one can be active at a time and they all use the
+       same TIDESDB_BULK_INSERT_BATCH_OPS threshold. */
     bool in_bulk_insert_;
+    bool in_bulk_update_;
+    bool in_bulk_delete_;
     ha_rows bulk_insert_ops_; /* ops buffered since last mid-txn commit */
 
     /* Covering-index mode (HA_EXTRA_KEYREAD) */
@@ -479,6 +483,12 @@ class ha_tidesdb : public handler
 
     /* Free all cached dup-check iterators */
     void free_dup_iter_cache();
+
+    /* Commit the current txn mid-statement when a bulk op crosses the batch
+       threshold, then reset it to READ_COMMITTED for the next batch.  Shared
+       between bulk INSERT/UPDATE/DELETE.  Invalidates cached iterators.
+       Returns 0 on success, handler error code on fatal failure. */
+    int maybe_bulk_commit(tidesdb_trx_t *trx);
 
     /* Recover hidden-PK counter by scanning the CF */
     void recover_counters();
@@ -588,12 +598,28 @@ class ha_tidesdb : public handler
     void start_bulk_insert(ha_rows rows, uint flags) override;
     int end_bulk_insert() override;
 
+    /* Bulk UPDATE / DELETE hints -- let multi-row UPDATE/DELETE share the
+       same mid-txn commit batching as bulk INSERT so long statements don't
+       blow past TDB_MAX_TXN_OPS or balloon txn memory. */
+    bool start_bulk_update() override;
+    int end_bulk_update() override;
+    int bulk_update_row(const uchar *old_data, const uchar *new_data,
+                        ha_rows *dup_key_found) override;
+    bool start_bulk_delete() override;
+    int end_bulk_delete() override;
+
     /* Index Condition Pushdown (ICP) */
     Item *idx_cond_push(uint keyno, Item *idx_cond) override;
 
     /* AUTO_INCREMENT -- O(1) atomic counter */
     void get_auto_increment(ulonglong offset, ulonglong increment, ulonglong nb_desired_values,
                             ulonglong *first_value, ulonglong *nb_reserved_values) override;
+
+    /* Reset the in-memory auto-increment counter so `TRUNCATE TABLE t` and
+       `ALTER TABLE t AUTO_INCREMENT=N` take effect.  Base default is a no-op,
+       which left TidesDB's cached counter running past TRUNCATE -- the next
+       INSERT would return a stale value instead of restarting at 1 (or N). */
+    int reset_auto_increment(ulonglong value) override;
 
     /* Stats / Maintenance */
     int info(uint flag) override;

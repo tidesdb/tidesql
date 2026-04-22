@@ -77,7 +77,7 @@ static int tdb_rc_to_ha(int rc, const char *ctx)
             if (unlikely(srv_print_all_conflicts))
             {
                 sql_print_information(
-                    "TIDESDB CONFLICT: %s: transaction aborted due to write-write "
+                    "[TIDESDB] %s: transaction aborted due to write-write "
                     "conflict (TDB_ERR_CONFLICT)",
                     ctx);
                 mysql_mutex_lock(&last_conflict_mutex);
@@ -282,7 +282,7 @@ static bool tdb_lock_would_deadlock(tidesdb_trx_t *requestor, tdb_row_lock_t *ta
   and removes the data races that the old code had when traversing pointers
   in unrelated partitions.
 */
-static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len)
+static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len, THD *thd)
 {
     if (!lock_partitions || !trx) return 0;
 
@@ -347,15 +347,30 @@ static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len)
         return 0;
     }
 
-    /* Still owned -- wait for release. */
+    /* Still owned -- wait for release.  kill_query wakes us by broadcasting
+       on lock->cond; we re-check thd_killed() on every wake-up and bail
+       with HA_ERR_LOCK_WAIT_TIMEOUT so the client sees a proper error
+       instead of hanging until the holder eventually commits. */
     lock->waiters++;
+    bool killed = false;
     while (lock->owner_txn_id.load(std::memory_order_relaxed) != 0 &&
            lock->owner_trx.load(std::memory_order_relaxed) != trx)
     {
+        if (thd && thd_killed(thd))
+        {
+            killed = true;
+            break;
+        }
         mysql_cond_wait(&lock->cond, &part->mutex);
     }
     lock->waiters--;
     trx->waiting_on.store(NULL, std::memory_order_relaxed);
+
+    if (killed)
+    {
+        mysql_mutex_unlock(&part->mutex);
+        return HA_ERR_LOCK_WAIT_TIMEOUT;
+    }
 
     /* We claim the lock */
     lock->owner_txn_id.store(trx->lock_txn_id, std::memory_order_release);
@@ -514,7 +529,7 @@ static constexpr uint FTS_TERM_LEN_PREFIX = 2;
 /* Worst-case FTS entry key buffer-- [2B term_len][term bytes][PK]. */
 static constexpr uint FTS_KEY_BUF_LEN = FTS_TERM_LEN_PREFIX + FTS_MAX_TERM_BYTES + MAX_KEY_LENGTH;
 
-/* FTS entry value layout: [2B tf LE][4B doc_len LE] = 6 bytes. */
+/* FTS entry value layout-- [2B tf LE][4B doc_len LE] = 6 bytes. */
 static constexpr uint FTS_VALUE_TF_LEN = 2;
 static constexpr uint FTS_VALUE_DOC_LEN_OFFSET = FTS_VALUE_TF_LEN;
 static constexpr uint FTS_VALUE_DOC_LEN_LEN = 4;
@@ -522,7 +537,7 @@ static constexpr uint FTS_VALUE_LEN = FTS_VALUE_TF_LEN + FTS_VALUE_DOC_LEN_LEN;
 
 /* FTS per-index meta key layout:
    [KEY_NS_META(1B)][FTS tag(4B incl NUL)][keynr(1B)] = 6 bytes.
-   Meta value layout: [8B total_docs][8B total_words] = 16 bytes. */
+   Meta value layout-- [8B total_docs][8B total_words] = 16 bytes. */
 static constexpr const char FTS_META_KEY_TAG[] = "FTS\x00";
 static constexpr uint FTS_META_KEY_TAG_LEN = 4; /* 3 letters + trailing NUL */
 static constexpr uint FTS_META_KEY_TAG_OFFSET = KEY_NAMESPACE_LEN;
@@ -558,7 +573,7 @@ static uint fts_build_value(uint16 tf, uint32 doc_len, uchar *out)
 }
 
 /* Read or initialize FTS metadata counters from the data CF.
-   Key format: [KEY_NS_META][FTS tag][keynr]. */
+   Key format-- [KEY_NS_META][FTS tag][keynr]. */
 static int fts_load_meta(tidesdb_txn_t *txn, tidesdb_column_family_t *data_cf, uint keynr,
                          int64_t *total_docs, int64_t *total_words)
 {
@@ -2991,6 +3006,53 @@ static void schema_cf_delete(const char *path)
 }
 
 /*
+  Remove every schema CF entry belonging to a dropped database.
+  Keys are "db_name\0table_name" so we iterate the CF and delete entries
+  whose prefix matches.  No-op in local-only mode (schema_cf is NULL).
+*/
+static void schema_cf_delete_db(const std::string &db_name)
+{
+    if (!schema_cf || db_name.empty()) return;
+
+    /* Match keys beginning with "db_name\0". */
+    std::string prefix = db_name;
+    prefix.push_back('\0');
+
+    tidesdb_txn_t *txn = NULL;
+    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return;
+
+    tidesdb_iter_t *it = NULL;
+    if (tidesdb_iter_new(txn, schema_cf, &it) != TDB_SUCCESS)
+    {
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        return;
+    }
+
+    std::vector<std::string> to_delete;
+    tidesdb_iter_seek(it, (const uint8_t *)prefix.data(), prefix.size());
+    while (tidesdb_iter_valid(it))
+    {
+        uint8_t *k = NULL;
+        size_t klen = 0;
+        if (tidesdb_iter_key(it, &k, &klen) != TDB_SUCCESS) break;
+        if (klen < prefix.size() || memcmp(k, prefix.data(), prefix.size()) != 0) break;
+        to_delete.emplace_back((const char *)k, klen);
+        tidesdb_iter_next(it);
+    }
+    tidesdb_iter_free(it);
+
+    for (const auto &k : to_delete)
+        tidesdb_txn_delete(txn, schema_cf, (const uint8_t *)k.data(), k.size());
+
+    if (!to_delete.empty())
+        tidesdb_txn_commit(txn);
+    else
+        tidesdb_txn_rollback(txn);
+    tidesdb_txn_free(txn);
+}
+
+/*
   Rename a table's schema CF entry (delete old key, insert under new key).
   Called from rename_table().
 */
@@ -3251,6 +3313,11 @@ static void schema_cf_ensure_databases()
 /* ******************** Plugin init / deinit ******************** */
 
 static int tidesdb_hton_drop_table(handlerton *, const char *path);
+static void tidesdb_hton_drop_database(handlerton *, char *path);
+static bool tidesdb_hton_flush_logs(handlerton *);
+static int tidesdb_hton_panic(handlerton *, enum ha_panic_function flag);
+static void tidesdb_hton_pre_shutdown(void);
+static void tidesdb_hton_kill_query(handlerton *, THD *thd, enum thd_kill_levels level);
 
 static int tidesdb_init_func(void *p)
 {
@@ -3265,6 +3332,7 @@ static int tidesdb_init_func(void *p)
     tidesdb_hton->field_options = tidesdb_field_option_list;
     tidesdb_hton->index_options = tidesdb_index_option_list;
     tidesdb_hton->drop_table = tidesdb_hton_drop_table;
+    tidesdb_hton->drop_database = tidesdb_hton_drop_database;
 
     /* Handlerton transaction callbacks -- one TidesDB txn per BEGIN..COMMIT */
     tidesdb_hton->commit = tidesdb_commit;
@@ -3277,6 +3345,12 @@ static int tidesdb_init_func(void *p)
     tidesdb_hton->savepoint_release = tidesdb_savepoint_release;
     tidesdb_hton->start_consistent_snapshot = tidesdb_start_consistent_snapshot;
     tidesdb_hton->show_status = tidesdb_show_status;
+
+    /* Durability / lifecycle / cancellation hooks. */
+    tidesdb_hton->flush_logs = tidesdb_hton_flush_logs;
+    tidesdb_hton->panic = tidesdb_hton_panic;
+    tidesdb_hton->pre_shutdown = tidesdb_hton_pre_shutdown;
+    tidesdb_hton->kill_query = tidesdb_hton_kill_query;
 
     mysql_mutex_init(0, &last_conflict_mutex, MY_MUTEX_INIT_FAST);
 
@@ -3426,6 +3500,106 @@ static int tidesdb_init_func(void *p)
     DBUG_RETURN(0);
 }
 
+/*
+  Handlerton-level FLUSH LOGS callback.  Called on FLUSH LOGS and by
+  mariadb-backup before copying files so the on-disk WAL is a consistent
+  snapshot.  With unified-memtable mode one sync covers all CFs.  In
+  per-CF mode we sync the schema CF (always present in object-store
+  mode; otherwise we try the first registered CF).  Returns false on
+  success (handlerton convention).
+*/
+static bool tidesdb_hton_flush_logs(handlerton *)
+{
+    if (!tdb_global) return false;
+
+    tidesdb_column_family_t *target = schema_cf;
+    if (!target)
+    {
+        char **names = NULL;
+        int count = 0;
+        if (tidesdb_list_column_families(tdb_global, &names, &count) == TDB_SUCCESS && names)
+        {
+            if (count > 0 && names[0]) target = tidesdb_get_column_family(tdb_global, names[0]);
+            for (int i = 0; i < count; i++)
+                if (names[i]) free(names[i]);
+            free(names);
+        }
+    }
+    if (!target) return false; /* empty database -- nothing to sync */
+
+    int rc = tidesdb_sync_wal(target);
+    if (rc != TDB_SUCCESS)
+    {
+        sql_print_warning("[TIDESDB] flush_logs: tidesdb_sync_wal failed (rc=%d)", rc);
+        return true; /* error */
+    }
+    return false;
+}
+
+/*
+  Handlerton-level panic callback.  MariaDB calls this on signal-driven or
+  abnormal shutdown paths where tidesdb_deinit_func may not run.  We only
+  react to HA_PANIC_CLOSE -- the other flags are legacy ISAM-era.
+*/
+static int tidesdb_hton_panic(handlerton *, enum ha_panic_function flag)
+{
+    if (flag != HA_PANIC_CLOSE) return 0;
+    if (tdb_global)
+    {
+        tidesdb_close(tdb_global);
+        tdb_global = NULL;
+        schema_cf = NULL;
+    }
+    return 0;
+}
+
+/*
+  Handlerton-level pre_shutdown callback.  Runs before the deinit path so
+  background threads that still need a fully-functional server (compaction,
+  flush) get a clean signal to drain.  We flush the unified WAL synchronously
+  and let tidesdb_close() in deinit finish the teardown.
+*/
+static void tidesdb_hton_pre_shutdown(void)
+{
+    if (!tdb_global) return;
+
+    /* Sync the unified WAL so durability is preserved if deinit is racing
+       a forced exit.  The call is cheap when there's nothing to sync. */
+    (void)tidesdb_hton_flush_logs(tidesdb_hton);
+}
+
+/*
+  Handlerton-level kill_query callback.  MariaDB calls this when the user
+  runs KILL QUERY <id> or when the connection is killed.  Our job is to
+  wake the victim if it is currently blocked in row_lock_acquire so that
+  the wait loop observes thd_killed() and bails out promptly.
+
+  The trx's waiting_on pointer is the lock entry being waited on; a
+  broadcast on that entry's cond var wakes the waiter.  False wake-ups
+  are harmless -- the wait loop re-checks ownership and goes back to
+  sleep if the lock is still contended.
+*/
+static void tidesdb_hton_kill_query(handlerton *, THD *thd, enum thd_kill_levels)
+{
+    if (!thd) return;
+    tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
+    if (!trx) return;
+
+    tdb_row_lock_t *wait = trx->waiting_on.load(std::memory_order_acquire);
+    if (!wait) return;
+
+    /* We broadcast under the owning partition's mutex so the wake-up is
+       serialized against the holder's release path.  Partition index is
+       cached on the lock entry so we don't have to recompute the hash. */
+    if (lock_partitions && wait->partition < ROW_LOCK_PARTITIONS)
+    {
+        tdb_lock_partition_t *part = &lock_partitions[wait->partition];
+        mysql_mutex_lock(&part->mutex);
+        mysql_cond_broadcast(&wait->cond);
+        mysql_mutex_unlock(&part->mutex);
+    }
+}
+
 static int tidesdb_deinit_func(void *p)
 {
     DBUG_ENTER("tidesdb_deinit_func");
@@ -3541,6 +3715,8 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
       cached_trx_(NULL),
       trx_registered_(false),
       in_bulk_insert_(false),
+      in_bulk_update_(false),
+      in_bulk_delete_(false),
       bulk_insert_ops_(0),
       keyread_only_(false),
       write_can_replace_(false)
@@ -4937,7 +5113,7 @@ int ha_tidesdb::write_row(const uchar *buf)
        format used by index_read_map() for lock acquisition. */
     if (unlikely(srv_pessimistic_locking) && share->has_user_pk && trx)
     {
-        int lrc = row_lock_acquire(trx, pk, pk_len);
+        int lrc = row_lock_acquire(trx, pk, pk_len, cached_thd_);
         if (lrc)
         {
             tmp_restore_column_map(&table->read_set, old_map);
@@ -5153,49 +5329,11 @@ int ha_tidesdb::write_row(const uchar *buf)
         bulk_insert_ops_ += 1 + share->num_secondary_indexes;
         if (bulk_insert_ops_ >= TIDESDB_BULK_INSERT_BATCH_OPS)
         {
-            /* Mid-txn commit to stay under TDB_MAX_TXN_OPS and bound memory.
-               We use tidesdb_txn_reset() instead of free+recreate to preserve
-               the txn's internal buffers (ops array, arenas, CF arrays).
-               trx already cached at top of write_row. */
-            if (trx && trx->txn)
+            int mrc = maybe_bulk_commit(trx);
+            if (mrc)
             {
-                int crc = tidesdb_txn_commit(trx->txn);
-                if (crc != TDB_SUCCESS)
-                    sql_print_information("[TIDESDB] bulk insert mid-commit failed rc=%d", crc);
-                /* Reset reuses the txn with READ_COMMITTED -- bulk inserts
-                   don't need snapshot consistency across batches and higher
-                   levels would cause unbounded read-set growth. */
-                int rrc = tidesdb_txn_reset(trx->txn, TDB_ISOLATION_READ_COMMITTED);
-                if (rrc != TDB_SUCCESS)
-                {
-                    /* Reset failed -- we fall back to free+recreate */
-                    sql_print_warning(
-                        "[TIDESDB] bulk_insert tidesdb_txn_reset failed (rc=%d), "
-                        "falling back to free+begin",
-                        rrc);
-                    tidesdb_txn_free(trx->txn);
-                    trx->txn = NULL;
-                    crc = tidesdb_txn_begin_with_isolation(tdb_global, TDB_ISOLATION_READ_COMMITTED,
-                                                           &trx->txn);
-                    if (crc != TDB_SUCCESS)
-                    {
-                        tmp_restore_column_map(&table->read_set, old_map);
-                        DBUG_RETURN(tdb_rc_to_ha(crc, "bulk_insert txn_begin"));
-                    }
-                }
-                stmt_txn = trx->txn;
-                trx->txn_generation++;
-                /* Iterators depend on MERGE_SOURCE_TXN_OPS which are cleared
-                   by reset -- we invalidate all cached iterators. */
-                if (scan_iter)
-                {
-                    tidesdb_iter_free(scan_iter);
-                    scan_iter = NULL;
-                    scan_iter_cf_ = NULL;
-                    scan_iter_txn_ = NULL;
-                }
-                free_dup_iter_cache();
-                scan_txn = trx->txn;
+                tmp_restore_column_map(&table->read_set, old_map);
+                DBUG_RETURN(mrc);
             }
             bulk_insert_ops_ = 0;
         }
@@ -5242,6 +5380,30 @@ void ha_tidesdb::get_auto_increment(ulonglong offset, ulonglong increment,
     *nb_reserved_values = nb_desired_values;
 
     DBUG_VOID_RETURN;
+}
+
+/*
+  Reset the auto-increment counter(s) to the given value.  MariaDB's default
+  truncate() path calls this after delete_all_rows, and ALTER TABLE ...
+  AUTO_INCREMENT=N routes here as well.  The next auto-generated ID equals
+  `value` itself, so we store `value - 1` (get_auto_increment does
+  fetch-add and returns cur+1).  `value == 0` is the TRUNCATE case reset
+  to 1.  Hidden-PK row-id gets the same treatment for consistency.
+*/
+int ha_tidesdb::reset_auto_increment(ulonglong value)
+{
+    DBUG_ENTER("ha_tidesdb::reset_auto_increment");
+    if (!share) DBUG_RETURN(0);
+
+    ulonglong new_val = value > 0 ? value - 1 : 0;
+    share->auto_inc_val.store(new_val, std::memory_order_relaxed);
+
+    /* Hidden PK row-ids are one-based (delete_all_rows stores 1 for empty
+       tables).  Treat value==0 as "restart at 1". */
+    uint64_t new_rowid = value > 0 ? (uint64_t)value : 1;
+    share->next_row_id.store(new_rowid, std::memory_order_relaxed);
+
+    DBUG_RETURN(0);
 }
 
 /* ******************** Table scan (SELECT) ******************** */
@@ -5308,6 +5470,8 @@ int ha_tidesdb::rnd_end()
 int ha_tidesdb::rnd_next(uchar *buf)
 {
     DBUG_ENTER("ha_tidesdb::rnd_next");
+
+    if (cached_thd_ && thd_killed(cached_thd_)) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
 
     /* We advance past the last-read entry.  on the first call after rnd_init
      * the iterator is already positioned at the first data key by the seek
@@ -5501,7 +5665,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
                     tidesdb_trx_t *trx = cached_trx_;
                     if (trx)
                     {
-                        int lrc = row_lock_acquire(trx, comp_key, comp_len);
+                        int lrc = row_lock_acquire(trx, comp_key, comp_len, cached_thd_);
                         if (lrc) DBUG_RETURN(lrc);
                     }
                 }
@@ -5721,6 +5885,8 @@ int ha_tidesdb::index_next(uchar *buf)
 {
     DBUG_ENTER("ha_tidesdb::index_next");
 
+    if (cached_thd_ && thd_killed(cached_thd_)) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
+
     /* Spatial idx continuation */
     if (spatial_scan_active_)
     {
@@ -5798,6 +5964,8 @@ int ha_tidesdb::index_next(uchar *buf)
 int ha_tidesdb::index_prev(uchar *buf)
 {
     DBUG_ENTER("ha_tidesdb::index_prev");
+
+    if (cached_thd_ && thd_killed(cached_thd_)) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
 
     /* If PK exact match was done without iterator, create it now and
        seek to the matched key so that prev() steps before it. */
@@ -5941,6 +6109,8 @@ int ha_tidesdb::index_last(uchar *buf)
 int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
 {
     DBUG_ENTER("ha_tidesdb::index_next_same");
+
+    if (cached_thd_ && thd_killed(cached_thd_)) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
 
     /* Spatial index continuation */
     if (spatial_scan_active_)
@@ -6228,7 +6398,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                     }
                 }
 
-                /* Meta: same doc stays, so delta_docs=0.  Word count shifts by
+                /* Meta same doc stays, so delta_docs=0.  Word count shifts by
                    new_wc - old_wc; only write the meta row when it actually
                    moved to avoid a pointless read-modify-write. */
                 int64_t wc_delta = (int64_t)new_wc - (int64_t)old_wc;
@@ -6332,6 +6502,26 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
 
     memcpy(current_pk_buf_, new_pk, new_pk_len);
     current_pk_len_ = new_pk_len;
+
+    /* Bulk UPDATE mid-txn commit.  Symmetric to write_row's bulk path.
+       One UPDATE op counts as 1 data put + 1 data delete (when PK changed)
+       + up to num_secondary_indexes entries rewritten.  We overestimate as
+       `1 + 2 * num_secondary_indexes` so the threshold fires earlier rather
+       than later and the txn never exceeds TDB_MAX_TXN_OPS. */
+    if (in_bulk_update_)
+    {
+        bulk_insert_ops_ += 1 + 2 * (ha_rows)share->num_secondary_indexes;
+        if (bulk_insert_ops_ >= TIDESDB_BULK_INSERT_BATCH_OPS)
+        {
+            int mrc = maybe_bulk_commit(trx);
+            if (mrc)
+            {
+                tmp_restore_column_map(&table->read_set, old_map);
+                DBUG_RETURN(mrc);
+            }
+            bulk_insert_ops_ = 0;
+        }
+    }
 
     /* Commit happens in external_lock(F_UNLCK). */
     tmp_restore_column_map(&table->read_set, old_map);
@@ -6453,6 +6643,23 @@ int ha_tidesdb::delete_row(const uchar *buf)
         }
     }
 
+    /* Bulk DELETE mid-txn commit-- 1 data delete + num_secondary_indexes
+       secondary-index deletes per row. */
+    if (in_bulk_delete_)
+    {
+        bulk_insert_ops_ += 1 + (ha_rows)share->num_secondary_indexes;
+        if (bulk_insert_ops_ >= TIDESDB_BULK_INSERT_BATCH_OPS)
+        {
+            int mrc = maybe_bulk_commit(trx);
+            if (mrc)
+            {
+                tmp_restore_column_map(&table->read_set, old_map);
+                DBUG_RETURN(mrc);
+            }
+            bulk_insert_ops_ = 0;
+        }
+    }
+
     tmp_restore_column_map(&table->read_set, old_map);
     DBUG_RETURN(0);
 }
@@ -6553,7 +6760,53 @@ int ha_tidesdb::delete_all_rows(void)
     DBUG_RETURN(0);
 }
 
-/* ******************** Bulk insert ******************** */
+/* ******************** Bulk DML ******************** */
+
+/*
+  Commit the current txn mid-statement and reset it with READ_COMMITTED so
+  the next batch starts fresh.  Shared by bulk INSERT/UPDATE/DELETE once
+  buffered ops cross TIDESDB_BULK_INSERT_BATCH_OPS -- keeps us under
+  TDB_MAX_TXN_OPS and bounds txn memory.  Higher isolation levels would
+  cause unbounded read-set growth across batches.
+
+  Any cached iterators and dup-check iterators are invalidated, they hold
+  references to MERGE_SOURCE_TXN_OPS that txn_reset clears.
+*/
+int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
+{
+    if (!trx || !trx->txn) return 0;
+
+    int crc = tidesdb_txn_commit(trx->txn);
+    if (crc != TDB_SUCCESS) sql_print_information("[TIDESDB] bulk mid-commit failed rc=%d", crc);
+
+    int rrc = tidesdb_txn_reset(trx->txn, TDB_ISOLATION_READ_COMMITTED);
+    if (rrc != TDB_SUCCESS)
+    {
+        sql_print_warning(
+            "[TIDESDB] bulk tidesdb_txn_reset failed (rc=%d), falling back to "
+            "free+begin",
+            rrc);
+        tidesdb_txn_free(trx->txn);
+        trx->txn = NULL;
+        int rc =
+            tidesdb_txn_begin_with_isolation(tdb_global, TDB_ISOLATION_READ_COMMITTED, &trx->txn);
+        if (rc != TDB_SUCCESS) return tdb_rc_to_ha(rc, "bulk_commit txn_begin");
+    }
+
+    stmt_txn = trx->txn;
+    trx->txn_generation++;
+
+    if (scan_iter)
+    {
+        tidesdb_iter_free(scan_iter);
+        scan_iter = NULL;
+        scan_iter_cf_ = NULL;
+        scan_iter_txn_ = NULL;
+    }
+    free_dup_iter_cache();
+    scan_txn = trx->txn;
+    return 0;
+}
 
 void ha_tidesdb::start_bulk_insert(ha_rows rows, uint flags)
 {
@@ -6564,6 +6817,53 @@ void ha_tidesdb::start_bulk_insert(ha_rows rows, uint flags)
 int ha_tidesdb::end_bulk_insert()
 {
     in_bulk_insert_ = false;
+    return 0;
+}
+
+/*
+  start_bulk_update returns 0 when the engine will handle bulk batching.
+  We then flip the flag that update_row checks at its tail so every row
+  contributes to the shared ops counter.
+*/
+bool ha_tidesdb::start_bulk_update()
+{
+    in_bulk_update_ = true;
+    bulk_insert_ops_ = 0;
+    return 0;
+}
+
+int ha_tidesdb::end_bulk_update()
+{
+    in_bulk_update_ = false;
+    return 0;
+}
+
+/*
+  MariaDB calls bulk_update_row instead of update_row when start_bulk_update
+  returned 0.  We don't actually buffer rows (TidesDB's txn is the buffer);
+  we just delegate so the standard update_row path runs and its tail-side
+  mid-commit block batches.  dup_key_found tracks duplicate-key collisions
+  found in buffered-but-not-yet-applied rows -- since we apply immediately,
+  it's always zero.
+*/
+int ha_tidesdb::bulk_update_row(const uchar *old_data, const uchar *new_data,
+                                ha_rows *dup_key_found)
+{
+    DBUG_ENTER("ha_tidesdb::bulk_update_row");
+    if (dup_key_found) *dup_key_found = 0;
+    DBUG_RETURN(update_row(old_data, new_data));
+}
+
+bool ha_tidesdb::start_bulk_delete()
+{
+    in_bulk_delete_ = true;
+    bulk_insert_ops_ = 0;
+    return 0;
+}
+
+int ha_tidesdb::end_bulk_delete()
+{
+    in_bulk_delete_ = false;
     return 0;
 }
 
@@ -7292,6 +7592,8 @@ int ha_tidesdb::spatial_scan_next(uchar *buf)
 
         while (tidesdb_iter_valid(scan_iter))
         {
+            if (cached_thd_ && thd_killed(cached_thd_)) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
+
             uint8_t *ik = NULL;
             size_t iks = 0;
             if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) break;
@@ -7669,6 +7971,8 @@ FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
 int ha_tidesdb::ft_read(uchar *buf)
 {
     DBUG_ENTER("ha_tidesdb::ft_read");
+
+    if (cached_thd_ && thd_killed(cached_thd_)) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
 
     tdb_ft_info_t *info = reinterpret_cast<tdb_ft_info_t *>(ft_handler);
     if (!info)
@@ -8690,6 +8994,75 @@ static int tidesdb_drop_table_impl(const char *path)
 static int tidesdb_hton_drop_table(handlerton *, const char *path)
 {
     return tidesdb_drop_table_impl(path);
+}
+
+/*
+  Extract the database name from a directory path handed to drop_database.
+  The server passes something like "./test/" or "/var/lib/mysql/test/";
+  we strip trailing separators and return the final path component.
+*/
+static std::string tidesdb_path_to_db_name(const char *path)
+{
+    if (!path) return std::string();
+    std::string p(path);
+    while (!p.empty() && (p.back() == FN_LIBCHAR || p.back() == '/')) p.pop_back();
+    size_t slash = p.find_last_of("/\\");
+    if (slash != std::string::npos) p = p.substr(slash + 1);
+    return p;
+}
+
+/*
+  Handlerton-level drop_database callback.  MariaDB calls this when the
+  server-side DROP DATABASE has finished removing .frm files from the db
+  directory.  Without this hook, TidesDB column families whose .frm was
+  already unlinked (and any object-store-mode entries in schema_cf) would
+  outlive the database and accumulate on disk.
+
+  We enumerate every CF whose name starts with "<db_name>__" (the prefix
+  path_to_cf_name builds for a table in that database -- which also
+  captures all "db__tbl__idx_*" secondary-index CFs) and drop each.
+*/
+static void tidesdb_hton_drop_database(handlerton *, char *path)
+{
+    if (!tdb_global || !path) return;
+
+    std::string db = tidesdb_path_to_db_name(path);
+    if (db.empty()) return;
+
+    std::string prefix = db + "__";
+
+    std::vector<std::string> to_drop;
+    {
+        char **names = NULL;
+        int count = 0;
+        if (tidesdb_list_column_families(tdb_global, &names, &count) == TDB_SUCCESS && names)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                if (!names[i]) continue;
+                if (strncmp(names[i], prefix.c_str(), prefix.size()) == 0)
+                    to_drop.emplace_back(names[i]);
+                free(names[i]);
+            }
+            free(names);
+        }
+    }
+
+    for (const auto &cf_name : to_drop)
+    {
+        int rc = tidesdb_drop_column_family(tdb_global, cf_name.c_str());
+        if (rc != TDB_SUCCESS && rc != TDB_ERR_NOT_FOUND)
+            sql_print_warning("[TIDESDB] drop_database: failed to drop CF '%s' (err=%d)",
+                              cf_name.c_str(), rc);
+        force_remove_cf_dir(cf_name);
+    }
+
+    /* Clean up schema CF entries for this database (object-store mode).
+       No-op when schema_cf is NULL (local-only mode). */
+    schema_cf_delete_db(db);
+
+    sql_print_information("[TIDESDB] drop_database: removed %zu column famil%s for '%s'",
+                          to_drop.size(), to_drop.size() == 1 ? "y" : "ies", db.c_str());
 }
 
 int ha_tidesdb::delete_table(const char *name)

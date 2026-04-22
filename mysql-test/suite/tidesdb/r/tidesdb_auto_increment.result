@@ -77,7 +77,20 @@ TRUNCATE TABLE t_ai;
 INSERT INTO t_ai (v) VALUES ('fresh_start');
 SELECT * FROM t_ai;
 id	v
-105	fresh_start
+1	fresh_start
+#
+# TEST 8: ALTER TABLE ... AUTO_INCREMENT=N takes effect
+#
+CREATE TABLE t_ai_alter (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(10)) ENGINE=TidesDB;
+INSERT INTO t_ai_alter (v) VALUES ('a'), ('b');
+ALTER TABLE t_ai_alter AUTO_INCREMENT=1000;
+INSERT INTO t_ai_alter (v) VALUES ('jumped');
+SELECT * FROM t_ai_alter ORDER BY id;
+id	v
+1	a
+2	b
+3	jumped
+DROP TABLE t_ai_alter;
 #
 # Cleanup
 #
