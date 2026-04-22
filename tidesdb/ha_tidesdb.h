@@ -411,6 +411,22 @@ class ha_tidesdb : public handler
     bool in_bulk_delete_;
     ha_rows bulk_insert_ops_; /* ops buffered since last mid-txn commit */
 
+    /* Multi-Range Read state.  We accept MRR when every range the optimizer
+       hands us is UNIQUE_RANGE|EQ_RANGE (i.e. the WHERE col IN (...) case on
+       a full key) and fall back to the default MRR->read_range_first path for
+       everything else.  Accepted ranges are buffered + sorted by comparable
+       key bytes so the LSM sees a monotone stream of seeks. */
+    struct tdb_mrr_entry
+    {
+        std::string comp_key; /* comparable PK / index bytes */
+        range_id_t ptr;       /* value returned to caller as *range_info */
+    };
+    bool mrr_custom_active_;
+    bool mrr_no_assoc_;
+    uint mrr_keyno_;
+    std::vector<tdb_mrr_entry> mrr_entries_;
+    size_t mrr_next_idx_;
+
     /* Covering-index mode (HA_EXTRA_KEYREAD) */
     bool keyread_only_;
     bool write_can_replace_; /* true during REPLACE INTO (HA_EXTRA_WRITE_CAN_REPLACE) */
@@ -610,6 +626,16 @@ class ha_tidesdb : public handler
 
     /* Index Condition Pushdown (ICP) */
     Item *idx_cond_push(uint keyno, Item *idx_cond) override;
+
+    /* Multi-Range Read (MRR).  We opt into a custom implementation for
+       point-only range sequences and defer to the base handler for
+       everything else by leaving HA_MRR_USE_DEFAULT_IMPL set. */
+    ha_rows multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq, void *seq_init_param,
+                                        uint n_ranges, uint *bufsz, uint *mrr_mode, ha_rows limit,
+                                        Cost_estimate *cost) override;
+    int multi_range_read_init(RANGE_SEQ_IF *seq, void *seq_init_param, uint n_ranges, uint mrr_mode,
+                              HANDLER_BUFFER *buf) override;
+    int multi_range_read_next(range_id_t *range_info) override;
 
     /* AUTO_INCREMENT -- O(1) atomic counter */
     void get_auto_increment(ulonglong offset, ulonglong increment, ulonglong nb_desired_values,

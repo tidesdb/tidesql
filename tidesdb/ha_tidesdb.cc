@@ -157,12 +157,12 @@ static handlerton *tidesdb_hton;
   Hash-table-based row-level lock manager with deadlock detection.
 
   Design:
-  - Partitioned hash table      -- hash(pk_bytes) % NUM_PARTITIONS -> partition
-  - Each partition has its own mutex protecting a linked-list hash chain
-  - Lock entries track          -- owner txn, PK bytes, condition variable for waiters
-  - Deadlock detection          -- on wait, walk the wait-for graph (waiter->holder->waiter)
-    If a cycle is found, return HA_ERR_LOCK_DEADLOCK immediately
-  - Per-txn held_locks list for bulk release at COMMIT/ROLLBACK
+  -- Partitioned hash table       hash(pk_bytes) % NUM_PARTITIONS -> partition
+  -- Each partition has its own mutex protecting a linked-list hash chain
+  -- Lock entries track           owner txn, PK bytes, condition variable for waiters
+  -- Deadlock detection           on wait, walk the wait-for graph (waiter->holder->waiter)
+     If a cycle is found, return HA_ERR_LOCK_DEADLOCK immediately
+  -- Per-txn held_locks list for bulk release at COMMIT/ROLLBACK
 
   This gives per-row granularity without false sharing, proper blocking
   semantics for SELECT ... FOR UPDATE, and deadlock resolution for
@@ -642,9 +642,9 @@ static ulong srv_fts_max_word_len = 84;
    word characters.  When a blend char appears inside a token, the tokenizer
    emits three tokens -- the full blended form, and the two parts on each side.
    For example, with blend_chars="'" and input "l'aria":
-     - "l'aria" (full blended token)
-     - "l"      (left part, may be filtered by min_word_len)
-     - "aria"   (right part)
+     -- "l'aria" (full blended token)
+     -- "l"      (left part, may be filtered by min_word_len)
+     -- "aria"   (right part)
    This allows Italian/French elision (dell'aria, l'homme) and Irish/Scottish
    names (O'Malley) to be searchable by any component or the full form.
    Default is empty (no blend characters). Set to "'" for Romance languages. */
@@ -3718,6 +3718,10 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
       in_bulk_update_(false),
       in_bulk_delete_(false),
       bulk_insert_ops_(0),
+      mrr_custom_active_(false),
+      mrr_no_assoc_(false),
+      mrr_keyno_(MAX_KEY),
+      mrr_next_idx_(0),
       keyread_only_(false),
       write_can_replace_(false)
 {
@@ -4262,7 +4266,7 @@ check_result_t ha_tidesdb::icp_check_secondary(const uint8_t *ik, size_t iks, ui
            like DECIMAL, VARCHAR, multi-byte CHAR).  Fall back to a full PK
            row fetch so ALL columns are available for condition evaluation.
            This is more expensive than pure ICP (still does the PK lookup)
-           but is correct - the server won't re-evaluate pushed conditions. */
+           but is correct, the server won't re-evaluate pushed conditions. */
         if (iks > idx_col_len)
         {
             const uchar *pk = ik + idx_col_len;
@@ -6883,6 +6887,187 @@ Item *ha_tidesdb::idx_cond_push(uint keyno, Item *idx_cond)
 
     /* We ret NULL to indicate we accepted the entire condition */
     DBUG_RETURN(NULL);
+}
+
+/* ******************** Multi-Range Read (MRR) ******************** */
+
+/*
+  Decide whether to accept a custom MRR strategy.  We only handle the case
+  where every range the optimizer hands us is a full-key point lookup
+  (UNIQUE_RANGE|EQ_RANGE) -- typically `WHERE col IN (v1, v2, ...)` on a
+  PK or full-key unique index.  For mixed or true-range sequences we leave
+  HA_MRR_USE_DEFAULT_IMPL set so the handler::multi_range_read_* default
+  path runs unchanged.
+
+  Iterating the sequence here consumes it; MariaDB re-initialises it before
+  calling multi_range_read_init, so probing is safe.
+*/
+ha_rows ha_tidesdb::multi_range_read_info_const(uint keyno, RANGE_SEQ_IF *seq, void *seq_init_param,
+                                                uint n_ranges_arg, uint *bufsz, uint *mrr_mode,
+                                                ha_rows limit, Cost_estimate *cost)
+{
+    /* Compute the default cost + flags first so non-accepted sequences fall
+       through to the server's MRR->read_range_first path with correct costing. */
+    ha_rows rows = handler::multi_range_read_info_const(keyno, seq, seq_init_param, n_ranges_arg,
+                                                        bufsz, mrr_mode, limit, cost);
+    if (rows == HA_POS_ERROR) return rows;
+
+    /* Partitioned tables are served by ha_partition, which dispatches
+       multi_range_read_* across child handlers using its own DS-MRR-backed
+       logic.  If we clear HA_MRR_USE_DEFAULT_IMPL here, ha_partition's
+       ordered-index-scan path ends up invoking our custom _next without
+       the state its own ordering logic expects and crashes.  Refuse to
+       accept MRR for partitioned tables -- the default path runs correctly. */
+    if (table && table->part_info) return rows;
+
+    /* Probe the sequence, we accept only if every range is a full single-point
+       equality.  A single non-point range forces us back to the default path. */
+    KEY_MULTI_RANGE range;
+    range_seq_t it = seq->init(seq_init_param, n_ranges_arg, *mrr_mode);
+    bool all_point = true;
+    uint count = 0;
+    while (!seq->next(it, &range))
+    {
+        count++;
+        if (!(range.range_flag & UNIQUE_RANGE) || (range.range_flag & NULL_RANGE) ||
+            !(range.range_flag & EQ_RANGE))
+        {
+            all_point = false;
+            break;
+        }
+    }
+
+    /* Only accept when there are multiple ranges.  For a single point lookup
+       the optimizer's eq_ref plan (plain index_read_map) is a better fit and
+       -- critically -- also the only path where pessimistic row locking
+       engages.  Accepting MRR for 1-range scans silently converts UPDATE
+       WHERE pk=v into a range scan that bypasses that lock. */
+    if (all_point && count >= 2)
+    {
+        /* Clear the default-impl flag so the server calls our init/next
+           instead of the fallback path. */
+        *mrr_mode &= ~HA_MRR_USE_DEFAULT_IMPL;
+        *bufsz = 0; /* we use our own std::vector, not HANDLER_BUFFER */
+    }
+    return rows;
+}
+
+/*
+  Build the sorted list of point lookups, or fall through to the default
+  impl if HA_MRR_USE_DEFAULT_IMPL is still set.  Sorting by comparable
+  bytes converts N scattered LSM seeks into a monotone stream -- much
+  friendlier to the block cache and the merge-heap.
+*/
+int ha_tidesdb::multi_range_read_init(RANGE_SEQ_IF *seq, void *seq_init_param, uint n_ranges,
+                                      uint mrr_mode, HANDLER_BUFFER *buf)
+{
+    DBUG_ENTER("ha_tidesdb::multi_range_read_init");
+
+    mrr_custom_active_ = !(mrr_mode & HA_MRR_USE_DEFAULT_IMPL);
+    if (!mrr_custom_active_)
+        DBUG_RETURN(handler::multi_range_read_init(seq, seq_init_param, n_ranges, mrr_mode, buf));
+
+    mrr_entries_.clear();
+    mrr_next_idx_ = 0;
+    mrr_keyno_ = active_index;
+    mrr_no_assoc_ = MY_TEST(mrr_mode & HA_MRR_NO_ASSOCIATION);
+    if (n_ranges > 0) mrr_entries_.reserve(n_ranges);
+
+    KEY *ki = &table->key_info[mrr_keyno_];
+
+    /* We need all columns readable while translating the caller's key_copy
+       bytes into our comparable format (key_copy_to_comparable calls
+       key_restore into record[1] and reads fields). */
+    MY_BITMAP *old_map = tmp_use_all_columns(table, &table->read_set);
+
+    KEY_MULTI_RANGE range;
+    range_seq_t it = seq->init(seq_init_param, n_ranges, mrr_mode);
+    while (!seq->next(it, &range))
+    {
+        uchar comp[MAX_KEY_LENGTH];
+        uint comp_len =
+            key_copy_to_comparable(ki, range.start_key.key, range.start_key.length, comp);
+
+        tdb_mrr_entry e;
+        e.comp_key.assign((const char *)comp, comp_len);
+        e.ptr = range.ptr;
+        mrr_entries_.push_back(std::move(e));
+    }
+
+    tmp_restore_column_map(&table->read_set, old_map);
+
+    std::sort(mrr_entries_.begin(), mrr_entries_.end(),
+              [](const tdb_mrr_entry &a, const tdb_mrr_entry &b)
+              { return a.comp_key < b.comp_key; });
+
+    DBUG_RETURN(0);
+}
+
+/*
+  Deliver the next row from the sorted list of point lookups.  PK lookups
+  bypass the iterator entirely via fetch_row_by_pk; secondary index lookups
+  reuse the cached scan iterator and a single seek per entry.  Rows that
+  the index knew about but the data CF no longer has (stale entries after
+  concurrent delete) are silently skipped.
+*/
+int ha_tidesdb::multi_range_read_next(range_id_t *range_info)
+{
+    DBUG_ENTER("ha_tidesdb::multi_range_read_next");
+
+    if (!mrr_custom_active_) DBUG_RETURN(handler::multi_range_read_next(range_info));
+
+    if (cached_thd_ && thd_killed(cached_thd_)) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
+
+    /* Lazy txn -- the optimizer may invoke MRR without a prior rnd_init / index_init. */
+    int erc = ensure_stmt_txn();
+    if (erc) DBUG_RETURN(erc);
+    if (!scan_txn) scan_txn = stmt_txn;
+
+    bool is_pk_scan = share->has_user_pk && mrr_keyno_ == share->pk_index;
+    uint idx_col_len = share->idx_comp_key_len[mrr_keyno_];
+
+    while (mrr_next_idx_ < mrr_entries_.size())
+    {
+        const tdb_mrr_entry &e = mrr_entries_[mrr_next_idx_++];
+        if (!mrr_no_assoc_) *range_info = e.ptr;
+
+        if (is_pk_scan)
+        {
+            int rc = fetch_row_by_pk(scan_txn, (const uchar *)e.comp_key.data(),
+                                     (uint)e.comp_key.size(), table->record[0]);
+            if (rc == HA_ERR_KEY_NOT_FOUND) continue; /* stale range, try next */
+            DBUG_RETURN(rc);
+        }
+
+        /* Secondary index point lookup -- seek, verify prefix match, then
+           either cover-read from the index or PK-fetch. */
+        if (mrr_keyno_ >= share->idx_cfs.size() || !share->idx_cfs[mrr_keyno_])
+            continue; /* missing CF for this index -- skip defensively */
+        scan_cf_ = share->idx_cfs[mrr_keyno_];
+        int irc = ensure_scan_iter();
+        if (irc) DBUG_RETURN(irc);
+
+        tidesdb_iter_seek(scan_iter, (const uint8_t *)e.comp_key.data(), (uint)e.comp_key.size());
+        if (!tidesdb_iter_valid(scan_iter)) continue;
+
+        uint8_t *ik = NULL;
+        size_t iks = 0;
+        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) continue;
+        if (iks < e.comp_key.size() || memcmp(ik, e.comp_key.data(), e.comp_key.size()) != 0)
+            continue; /* no entry for this point */
+        if (iks <= idx_col_len) continue;
+
+        int rc;
+        if (keyread_only_ && try_keyread_from_index(ik, iks, mrr_keyno_, table->record[0]))
+            rc = 0;
+        else
+            rc = fetch_row_by_pk(scan_txn, ik + idx_col_len, (uint)(iks - idx_col_len),
+                                 table->record[0]);
+        if (rc == HA_ERR_KEY_NOT_FOUND) continue;
+        DBUG_RETURN(rc);
+    }
+
+    DBUG_RETURN(HA_ERR_END_OF_FILE);
 }
 
 /* ******************** info ******************** */
