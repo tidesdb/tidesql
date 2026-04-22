@@ -38,6 +38,24 @@ extern "C"
 static constexpr uint8_t KEY_NS_META = 0x00;
 static constexpr uint8_t KEY_NS_DATA = 0x01;
 
+/* Size of the namespace prefix that every TidesDB key starts with. */
+static constexpr uint KEY_NAMESPACE_LEN = 1;
+
+/* Buffer size for a data CF key, namespace byte + comparable PK + 1 byte slack.
+   Used by every site that builds KEY_NS_DATA + pk via build_data_key. */
+static constexpr uint DATA_KEY_BUF_LEN = KEY_NAMESPACE_LEN + MAX_KEY_LENGTH + 1;
+
+/* Buffer size for a secondary-index CF entry key, comparable index-column
+   bytes (up to MAX_KEY_LENGTH) + appended PK bytes (up to MAX_KEY_LENGTH)
+   + 2 bytes of slack that covers VARBINARY length-byte overflow emitted
+   by make_comparable_key. */
+static constexpr uint SEC_IDX_KEY_BUF_LEN = (MAX_KEY_LENGTH * 2) + 2;
+
+/* Number of doubles in a 2-D minimum bounding rectangle.  Always four
+   (xmin, ymin, xmax, ymax); used for the on-disk spatial value layout
+   and the in-memory query-MBR cache on the handler. */
+static constexpr uint SPATIAL_MBR_DIMS = 4;
+
 /* CF naming */
 static constexpr const char CF_INDEX_INFIX[] = "__idx_";
 
@@ -62,8 +80,23 @@ static constexpr long long TIDESDB_STATS_REFRESH_US = 2000000LL; /* 2 seconds */
 /* Minimum stats.records to avoid optimizer edge cases with 0 rows */
 static constexpr ha_rows TIDESDB_MIN_STATS_RECORDS = 2;
 
-/* Inplace index build batch commit size */
-static constexpr ha_rows TIDESDB_INDEX_BUILD_BATCH = 10000;
+/* scan_time() -- split the opaque cost returned by tidesdb_range_cost
+   between MariaDB's I/O and CPU cost buckets.  LSM scans are mostly
+   block-read bound, so 90% I/O / 10% CPU matches observed profiles. */
+static constexpr double TIDESDB_SCAN_IO_WEIGHT = 0.9;
+static constexpr double TIDESDB_SCAN_CPU_WEIGHT = 0.1;
+
+/* records_in_range() fallbacks when we can't get a useful estimate. */
+static constexpr ha_rows TIDESDB_RIR_DEFAULT_EST = 10;         /* no share available */
+static constexpr ha_rows TIDESDB_RIR_UNKNOWN_DENOM = 4;        /* total/4 + 1 quarter fallback */
+static constexpr double TIDESDB_RIR_FRACTION_UNRELIABLE = 0.8; /* fall back to rec_per_key */
+
+/* Inplace index build batch commit size.  Larger batches amortize the
+   commit+iter-recreate+seek cost that fires every batch boundary (see
+   inplace_alter_table -- each batch boundary does a free+reset txn and
+   re-seeks to last_data_key, which is O(merge-heap) per seek).  50k
+   matches TIDESDB_BULK_INSERT_BATCH_OPS and keeps txn memory bounded. */
+static constexpr ha_rows TIDESDB_INDEX_BUILD_BATCH = 50000;
 
 /* Bulk insert mid-txn commit threshold (ops, not rows) */
 static constexpr ha_rows TIDESDB_BULK_INSERT_BATCH_OPS = 50000;
@@ -124,6 +157,11 @@ class TidesDB_share : public Handler_share
     uint num_secondary_indexes; /* count of non-NULL secondary index CFs */
     size_t cached_row_est{0};   /* cached serialize_row size estimate for non-BLOB tables */
 
+    /* Field indices of BLOB/TEXT columns -- populated at open() when
+       has_blobs is true.  serialize_row iterates only these instead of
+       scanning all fields for the BLOB_FLAG. */
+    std::vector<uint16> blob_field_indices;
+
     /* Cached scan_time range cost (refreshed every TIDESDB_STATS_REFRESH_US) */
     std::atomic<double> cached_scan_cost{0.0};
     std::atomic<long long> scan_cost_time{0};
@@ -144,6 +182,12 @@ class TidesDB_share : public Handler_share
     /* Precomputed comparable key length per index (avoids per-row recomputation) */
     uint idx_comp_key_len[MAX_KEY];
 
+    /* Precomputed index-type flags (avoid ki->algorithm dereference per row
+       in DML secondary-index loops).  Populated at open() and refreshed
+       during online DDL. */
+    bool idx_is_fts[MAX_KEY];
+    bool idx_is_spatial[MAX_KEY];
+
     /* Cached rec_per_key for secondary indexes (populated by ANALYZE TABLE).
        0 = not yet computed, use heuristic; >0 = sampled value. */
     std::atomic<ulong> cached_rec_per_key[MAX_KEY];
@@ -151,6 +195,14 @@ class TidesDB_share : public Handler_share
     /* Secondary index CFs (one per secondary key) */
     std::vector<tidesdb_column_family_t *> idx_cfs;
     std::vector<std::string> idx_cf_names;
+
+    /* Per-index covered-field map used by try_keyread_from_index.  For each
+       index i, idx_cover[i][field_c] == true when field `c` can be
+       reconstructed from the index key bytes (i.e. field is in the index's
+       key parts or -- for secondary indexes -- in the PK parts appended
+       to the key).  Replaces the O(read_set_bits * (pk_parts + idx_parts))
+       nested scan the old code did on every covered read. */
+    std::vector<std::vector<bool>> idx_cover;
 
     TidesDB_share();
     ~TidesDB_share();
@@ -202,8 +254,11 @@ struct tidesdb_trx_t
 
     struct tdb_row_lock_t *held_locks_head; /* singly-linked list of held lock entries */
     uint64_t lock_txn_id; /* unique ID for deadlock detection (= txn_generation) */
-    struct tdb_row_lock_t
-        *waiting_on; /* lock entry we're currently blocked on (NULL if not waiting) */
+    /* `waiting_on` is read by other threads during deadlock graph walks (from
+       arbitrary partitions) without holding this trx's partition mutex.
+       Atomic access guarantees the reader sees a published pointer value and
+       never a torn write. */
+    std::atomic<struct tdb_row_lock_t *> waiting_on;
 };
 
 /*
@@ -241,9 +296,9 @@ class ha_tidesdb : public handler
     {
         HA_READ_KEY_EXACT
     };
-    double spatial_qmbr_[4]{}; /* query MBR: xmin, ymin, xmax, ymax */
+    double spatial_qmbr_[SPATIAL_MBR_DIMS]{}; /* query MBR (xmin, ymin, xmax, ymax) */
 
-    /* Hilbert range decomposition: sorted non-overlapping [lo, hi] ranges
+    /* Hilbert range decomposition are sorted non-overlapping [lo, hi] ranges
        covering the query box.  spatial_range_idx_ tracks which range we're
        currently scanning. */
     std::vector<std::pair<uint64_t, uint64_t>> spatial_ranges_; /* {lo, hi} */
@@ -266,8 +321,8 @@ class ha_tidesdb : public handler
 
     /* Reusable buffers for secondary index key construction in update_row.
        Avoids heap allocation per row and keeps the stack frame small. */
-    uchar upd_old_ik_[MAX_KEY_LENGTH * 2 + 2];
-    uchar upd_new_ik_[MAX_KEY_LENGTH * 2 + 2];
+    uchar upd_old_ik_[SEC_IDX_KEY_BUF_LEN];
+    uchar upd_new_ik_[SEC_IDX_KEY_BUF_LEN];
 
     /* Cached dup-check iterators for UNIQUE secondary indexes.
        tidesdb_iter_new() is O(num_sstables) -- caching avoids rebuilding
@@ -305,6 +360,42 @@ class ha_tidesdb : public handler
        Used to decide whether to acquire row locks in index_read_map. */
     bool stmt_has_write_lock_;
 
+    /* Cached "is this scan on the primary key" flag.  Set once in index_init
+       so the navigation methods (index_next/prev/first/last/next_same) skip
+       the per-row `share->has_user_pk && active_index == share->pk_index`
+       recomputation. */
+    bool is_pk_;
+
+    /* Cached last tidesdb_iter_new failure for the current scan CF/txn.
+       When non-zero and the scan_cf_/scan_txn haven't changed, ensure_scan_iter
+       returns the prior error immediately instead of retrying + re-logging. */
+    int scan_iter_last_err_;
+    tidesdb_column_family_t *scan_iter_last_err_cf_;
+    tidesdb_txn_t *scan_iter_last_err_txn_;
+
+    /* Handler mirrors of share->has_blobs / share->encrypted.  Per-row
+       fetches and scans branch on these; reading them from a handler member
+       avoids the shared-memory dereference that dominates when the L1 line
+       for `share` isn't already hot. */
+    bool has_blobs_;
+    bool encrypted_;
+
+    /* Cached bounds of table->record[1] so the BLOB path of fetch_row_by_pk
+       and iter_read_current can classify `buf` against record[0] vs record[1]
+       without dereferencing `table->record[1]` and `table->s->reclength` on
+       every row. */
+    const uchar *record1_lo_;
+    const uchar *record1_hi_;
+
+    /* Cached per-statement THD query shape so ensure_stmt_txn() and
+       external_lock() don't each re-evaluate thd_sql_command() and
+       thd_test_options().  Populated by external_lock(F_WRLCK/F_RDLCK);
+       invalidated by external_lock(F_UNLCK) along with the other per-stmt
+       caches. */
+    int cached_sql_cmd_;
+    bool cached_is_autocommit_;
+    bool cached_stmt_shape_valid_;
+
     /* Cached per-statement pointers to avoid repeated hash lookups.
        Set in external_lock(lock), cleared in external_lock(F_UNLCK).
        InnoDB caches these as m_user_thd / m_prebuilt->trx. */
@@ -341,8 +432,8 @@ class ha_tidesdb : public handler
     static uint build_data_key(const uchar *pk, uint pk_len, uchar *out)
     {
         out[0] = KEY_NS_DATA;
-        memcpy(out + 1, pk, pk_len);
-        return pk_len + 1;
+        memcpy(out + KEY_NAMESPACE_LEN, pk, pk_len);
+        return pk_len + KEY_NAMESPACE_LEN;
     }
 
     /* Build a secondary-index entry key into out[]; returns byte count */
@@ -376,8 +467,9 @@ class ha_tidesdb : public handler
     check_result_t icp_check_secondary(const uint8_t *ik, size_t iks, uint idx, uchar *buf);
 
     /* Reverse a single integer sort-key part back to native little-endian
-       field format.  Returns true on success, false for unsupported types. */
-    static bool decode_int_sort_key(const uint8_t *src, uint sort_len, Field *f, uchar *buf);
+       at `to` (destination byte pointer computed once by the caller).
+       Returns true on success, false for unsupported sort_len. */
+    static bool decode_int_sort_key(const uint8_t *src, uint sort_len, bool is_signed, uchar *to);
 
     /* Extended sort-key decoder -- handles integers, DATE, DATETIME,
        TIMESTAMP, YEAR, and fixed-length CHAR/BINARY.  Returns true on
