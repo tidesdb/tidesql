@@ -43,10 +43,12 @@ extern "C"
 #include "sql_class.h"
 #include "sql_priv.h"
 
-/* MariaDB 12.3 moved option_struct from TABLE_SHARE to TABLE (MDEV-37815).
-   We provide a compat macro so the same code compiles on 11.x / 12.0-12.2 / 12.3+. */
-#if MYSQL_VERSION_ID >= 120300
-#define TDB_TABLE_OPTIONS(tbl) ((tbl)->option_struct)
+/* MariaDB 12.3.1 (MDEV-37815) renamed TABLE_SHARE::option_struct to
+   option_struct_table and introduced handler::option_struct as the preferred
+   accessor.  We keep reading from TABLE_SHARE so the macro works from
+   create(), inplace alter, and free functions that only have a TABLE*. */
+#if MYSQL_VERSION_ID >= 120301
+#define TDB_TABLE_OPTIONS(tbl) ((tbl)->s->option_struct_table)
 #else
 #define TDB_TABLE_OPTIONS(tbl) ((tbl)->s->option_struct)
 #endif
@@ -9282,8 +9284,8 @@ static long long srv_stat_cache_misses;
 static double srv_stat_cache_hit_rate;
 static long long srv_stat_cache_partitions;
 
-#define TIDESQL_VERSION_STR "4.2.5"
-#define TIDESQL_VERSION_HEX 0x40205
+#define TIDESQL_VERSION_STR "4.2.6"
+#define TIDESQL_VERSION_HEX 0x40206
 
 static const char *srv_stat_version = TIDESQL_VERSION_STR;
 static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;

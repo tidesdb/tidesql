@@ -24,6 +24,10 @@ To skip storage engines you don't need (saves build time and reduces warnings):
 ./install.sh --list-engines                       # see what can be skipped
 ./install.sh --skip-engines mroonga,rocksdb,connect,spider,oqgraph,columnstore
 
+To use specific MariaDB version: --mariadb-version mariadb-12.3.1 aligning to https://github.com/MariaDB/server/releases/tag/mariadb-12.2.2
+
+When using install script you are installing the latest version of TideSQL at the time of clone or download.
+
 To link libtidesdb against a non-default allocator (jemalloc is a common
 pick for write-heavy workloads):
 
