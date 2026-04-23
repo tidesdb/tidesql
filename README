@@ -3,7 +3,7 @@ TIDESQL
 
 A pluggable write and space optimized storage engine for MariaDB using TidesDB.
 
-The pluggable engine is tested and supported on MariaDB 11.x, 12.x.
+To find compatibility table with MariaDB go to https://tidesdb.com/reference/tidesql/#mariadb-compatibility
 
 
 INSTALLATION
