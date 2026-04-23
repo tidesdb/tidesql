@@ -865,7 +865,7 @@ print_summary() {
     local start_cmd="${MARIADB_PREFIX}/bin/mariadbd-safe"
     local test_dir="${BUILD_DIR}/mariadb-server/build/mysql-test"
 
-    # Use the correct connect user: root for system installs, current user otherwise
+    # Use the correct connect user, root for system installs, current user otherwise
     local connect_user="root"
     if [[ "$OS" != "windows" ]] && ! _needs_sudo "${MARIADB_PREFIX}"; then
         connect_user="$(id -un)"
@@ -1070,10 +1070,13 @@ pgo_instrument() {
             warn "PGO is not supported on Windows (MSVC); falling back to normal Release build"
             ;;
         *)
+            # -Wno-error instrumentation unlocks new -Wmaybe-uninitialized /
+            # -Wformat-overflow warnings in bundled third-party code (pcre2,
+            # mroonga, etc.) that compile with -Werror on their own targets.
             cmake_args+=(
                 -DCMAKE_PREFIX_PATH="${TIDESDB_PREFIX}"
-                "-DCMAKE_C_FLAGS=-fprofile-generate=${profile_dir} -fprofile-update=atomic"
-                "-DCMAKE_CXX_FLAGS=-fprofile-generate=${profile_dir} -fprofile-update=atomic"
+                "-DCMAKE_C_FLAGS=-fprofile-generate=${profile_dir} -fprofile-update=atomic -Wno-error"
+                "-DCMAKE_CXX_FLAGS=-fprofile-generate=${profile_dir} -fprofile-update=atomic -Wno-error"
                 "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-generate=${profile_dir}"
                 "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-generate=${profile_dir}"
                 "-DCMAKE_MODULE_LINKER_FLAGS=-fprofile-generate=${profile_dir}"
@@ -1188,10 +1191,12 @@ pgo_optimize() {
             )
             ;;
         *)
+            # Same -Wno-error reasoning as pgo_instrument, -fprofile-use can
+            # still perturb warning output vs a vanilla Release build.
             cmake_args+=(
                 -DCMAKE_PREFIX_PATH="${TIDESDB_PREFIX}"
-                "-DCMAKE_C_FLAGS=-fprofile-use=${profile_dir} -fprofile-correction"
-                "-DCMAKE_CXX_FLAGS=-fprofile-use=${profile_dir} -fprofile-correction"
+                "-DCMAKE_C_FLAGS=-fprofile-use=${profile_dir} -fprofile-correction -Wno-error"
+                "-DCMAKE_CXX_FLAGS=-fprofile-use=${profile_dir} -fprofile-correction -Wno-error"
                 "-DCMAKE_EXE_LINKER_FLAGS=-fprofile-use=${profile_dir}"
                 "-DCMAKE_SHARED_LINKER_FLAGS=-fprofile-use=${profile_dir}"
                 "-DCMAKE_MODULE_LINKER_FLAGS=-fprofile-use=${profile_dir}"
@@ -1208,7 +1213,7 @@ pgo_optimize() {
 main() {
     mkdir -p "${BUILD_DIR}"
 
-    # Fast path: rebuild only the plugin and exit
+    # Fast path is we rebuild only the plugin and exit
     if $REBUILD_PLUGIN; then
         # Allocator choice is baked into libtidesdb.so by build_tidesdb().  The
         # rebuild-plugin path only recompiles ha_tidesdb.so against the already
