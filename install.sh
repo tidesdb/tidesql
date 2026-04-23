@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ─────────────────────────────────────────────────────────────────────────────
+# 
 # install.sh - Build & install MariaDB with InnoDB + TidesDB(TideSQL)
 #
 # Supported platforms: Linux (Debian/Ubuntu, RHEL/Fedora, Arch), macOS, Windows
@@ -37,7 +37,7 @@
 #   8. Print summary with start/connect/test commands
 #
 # Usage:
-#   ./install.sh [OPTIONS]
+#  ./install.sh [OPTIONS]
 #
 # Options:
 #   --tidesdb-version VERSION   TidesDB release tag        (default: latest from GitHub)
@@ -71,18 +71,18 @@
 #     build-dir       = C:/tidesql-build
 #
 # Examples:
-#   ./install.sh
-#   ./install.sh --tidesdb-version v8.6.1 --mariadb-version 12.1
-#   ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
-#   ./install.sh --mariadb-version mariadb-12.1.2
-#   ./install.sh --skip-deps --skip-tidesdb
-#   ./install.sh --pgo          # Full PGO build (instrument -> train -> optimize)
-#   ./install.sh --list-engines # Show which engines can be skipped
-#   ./install.sh --skip-engines mroonga,rocksdb,connect,spider,oqgraph,columnstore
-# ─────────────────────────────────────────────────────────────────────────────
+#  ./install.sh
+#  ./install.sh --tidesdb-version v8.6.1 --mariadb-version 12.1
+#  ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
+#  ./install.sh --mariadb-version mariadb-12.1.2
+#  ./install.sh --skip-deps --skip-tidesdb
+#  ./install.sh --pgo          # Full PGO build (instrument -> train -> optimize)
+#  ./install.sh --list-engines # Show which engines can be skipped
+#  ./install.sh --skip-engines mroonga,rocksdb,connect,spider,oqgraph,columnstore
+# 
 set -euo pipefail
 
-# ── Resolve the tidesql repo root (where this script lives) ────────────────
+# Resolve the tidesql repo root (where this script lives) 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 detect_os() {
@@ -116,7 +116,7 @@ detect_os() {
 
 OS="$(detect_os)"
 
-# ── Platform-dependent defaults ─────────────────────────────────────────────
+# Platform-dependent defaults 
 if [[ "$OS" == "windows" ]]; then
     DEFAULT_TIDESDB_PREFIX="C:/tidesdb"
     DEFAULT_MARIADB_PREFIX="C:/mariadb"
@@ -127,7 +127,7 @@ else
     DEFAULT_BUILD_DIR="/tmp/tidesql-build"
 fi
 
-# ── Fetch latest release versions from GitHub ────────────────────────────────
+# Fetch latest release versions from GitHub 
 # Works on Linux, macOS, and Windows (MSYS2/Git Bash) using curl or wget
 _fetch_url() {
     local url="$1"
@@ -184,7 +184,7 @@ WITH_S3=false
 # LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 at mariadbd startup.
 ALLOCATOR="system"
 
-# ── Ensure VCPKG_ROOT is set on Windows (needed even with --skip-deps) ────────
+# Ensure VCPKG_ROOT is set on Windows (needed even with --skip-deps) 
 if [[ "$OS" == "windows" ]]; then
     if [[ -z "${VCPKG_ROOT:-}" ]]; then
         if [[ -d "C:/vcpkg" ]]; then
@@ -194,7 +194,7 @@ if [[ "$OS" == "windows" ]]; then
     export VCPKG_ROOT="${VCPKG_ROOT:-}"
 fi
 
-# ── Skippable storage engines ────────────────────────────────────────────────
+# Skippable storage engines 
 # These are MariaDB storage engines that can safely be disabled to save build
 # time and reduce compiler warnings.  InnoDB, Aria, MyISAM, and CSV are NOT
 # listed here because the server or mysql-test framework depends on them.
@@ -214,7 +214,7 @@ SKIPPABLE_ENGINES=(
     "spider:Spider engine (sharding / federation)"
 )
 
-# ── Color helpers ───────────────────────────────────────────────────────────
+# Color helpers 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -227,16 +227,16 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 die()   { err "$@"; exit 1; }
 
-# ── Parse arguments ─────────────────────────────────────────────────────────
+# Parse arguments 
 usage() {
-    sed -n '2,/^# ──────/p' "$0" | grep '^#' | sed 's/^# \?//'
+    sed -n '2,/^# /p' "$0" | grep '^#' | sed 's/^# \?//'
     exit 0
 }
 
 list_engines() {
     echo ""
     echo -e "${CYAN}Skippable storage engines:${NC}"
-    echo -e "${CYAN}──────────────────────────────────────────────────────────${NC}"
+    echo -e "${CYAN}${NC}"
     for entry in "${SKIPPABLE_ENGINES[@]}"; do
         local name="${entry%%:*}"
         local desc="${entry#*:}"
@@ -275,7 +275,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# ── Resolve versions (fetch from GitHub if not specified) ────────────────────
+# Resolve versions (fetch from GitHub if not specified) 
 if [[ -z "$TIDESDB_VERSION" ]]; then
     info "Fetching latest TidesDB version from GitHub..."
     TIDESDB_VERSION="$(get_latest_tidesdb_version)"
@@ -285,9 +285,9 @@ if [[ -z "$MARIADB_VERSION" ]]; then
     MARIADB_VERSION="$(get_latest_mariadb_version)"
 fi
 
-# ── Auto-sizing box drawing ───────────────────────────────────────────────
+# Auto-sizing box drawing 
 # Usage:
-#   draw_box <border_color> <title> <array_varname>
+# draw_box <border_color> <title> <array_varname>
 # where <array_varname> is the name of a bash array holding the body lines.
 # The box auto-sizes to fit the widest visible line (ANSI codes stripped).
 _strip_ansi() { echo -e "$1" | sed 's/\x1b\[[0-9;]*m//g'; }
@@ -329,7 +329,7 @@ draw_box() {
     echo ""
 }
 
-# ── Print configuration ────────────────────────────────────────────────────
+# Print configuration 
 _cfg_lines=(
     "TidesDB version  : ${GREEN}${TIDESDB_VERSION}${NC}"
     "MariaDB version  : ${GREEN}${MARIADB_VERSION}${NC}"
@@ -348,7 +348,7 @@ _cfg_lines+=("TideSQL repo     : ${GREEN}${SCRIPT_DIR}${NC}")
 
 draw_box "${CYAN}" "TIDESQL Installer" _cfg_lines
 
-# ── Privilege helper (sudo on Unix only when needed, direct on Windows) ──────
+# Privilege helper (sudo on Unix only when needed, direct on Windows) 
 # Uses sudo only when the target prefix directory is not writable by the
 # current user, avoiding root-owned files in user-writable prefixes.
 _needs_sudo() {
@@ -475,7 +475,7 @@ install_deps() {
     ok "Dependencies installed"
 }
 
-# ── Build and install TidesDB library ──────────────────────────────
+# Build and install TidesDB library 
 build_tidesdb() {
     if $SKIP_TIDESDB; then
         warn "Skipping TidesDB build (--skip-tidesdb)"
@@ -582,7 +582,7 @@ build_tidesdb() {
     ok "TidesDB ${TIDESDB_VERSION} installed to ${TIDESDB_PREFIX}"
 }
 
-# ── Clone MariaDB and copy TidesDB storage engine ──────────────────
+# Clone MariaDB and copy TidesDB storage engine 
 prepare_mariadb() {
     info "Cloning MariaDB (branch/tag: ${MARIADB_VERSION})..."
 
@@ -699,7 +699,7 @@ install_mariadb() {
     ok "MariaDB installed to ${MARIADB_PREFIX}"
 }
 
-# ── Initialize MariaDB data directory & enable plugins ─────────────
+# Initialize MariaDB data directory & enable plugins 
 setup_mariadb() {
     local datadir="${MARIADB_PREFIX}/data"
 
@@ -929,7 +929,7 @@ print_summary() {
     draw_box "${GREEN}" "Installation Complete!" _summary_lines
 }
 
-# ── Rebuild only the TidesDB plugin (fast dev cycle) ────────────────
+# Rebuild only the TidesDB plugin (fast dev cycle) 
 rebuild_plugin() {
     local mariadb_src="${BUILD_DIR}/mariadb-server"
     local mariadb_build="${mariadb_src}/build"
@@ -1005,7 +1005,7 @@ rebuild_plugin() {
     draw_box "${GREEN}" "Plugin Rebuild Complete" _rebuild_lines
 }
 
-# ── PGO Phase 1 -- Instrument build ─────────────────────────────────
+# PGO Phase 1 -- Instrument build 
 pgo_instrument() {
     info "PGO Phase 1/3: Building MariaDB with profiling instrumentation..."
 
@@ -1087,7 +1087,7 @@ pgo_instrument() {
     ok "PGO Phase 1/3: Instrumented build complete"
 }
 
-# ── PGO Phase 2 -- Train - run MTR to generate profile data ────────
+# PGO Phase 2 -- Train - run MTR to generate profile data 
 pgo_train() {
     info "PGO Phase 2/3: Running TidesDB test suite to generate profile data..."
 
@@ -1128,7 +1128,7 @@ pgo_train() {
     ok "PGO Phase 2/3: Training complete (${profile_count} profile files generated)"
 }
 
-# ── PGO Phase 3 -- Optimized rebuild using profile data ─────────────
+# PGO Phase 3 -- Optimized rebuild using profile data 
 pgo_optimize() {
     info "PGO Phase 3/3: Rebuilding MariaDB with profile-guided optimizations..."
 

@@ -24,7 +24,7 @@ To skip storage engines you don't need (saves build time and reduces warnings):
 ./install.sh --list-engines                       # see what can be skipped
 ./install.sh --skip-engines mroonga,rocksdb,connect,spider,oqgraph,columnstore
 
-To use specific MariaDB version you use :
+To use specific MariaDB version you use:
 --mariadb-version mariadb-12.3.1 
 
 mariadb-12.3.1 aligning to https://github.com/MariaDB/server/releases/tag/mariadb-12.3.1
