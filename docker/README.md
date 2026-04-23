@@ -104,10 +104,10 @@ Example - include the test suite:
 ```
   docker build \
       -f docker/ubuntu/Dockerfile \
-      --build-arg MARIADB_VERSION=12.2.2 \
-      --build-arg TIDESDB_VERSION=v9.0.0 \
+      --build-arg MARIADB_VERSION=12.2.3 \
+      --build-arg TIDESDB_VERSION=v9.0.9 \
       --build-arg WITH_TESTS=1 \
-      -t tidesql:12.2.2-ubuntu-tests \
+      -t tidesql:12.2.3-ubuntu-tests \
       .
 ```
 
@@ -116,10 +116,10 @@ Example - build with S3 object store support:
 ```
   docker build \
       -f docker/ubuntu/Dockerfile \
-      --build-arg MARIADB_VERSION=11.8.6 \
-      --build-arg TIDESDB_VERSION=v9.0.0 \
+      --build-arg MARIADB_VERSION=12.2.3 \
+      --build-arg TIDESDB_VERSION=v9.0.9 \
       --build-arg WITH_S3=1 \
-      -t tidesql:11.8.6-s3 \
+      -t tidesql:12.2.3-s3 \
       .
 ```
 
@@ -128,10 +128,10 @@ Example - link libtidesdb against jemalloc:
 ```
   docker build \
       -f docker/ubuntu/Dockerfile \
-      --build-arg MARIADB_VERSION=11.8.6 \
-      --build-arg TIDESDB_VERSION=v9.0.0 \
+      --build-arg MARIADB_VERSION=12.2.3 \
+      --build-arg TIDESDB_VERSION=v9.0.9 \
       --build-arg ALLOCATOR=jemalloc \
-      -t tidesql:11.8.6-jemalloc \
+      -t tidesql:12.2.3-jemalloc \
       .
 
   # Or via setup.sh / rebuild.sh:
@@ -144,7 +144,7 @@ container with an LD_PRELOAD pointing at the same library:
 ```
   docker run -d --name tidesql \
       -e LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 \
-      -p 3306:3306 tidesql:11.8.6-jemalloc
+      -p 3306:3306 tidesql:12.2.3-jemalloc
 ```
 
 
@@ -235,7 +235,7 @@ This is useful for:
 
 - Creating more users, or being more flexible about how `root` can connect.
 - Creating databases needed by your application.
-- Restoring a backup: place a dump file (e.g. `01-restore.sql`) in the
+- Restoring a backup, you can place a dump file (e.g. `01-restore.sql`) in the
   directory so that it is imported when a newly created container starts.
   Remove the file (or unmap the volume) after the first start to avoid
   re-running it on subsequent restarts.
