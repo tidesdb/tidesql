@@ -91,15 +91,14 @@ static constexpr ha_rows TIDESDB_RIR_DEFAULT_EST = 10;         /* no share avail
 static constexpr ha_rows TIDESDB_RIR_UNKNOWN_DENOM = 4;        /* total/4 + 1 quarter fallback */
 static constexpr double TIDESDB_RIR_FRACTION_UNRELIABLE = 0.8; /* fall back to rec_per_key */
 
-/* Inplace index build batch commit size.  Larger batches amortize the
-   commit+iter-recreate+seek cost that fires every batch boundary (see
-   inplace_alter_table -- each batch boundary does a free+reset txn and
-   re-seeks to last_data_key, which is O(merge-heap) per seek).  50k
-   matches TIDESDB_BULK_INSERT_BATCH_OPS and keeps txn memory bounded. */
-static constexpr ha_rows TIDESDB_INDEX_BUILD_BATCH = 50000;
+/* Inplace index builds rows between mid-txn commits and between
+   thd_killed polls. */
+static constexpr ha_rows TIDESDB_INDEX_BUILD_BATCH = 100;
 
-/* Bulk insert mid-txn commit threshold (ops, not rows) */
-static constexpr ha_rows TIDESDB_BULK_INSERT_BATCH_OPS = 50000;
+/* Bulk DML ops between mid-txn commits during start_bulk_insert /
+   start_bulk_update / start_bulk_delete.  Counts both the primary put
+   and each secondary-index put. */
+static constexpr ha_rows TIDESDB_BULK_INSERT_BATCH_OPS = 500;
 
 /* Encryption */
 static constexpr uint TIDESDB_ENC_IV_LEN = 16;
