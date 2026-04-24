@@ -354,6 +354,7 @@ class ha_tidesdb : public handler
        thd_get_ha_data + offset computation on every row. */
     ulonglong cached_sess_ttl_;
     bool cached_skip_unique_;
+    bool cached_single_delete_primary_;
     bool cached_thdvars_valid_;
 
     /* Write-lock mode -- set when store_lock detects FOR UPDATE / write intent.

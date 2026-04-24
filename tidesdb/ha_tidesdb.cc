@@ -142,6 +142,24 @@ static int tdb_rc_to_ha(int rc, const char *ctx)
     }
 }
 
+/*
+  Dispatch to tidesdb_txn_single_delete or tidesdb_txn_delete based on
+  use_single_delete.  Secondary-index delete sites pass true because the
+  single-delete contract (at most one put between single-deletes on the
+  same key) holds by construction for (col_values, pk) / (term, pk) /
+  (hilbert, pk) composites.  Primary-CF delete sites pass the cached
+  value of the tidesdb_single_delete_primary session variable, which
+  defaults off and is the caller's explicit promise that the session
+  does no UPDATE on non-PK columns and no REPLACE INTO / IODKU overwrite
+  path on no-secondary tables.
+*/
+static inline int tidesdb_txn_delete_cf(tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
+                                        const uint8_t *key, size_t key_size, bool use_single_delete)
+{
+    return use_single_delete ? tidesdb_txn_single_delete(txn, cf, key, key_size)
+                             : tidesdb_txn_delete(txn, cf, key, key_size);
+}
+
 /* MariaDB data directory */
 extern MYSQL_PLUGIN_IMPORT char mysql_real_data_home[];
 
@@ -1592,6 +1610,29 @@ static MYSQL_THDVAR_BOOL(skip_unique_check, PLUGIN_VAR_RQCMDARG,
                          "SET SESSION tidesdb_skip_unique_check=1",
                          NULL, NULL, 0);
 
+/* Per-session opt-in for single-delete semantics on the primary row CF.
+   Secondary-index deletes always use tidesdb_txn_single_delete because
+   each (col_values, pk) / (term, pk) / (hilbert, pk) composite is written
+   exactly once per row lifetime and deleted exactly once -- the
+   single-delete contract holds unconditionally for those.
+   For the primary CF the contract is narrower: UPDATE ... SET non_pk_col
+   writes tidesdb_txn_put(share->cf, data_key(pk), ...) with the same PK,
+   producing a put-over-put, and REPLACE INTO / INSERT ... ON DUPLICATE
+   KEY UPDATE on tables with no secondary indexes does the same via a
+   silent overwrite.  Under either pattern, dropping a put+single-delete
+   pair at compaction can re-expose an older put.  Enabling this variable
+   is the caller's promise that the session does none of the above --
+   typical insert-then-delete, log-style, append-only workloads. */
+static MYSQL_THDVAR_BOOL(single_delete_primary, PLUGIN_VAR_RQCMDARG,
+                         "Use single-delete semantics for the primary row CF on DELETE. "
+                         "Caller promises no UPDATE on non-PK columns, no REPLACE INTO, "
+                         "and no INSERT ... ON DUPLICATE KEY UPDATE on tables without "
+                         "secondary indexes for this session.  Violating the contract may "
+                         "re-expose older row versions after compaction.  Safe choice: "
+                         "leave OFF unless the session is INSERT-and-DELETE only.  "
+                         "SET SESSION tidesdb_single_delete_primary=1",
+                         NULL, NULL, 0);
+
 /* Session-level defaults for table options.
    These are used by HA_TOPTION_SYSVAR so that CREATE TABLE without
    explicit options inherits the session/global default.  Dynamic and
@@ -1687,13 +1728,13 @@ static MYSQL_THDVAR_ULONGLONG(default_min_disk_space, PLUGIN_VAR_RQCMDARG,
 static MYSQL_THDVAR_BOOL(default_object_lazy_compaction, PLUGIN_VAR_RQCMDARG,
                          "Default object store lazy compaction for new tables. "
                          "When enabled, doubles the L1 file count compaction trigger "
-                         "to reduce remote I/O at the cost of higher read amplification.",
+                         "to reduce remote I/O at the cost of higher read amplification",
                          NULL, NULL, 0);
 
 static MYSQL_THDVAR_BOOL(default_object_prefetch_compaction, PLUGIN_VAR_RQCMDARG,
                          "Default object store prefetch compaction for new tables. "
                          "When enabled, downloads all input SSTables in parallel "
-                         "before compaction merge begins.",
+                         "before compaction merge begins",
                          NULL, NULL, 1);
 
 static const char *isolation_level_names[] = {
@@ -1779,7 +1820,7 @@ static MYSQL_SYSVAR_STR(fts_blend_chars, srv_fts_blend_chars,
                         "individual parts. For example, with blend_chars=\"'\" the input "
                         "\"l'aria\" produces tokens: l'aria, aria. "
                         "Set to \"'\" for Italian/French elision support. "
-                        "Default is empty (no blend characters).",
+                        "Default is empty (no blend characters)",
                         NULL, tdb_fts_blend_chars_update, NULL);
 
 static MYSQL_SYSVAR_STR(ft_stopword_table, srv_ft_stopword_table,
@@ -1788,7 +1829,7 @@ static MYSQL_SYSVAR_STR(ft_stopword_table, srv_ft_stopword_table,
                         "The table must have a VARCHAR column named 'value'. "
                         "When NULL (default), uses the same 36 default stop words as "
                         "information_schema.INNODB_FT_DEFAULT_STOPWORD. "
-                        "Set to empty string to disable stop word filtering entirely.",
+                        "Set to empty string to disable stop word filtering entirely",
                         NULL, tdb_ft_stopword_table_update, NULL);
 
 static MYSQL_SYSVAR_ULONGLONG(block_cache_size, srv_block_cache_size,
@@ -2116,6 +2157,7 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(data_home_dir),
     MYSQL_SYSVAR(ttl),
     MYSQL_SYSVAR(skip_unique_check),
+    MYSQL_SYSVAR(single_delete_primary),
     MYSQL_SYSVAR(default_compression),
     MYSQL_SYSVAR(default_write_buffer_size),
     MYSQL_SYSVAR(default_bloom_filter),
@@ -3700,6 +3742,7 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
       cached_time_valid_(false),
       cached_sess_ttl_(0),
       cached_skip_unique_(false),
+      cached_single_delete_primary_(false),
       cached_thdvars_valid_(false),
       stmt_has_write_lock_(false),
       is_pk_(false),
@@ -5132,6 +5175,7 @@ int ha_tidesdb::write_row(const uchar *buf)
     {
         cached_skip_unique_ = THDVAR(cached_thd_, skip_unique_check);
         cached_sess_ttl_ = THDVAR(cached_thd_, ttl);
+        cached_single_delete_primary_ = THDVAR(cached_thd_, single_delete_primary);
         cached_thdvars_valid_ = true;
     }
 
@@ -6258,6 +6302,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     {
         cached_skip_unique_ = THDVAR(cached_thd_, skip_unique_check);
         cached_sess_ttl_ = THDVAR(cached_thd_, ttl);
+        cached_single_delete_primary_ = THDVAR(cached_thd_, single_delete_primary);
         cached_thdvars_valid_ = true;
     }
 
@@ -6274,7 +6319,8 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     {
         uchar old_dk[DATA_KEY_BUF_LEN];
         uint old_dk_len = build_data_key(old_pk, old_pk_len, old_dk);
-        rc = tidesdb_txn_delete(txn, share->cf, old_dk, old_dk_len);
+        rc = tidesdb_txn_delete_cf(txn, share->cf, old_dk, old_dk_len,
+                                   cached_single_delete_primary_);
         if (rc != TDB_SUCCESS) goto err;
     }
 
@@ -6349,7 +6395,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                         uchar fk[FTS_KEY_BUF_LEN];
                         uint fk_len =
                             fts_build_key(term.data(), (uint)term.size(), old_pk, old_pk_len, fk);
-                        tidesdb_txn_delete(txn, share->idx_cfs[i], fk, fk_len);
+                        tidesdb_txn_delete_cf(txn, share->idx_cfs[i], fk, fk_len, true);
                     }
                     for (auto &[term, tf] : new_tf)
                     {
@@ -6377,7 +6423,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                         uchar fk[FTS_KEY_BUF_LEN];
                         uint fk_len =
                             fts_build_key(term.data(), (uint)term.size(), old_pk, old_pk_len, fk);
-                        tidesdb_txn_delete(txn, share->idx_cfs[i], fk, fk_len);
+                        tidesdb_txn_delete_cf(txn, share->idx_cfs[i], fk, fk_len, true);
                     }
 
                     for (auto &[term, new_cnt] : new_tf)
@@ -6432,7 +6478,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                         uchar sk[SPATIAL_HILBERT_KEY_LEN + MAX_KEY_LENGTH];
                         uint sk_len = spatial_build_key((xmn + xmx) / 2.0, (ymn + ymx) / 2.0,
                                                         old_pk, old_pk_len, sk);
-                        tidesdb_txn_delete(txn, share->idx_cfs[i], sk, sk_len);
+                        tidesdb_txn_delete_cf(txn, share->idx_cfs[i], sk, sk_len, true);
                     }
                 }
 
@@ -6497,7 +6543,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                 /* Skip if the final index bytes match (e.g. UPDATE x=x). */
                 if (old_ik_len == new_ik_len && memcmp(old_ik, new_ik, old_ik_len) == 0) continue;
 
-                rc = tidesdb_txn_delete(txn, share->idx_cfs[i], old_ik, old_ik_len);
+                rc = tidesdb_txn_delete_cf(txn, share->idx_cfs[i], old_ik, old_ik_len, true);
                 if (rc != TDB_SUCCESS) goto err;
                 rc = tidesdb_txn_put(txn, share->idx_cfs[i], new_ik, new_ik_len, &tdb_empty_val, 1,
                                      row_ttl);
@@ -6552,6 +6598,17 @@ int ha_tidesdb::delete_row(const uchar *buf)
     /* Row locks are acquired in index_read_map() during the preceding
        locking read -- see update_row() comment. */
 
+    /* We populate THDVAR cache if not yet done this statement.  A pure DELETE
+       reaches delete_row without first going through write_row/update_row, so
+       the cache may still be stale from the prior statement. */
+    if (!cached_thdvars_valid_)
+    {
+        cached_skip_unique_ = THDVAR(cached_thd_, skip_unique_check);
+        cached_sess_ttl_ = THDVAR(cached_thd_, ttl);
+        cached_single_delete_primary_ = THDVAR(cached_thd_, single_delete_primary);
+        cached_thdvars_valid_ = true;
+    }
+
     {
         int erc = ensure_stmt_txn();
         if (erc)
@@ -6571,7 +6628,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
     /* We delete data row */
     uchar dk[DATA_KEY_BUF_LEN];
     uint dk_len = build_data_key(current_pk_buf_, current_pk_len_, dk);
-    int rc = tidesdb_txn_delete(txn, share->cf, dk, dk_len);
+    int rc = tidesdb_txn_delete_cf(txn, share->cf, dk, dk_len, cached_single_delete_primary_);
     if (rc != TDB_SUCCESS)
     {
         tmp_restore_column_map(&table->read_set, old_map);
@@ -6609,7 +6666,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
                     uchar fk[FTS_KEY_BUF_LEN];
                     uint fk_len = fts_build_key(term.data(), (uint)term.size(), current_pk_buf_,
                                                 current_pk_len_, fk);
-                    tidesdb_txn_delete(txn, share->idx_cfs[i], fk, fk_len);
+                    tidesdb_txn_delete_cf(txn, share->idx_cfs[i], fk, fk_len, true);
                 }
 
                 fts_update_meta(txn, share->cf, i, -1, -(int64_t)word_count);
@@ -6632,14 +6689,14 @@ int ha_tidesdb::delete_row(const uchar *buf)
                     double cy = (ymin + ymax) / 2.0;
                     uchar sk[SPATIAL_HILBERT_KEY_LEN + MAX_KEY_LENGTH];
                     uint sk_len = spatial_build_key(cx, cy, current_pk_buf_, current_pk_len_, sk);
-                    tidesdb_txn_delete(txn, share->idx_cfs[i], sk, sk_len);
+                    tidesdb_txn_delete_cf(txn, share->idx_cfs[i], sk, sk_len, true);
                 }
             }
             else
             {
                 uchar ik[SEC_IDX_KEY_BUF_LEN];
                 uint ik_len = sec_idx_key(i, buf, ik);
-                rc = tidesdb_txn_delete(txn, share->idx_cfs[i], ik, ik_len);
+                rc = tidesdb_txn_delete_cf(txn, share->idx_cfs[i], ik, ik_len, true);
                 if (rc != TDB_SUCCESS)
                 {
                     tmp_restore_column_map(&table->read_set, old_map);
@@ -7913,7 +7970,26 @@ FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
         }
     }
 
-    if (query_terms.empty()) DBUG_RETURN(NULL);
+    /* A query that tokenises down to nothing (e.g. all stop words, all
+       characters below the min-word-len threshold) still has to return a
+       usable FT_INFO, not NULL.  The server's execution path assumes an
+       FT_INFO was handed back and leaves the diagnostics area in an
+       inconsistent state when ft_init_ext yields NULL for reasons other
+       than an outright error; debug builds trip Protocol::end_statement's
+       DBUG_ASSERT(0).  We return an empty result set instead, which the
+       optimizer folds into zero matched rows. */
+    if (query_terms.empty())
+    {
+        tdb_ft_info_t *empty = new tdb_ft_info_t();
+        empty->please = const_cast<_ft_vft *>(&tdb_ft_vft);
+        empty->could_you = &tdb_ft_vft_ext;
+        empty->handler = this;
+        empty->keynr = inx;
+        empty->current_idx = 0;
+        empty->current_rank = 0.0f;
+        empty->match_count = 0;
+        DBUG_RETURN(reinterpret_cast<FT_INFO *>(empty));
+    }
 
     /* We load BM25 global metadata */
     int64_t total_docs = 0, total_words = 0;
@@ -9284,8 +9360,8 @@ static long long srv_stat_cache_misses;
 static double srv_stat_cache_hit_rate;
 static long long srv_stat_cache_partitions;
 
-#define TIDESQL_VERSION_STR "4.2.6"
-#define TIDESQL_VERSION_HEX 0x40206
+#define TIDESQL_VERSION_STR "4.3.0"
+#define TIDESQL_VERSION_HEX 0x40300
 
 static const char *srv_stat_version = TIDESQL_VERSION_STR;
 static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;
