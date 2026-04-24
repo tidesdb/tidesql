@@ -14,15 +14,35 @@ INSERT INTO docs (body) VALUES
 ('The cat sat on the mat by the door');
 # Stop words should return 0 rows
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('the');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('is');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('a');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('of');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('in');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('on');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('by');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('with');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('for');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('this');
+COUNT(*)
+0
 # Real words should return matches
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('fox');
 COUNT(*)
@@ -66,7 +86,11 @@ INSERT INTO docs (body) VALUES
 ('Building bridges for the future of our community');
 # Stop words still filtered for new rows
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('the');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('is');
+COUNT(*)
+0
 # Real words from new rows work
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('beautiful');
 COUNT(*)
@@ -77,6 +101,8 @@ COUNT(*)
 # UPDATE should maintain stop word filtering
 UPDATE docs SET body = 'The revised document about the important topic' WHERE id = 1;
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('the');
+COUNT(*)
+0
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('revised');
 COUNT(*)
 1

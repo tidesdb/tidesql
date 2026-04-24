@@ -45,6 +45,8 @@ id
 5
 # Stop word through blend: the (still filtered)
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('the');
+COUNT(*)
+0
 # Boolean mode with blend chars
 SELECT id FROM docs WHERE MATCH(body) AGAINST("+aria -malley" IN BOOLEAN MODE) ORDER BY id;
 id
