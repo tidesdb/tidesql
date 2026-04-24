@@ -160,7 +160,7 @@ MACOS
      -G Ninja
    cmake --build . --parallel $(sysctl -n hw.ncpu)
 
-   Note: The CommandLineTools SDK removal is needed because CMake may find
+   Note -- The CommandLineTools SDK removal is needed because CMake may find
    headers in /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk which
    causes C/C++ header path conflicts with libc++.
 
@@ -213,7 +213,7 @@ WINDOWS
      -DCONNECT_DYNAMIC=NO
    cmake --build . --config RelWithDebInfo --parallel
 
-   Note: CONNECT plugin is disabled (-DCONNECT_DYNAMIC=NO) because it
+   Note -- CONNECT plugin is disabled (-DCONNECT_DYNAMIC=NO) because it
    requires libxml2 headers that may conflict with vcpkg installations.
 
 6. Run tests:
@@ -253,9 +253,15 @@ Core:
   the shape WHERE col IN (v1, v2, ..., vN).  Accepted only when every
   range is a full-key point equality and there are 2+ ranges; keys are
   sorted by comparable bytes so the LSM sees a monotone stream of seeks.
-- Bulk UPDATE / DELETE batching: multi-row UPDATE and DELETE statements
+- Bulk UPDATE / DELETE batching --  multi-row UPDATE and DELETE statements
   share the same mid-txn commit plumbing as bulk INSERT, keeping long
-  statements under TDB_MAX_TXN_OPS without ballooning txn memory
+  statements' txn memory bounded regardless of statement size
+- Single-delete with pair cancellation at compaction -- every secondary
+  index delete (regular, FTS, spatial) uses tidesdb_txn_single_delete
+  unconditionally, safe by construction because each (col_values, pk)
+  composite is put once and deleted once per row lifetime.  Primary CF
+  single-delete is opt-in via the tidesdb_single_delete_primary session
+  variable (default OFF) for sessions that only INSERT and DELETE
 - REPLACE INTO and INSERT ... ON DUPLICATE KEY UPDATE
 - AUTO_INCREMENT with O(1) atomic counter (no iterator per INSERT).
   TRUNCATE TABLE and ALTER TABLE ... AUTO_INCREMENT=N both correctly
@@ -271,7 +277,7 @@ Core:
 - Semi-consistent read (optimistic reads for UPDATE/DELETE at READ_COMMITTED)
 - SHOW ENGINE TIDESDB STATUS (DB stats, memory, cache, conflict info)
 - SHOW GLOBAL STATUS LIKE 'tidesdb%' (21 machine-readable status variables
-  for monitoring tools: Prometheus, PMM, Datadog, etc.)
+  for monitoring tools -- Prometheus, PMM, Datadog, etc.)
 - Handlerton lifecycle + administrative hooks wired:
     drop_database    DROP DATABASE removes all TidesDB CFs for the db
     flush_logs       FLUSH LOGS syncs the TidesDB WAL (safe before backup)
@@ -373,12 +379,22 @@ Session (SET SESSION tidesdb_...):
 
   ttl                       Per-session TTL override in seconds (default: 0)
   skip_unique_check         Skip PK/unique checks on INSERT (default: OFF)
+  single_delete_primary     Route primary-CF DELETEs through
+                            tidesdb_txn_single_delete (default: OFF).
+                            Caller promises the session does no UPDATE
+                            on non-PK columns, no REPLACE INTO, and no
+                            INSERT ... ON DUPLICATE KEY UPDATE on tables
+                            without secondary indexes.  Violating the
+                            contract may re-expose older row versions
+                            after compaction.  Safe for INSERT-only +
+                            DELETE-only workloads (e.g. log rotation,
+                            iibench l.i1 shape).
   default_compression       Default compression for new tables
   default_write_buffer_size Default write buffer for new tables (128MB)
   default_sync_mode         Default sync mode for new tables (FULL)
   (and other default_* variables for all table options)
 
-Logging: TidesDB writes to <tidesdb_data>/LOG by default with automatic
+Logging -- TidesDB writes to <tidesdb_data>/LOG by default with automatic
 truncation at 24 MB.  Set log_level to WARN or higher in production to
 reduce log volume.
 
@@ -464,7 +480,7 @@ Run specific test:
 
   perl mtr --suite=tidesdb tidesdb_crud
 
-Available tests (49 total, 280+ cases):
+Available tests (50 total, 290+ cases):
   tidesdb_alter_crash         Crash safety during ALTER TABLE operations
   tidesdb_analyze             ANALYZE TABLE with CF statistics output
   tidesdb_auto_increment      AUTO_INCREMENT edge cases (gaps, rollback, explicit values)
@@ -504,6 +520,7 @@ Available tests (49 total, 280+ cases):
   tidesdb_rename              Table rename
   tidesdb_replace_iodku       REPLACE INTO and INSERT ON DUPLICATE KEY UPDATE
   tidesdb_savepoint           SQL SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT
+  tidesdb_single_delete       Single-delete semantics on primary and secondary CFs
   tidesdb_spatial             Spatial indexes (Hilbert curve, MBR predicates)
   tidesdb_sql                 40 SQL cases (aggregates, JOINs, subqueries, etc.)
   tidesdb_status_vars         SHOW GLOBAL STATUS LIKE 'tidesdb%' monitoring variables
