@@ -442,7 +442,29 @@ jobs:
 
     - name: Restore primary for automated failover test
       run: |
-        # Re-deploy primary so we can test automated failover
+        # The promoted replica is currently acting as primary against the
+        # shared MinIO bucket. We must fully drain and remove it BEFORE
+        # creating the new tidesql-primary -- otherwise both nodes upload
+        # concurrently to the same bucket and race on the schema CF MANIFEST.
+        # That race is what caused k8s_test.items to vanish on the new
+        # primary in earlier runs (split-brain on the object store).
+        echo "=== Draining promoted-replica before restore ==="
+
+        # Flush so any post-promotion writes (the manual_failover INSERT) are
+        # in an SSTable, then graceful shutdown so the close path drains the
+        # async upload queue. 30s timeout falls through to force-delete.
+        kubectl exec -n tidesql tidesql-replica -- \
+          mariadb -e "FLUSH LOGS; OPTIMIZE TABLE k8s_test.items;" 2>&1 || true
+        kubectl exec -n tidesql tidesql-replica -- \
+          timeout 30 mariadb-admin shutdown 2>&1 || true
+
+        kubectl delete pod -n tidesql tidesql-replica --grace-period=0 --force 2>&1 || true
+        # Block on the pod being fully removed before bringing up the new
+        # primary; condition=Ready alone doesn't give us this guarantee.
+        kubectl wait -n tidesql --for=delete pod/tidesql-replica --timeout=60s || true
+        echo "Promoted-replica drained and removed"
+
+        # Now safe to attach a new primary to the quiet bucket.
         kubectl apply -n tidesql -f - <<'EOF'
         apiVersion: v1
         kind: Pod
@@ -479,6 +501,29 @@ jobs:
 
         kubectl wait -n tidesql --for=condition=Ready pod/tidesql-primary --timeout=120s
 
+        # mariadb-admin ping returning OK does NOT mean TidesDB cold-start
+        # discovery has finished pulling k8s_test.items from S3. Poll for the
+        # table to be visible before treating the new primary as ready.
+        echo "Waiting for k8s_test.items to be visible on new primary..."
+        VISIBLE=0
+        for i in $(seq 1 30); do
+          if kubectl exec -n tidesql tidesql-primary -- \
+               mariadb -e "SELECT 1 FROM k8s_test.items LIMIT 1" >/dev/null 2>&1; then
+            echo "  primary sees k8s_test.items after ${i}s"
+            VISIBLE=1
+            break
+          fi
+          sleep 1
+        done
+        if [ "$VISIBLE" -ne 1 ]; then
+          echo "FAIL: new primary never discovered k8s_test.items from S3"
+          kubectl exec -n tidesql tidesql-primary -- \
+            mariadb -e "SHOW DATABASES" 2>&1 || true
+          kubectl exec -n tidesql tidesql-primary -- \
+            sh -c 'cat /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null | tail -80' || true
+          exit 1
+        fi
+
         # Create monitor user on new primary
         kubectl exec -n tidesql tidesql-primary -- \
           mariadb -e "
@@ -487,9 +532,7 @@ jobs:
             FLUSH PRIVILEGES;
           "
 
-        # Re-deploy a fresh replica (old one was promoted)
-        kubectl delete pod -n tidesql tidesql-replica --grace-period=0 --force 2>/dev/null || true
-        sleep 5
+        # Bring up a fresh replica against the (now single-writer) bucket.
         kubectl apply -n tidesql -f - <<'EOF'
         apiVersion: v1
         kind: Pod
@@ -646,6 +689,28 @@ jobs:
         sleep 5
         kubectl logs -n tidesql tidesql-failover --tail=5
 
+    - name: Snapshot primary logs before auto-failover kill
+      run: |
+        # The auto-failover step force-deletes tidesql-primary, after which
+        # `kubectl logs/exec` on that pod returns NotFound and the post-
+        # mortem dump cannot tell us what the primary was doing. Capture
+        # everything we'd want from it BEFORE the kill.
+        mkdir -p /tmp/k8s-logs/pre-autofail
+        kubectl logs -n tidesql tidesql-primary \
+          > /tmp/k8s-logs/pre-autofail/primary-stdout.log 2>&1 || true
+        kubectl exec -n tidesql tidesql-primary -- \
+          sh -c 'cat /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' \
+          > /tmp/k8s-logs/pre-autofail/primary-tidesdb.log 2>&1 || true
+        kubectl exec -n tidesql tidesql-primary -- \
+          sh -c 'tail -200 /usr/local/mariadb/log/error.log 2>/dev/null \
+                 || tail -200 /usr/local/mariadb/data/default/*.err 2>/dev/null' \
+          > /tmp/k8s-logs/pre-autofail/primary-mariadb.log 2>&1 || true
+        kubectl exec -n tidesql tidesql-primary -- \
+          mariadb -e "SHOW DATABASES; SHOW TABLES IN k8s_test; SELECT COUNT(*) FROM k8s_test.items;" \
+          > /tmp/k8s-logs/pre-autofail/primary-state.txt 2>&1 || true
+        echo "Captured pre-autofail primary logs to /tmp/k8s-logs/pre-autofail/"
+        ls -la /tmp/k8s-logs/pre-autofail/
+
     - name: Test automated failover - kill primary
       run: |
         echo "=== Automated failover test ==="
@@ -697,6 +762,16 @@ jobs:
     - name: Collect logs on failure
       if: failure()
       run: |
+        # Logs we captured before auto-failover deleted tidesql-primary.
+        # Without these the post-mortem is blind for the auto-failover scenario.
+        if [ -d /tmp/k8s-logs/pre-autofail ]; then
+          echo "=== Pre-auto-failover primary state (captured before pod delete) ==="
+          for f in /tmp/k8s-logs/pre-autofail/*; do
+            echo "--- $f ---"
+            tail -120 "$f" 2>/dev/null || echo "(empty)"
+            echo ""
+          done
+        fi
         echo "=== Primary container logs ==="
         kubectl logs -n tidesql tidesql-primary 2>/dev/null | tail -50 || echo "(none)"
         echo ""
