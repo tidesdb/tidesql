@@ -38,6 +38,11 @@ Misses: N
 Hit rate: N.N%
 Partitions: N
 
+--- Tombstones ---
+Total tombstones: N
+Tombstone ratio: N.N%
+Worst SSTable density: N.N% at level N
+
 DROP TABLE t1;
 #
 # Done.

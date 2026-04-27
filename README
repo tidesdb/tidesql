@@ -262,6 +262,18 @@ Core:
   composite is put once and deleted once per row lifetime.  Primary CF
   single-delete is opt-in via the tidesdb_single_delete_primary session
   variable (default OFF) for sessions that only INSERT and DELETE
+- Tombstone-density compaction trigger -- per-table TOMBSTONE_DENSITY_TRIGGER
+  and TOMBSTONE_DENSITY_MIN_ENTRIES options arm a post-flush check that
+  escalates compaction for any single SSTable whose tombstone density
+  crosses the configured ratio.  Aggregates surface as
+  tidesdb_total_tombstones, tidesdb_tombstone_ratio, and
+  tidesdb_max_sst_tombstone_density status vars
+- Auto compact-after-range-delete -- session variable
+  tidesdb_compact_after_range_delete_min_rows (default 0) lets a multi-row
+  DELETE that touches at least N rows synchronously call
+  tidesdb_compact_range over the touched primary-key range at end of
+  statement, physically reclaiming tombstoned space without waiting for
+  a structural trigger
 - REPLACE INTO and INSERT ... ON DUPLICATE KEY UPDATE
 - AUTO_INCREMENT with O(1) atomic counter (no iterator per INSERT).
   TRUNCATE TABLE and ALTER TABLE ... AUTO_INCREMENT=N both correctly
@@ -276,7 +288,7 @@ Core:
 - FLUSH TABLES FOR EXPORT (HA_CAN_EXPORT, consistent file copy)
 - Semi-consistent read (optimistic reads for UPDATE/DELETE at READ_COMMITTED)
 - SHOW ENGINE TIDESDB STATUS (DB stats, memory, cache, conflict info)
-- SHOW GLOBAL STATUS LIKE 'tidesdb%' (21 machine-readable status variables
+- SHOW GLOBAL STATUS LIKE 'tidesdb%' (25 machine-readable status variables
   for monitoring tools -- Prometheus, PMM, Datadog, etc.)
 - Handlerton lifecycle + administrative hooks wired:
     drop_database    DROP DATABASE removes all TidesDB CFs for the db
@@ -389,9 +401,33 @@ Session (SET SESSION tidesdb_...):
                             after compaction.  Safe for INSERT-only +
                             DELETE-only workloads (e.g. log rotation,
                             iibench l.i1 shape).
+  compact_after_range_delete_min_rows
+                            If non-zero, after a multi-row DELETE that
+                            touches at least this many rows, the engine
+                            calls tidesdb_compact_range over the
+                            touched primary-key range to physically
+                            reclaim tombstoned space synchronously
+                            instead of waiting for a structural
+                            compaction trigger (default: 0 = disabled).
+                            Useful for sliding-window expiry, tenant
+                            eviction, or any DELETE-by-PK-range op.
   default_compression       Default compression for new tables
   default_write_buffer_size Default write buffer for new tables (128MB)
   default_sync_mode         Default sync mode for new tables (FULL)
+  default_tombstone_density_trigger
+                            Default tombstone-density compaction
+                            trigger ratio for new tables, in parts
+                            per 10000 (5000 = 0.50 ratio).  When set
+                            non-zero, after each flush the engine
+                            inspects level-1 SSTables and escalates
+                            compaction for any single SST whose
+                            tombstone count divided by entry count
+                            exceeds the ratio (default: 0 = disabled).
+  default_tombstone_density_min_entries
+                            Minimum entry count for an SSTable to be
+                            considered by the tombstone-density
+                            trigger; smaller SSTables are ignored
+                            (default: 1024).
   (and other default_* variables for all table options)
 
 Logging -- TidesDB writes to <tidesdb_data>/LOG by default with automatic
@@ -433,6 +469,14 @@ LSM Tree:
   DIVIDING_LEVEL_OFFSET     Compaction dividing level offset (default: 2)
   L1_FILE_COUNT_TRIGGER     L1 file count trigger for compaction (default: 4)
   L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 20)
+  TOMBSTONE_DENSITY_TRIGGER Ratio in parts per 10000 above which compaction
+                            is escalated for a single SSTable when the
+                            tombstone-density check fires after a flush
+                            (e.g. 5000 = 0.50; default: 0 = disabled).
+  TOMBSTONE_DENSITY_MIN_ENTRIES
+                            Minimum entry count for an SSTable to be
+                            considered by the density trigger; smaller
+                            SSTables are skipped (default: 1024).
 
 Skip List:
   SKIP_LIST_MAX_LEVEL       Max skip list level (default: 12)
@@ -480,7 +524,7 @@ Run specific test:
 
   perl mtr --suite=tidesdb tidesdb_crud
 
-Available tests (50 total, 290+ cases):
+Available tests (51 total, 300+ cases):
   tidesdb_alter_crash         Crash safety during ALTER TABLE operations
   tidesdb_analyze             ANALYZE TABLE with CF statistics output
   tidesdb_auto_increment      AUTO_INCREMENT edge cases (gaps, rollback, explicit values)
@@ -525,6 +569,7 @@ Available tests (50 total, 290+ cases):
   tidesdb_sql                 40 SQL cases (aggregates, JOINs, subqueries, etc.)
   tidesdb_status_vars         SHOW GLOBAL STATUS LIKE 'tidesdb%' monitoring variables
   tidesdb_stress              Concurrent transactions, conflicts, truncate cycles
+  tidesdb_tombstone_density   Tombstone-density compaction trigger options + auto compact-after-range-delete
   tidesdb_tpcc_contention     TPC-C district counter contention (pessimistic locking)
   tidesdb_ttl                 Time-to-live expiration
   tidesdb_unified_memtable    Unified memtable mode (shared WAL, cross-CF consistency)

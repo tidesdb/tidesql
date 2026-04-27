@@ -104,11 +104,17 @@ FIND_PATH(TIDESDB_INCLUDE_DIR
         "C:/tidesdb/include"
         "C:/Program Files/tidesdb/include"
         "C:/Program Files (x86)/tidesdb/include"
+        PATH_SUFFIXES include
 )
 
 ############# Validate required dependencies #############
 IF(NOT TIDESDB_LIB)
   MESSAGE(STATUS "TidesDB: library not found - plugin will not be built. Install TidesDB or set TIDESDB_ROOT.")
+  RETURN()
+ENDIF()
+
+IF(NOT TIDESDB_INCLUDE_DIR)
+  MESSAGE(STATUS "TidesDB: tidesdb/db.h header not found - plugin will not be built. Install TidesDB headers or set TIDESDB_ROOT.")
   RETURN()
 ENDIF()
 
@@ -123,9 +129,7 @@ IF(NOT LZ4_LIBRARY)
 ENDIF()
 
 ############# Add include directories #############
-IF(TIDESDB_INCLUDE_DIR)
-  INCLUDE_DIRECTORIES(${TIDESDB_INCLUDE_DIR})
-ENDIF()
+INCLUDE_DIRECTORIES(${TIDESDB_INCLUDE_DIR})
 
 ############# Build list of libraries to link -- we use full paths from FIND_LIBRARY ############
 SET(TIDESDB_LIBS ${TIDESDB_LIB} ${ZSTD_LIBRARY} ${LZ4_LIBRARY})

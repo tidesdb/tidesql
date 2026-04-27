@@ -91,6 +91,204 @@ static constexpr ha_rows TIDESDB_RIR_DEFAULT_EST = 10;         /* no share avail
 static constexpr ha_rows TIDESDB_RIR_UNKNOWN_DENOM = 4;        /* total/4 + 1 quarter fallback */
 static constexpr double TIDESDB_RIR_FRACTION_UNRELIABLE = 0.8; /* fall back to rec_per_key */
 
+/* Range-width multiplier applied to rec_per_key when tidesdb_range_cost
+   returned an unreliably high fraction (memtable-only data, narrow range
+   indistinguishable from full scan).  Typical OLTP ranges span tens of
+   key values; 20 keeps the estimate tight while still being vastly
+   better than the full ratio. */
+static constexpr ha_rows TIDESDB_RIR_RANGE_RPK_MULTIPLIER = 20;
+
+/* Cap the rec_per_key range fallback at total / N so it never claims
+   more than this fraction of the table. */
+static constexpr ha_rows TIDESDB_RIR_RANGE_CAP_DENOM = 2;
+
+/* Sentinel bytes for building full-range bounds that pass through
+   tidesdb_range_cost or seek primitives.  KEY_INF_HI_BYTE fills upper
+   bound buffers with 0xFF.  KEY_INF_LO_BYTE seeds the smallest possible
+   first byte for secondary-index lower bounds (primary uses KEY_NS_DATA). */
+static constexpr uint8_t KEY_INF_HI_BYTE = 0xFF;
+static constexpr uint8_t KEY_INF_LO_BYTE = 0x00;
+
+/* Row format constants.  Every row written by serialize_row carries the
+   header [ROW_HEADER_MAGIC][null_bytes(2 LE)][field_count(2 LE)] for a
+   total of ROW_HEADER_SIZE bytes; deserialize_row reads them back to
+   support instant ADD/DROP COLUMN. */
+static constexpr uchar ROW_HEADER_MAGIC = 0xFE;
+static constexpr uint ROW_HEADER_SIZE = 5;
+
+/* Null bitmap byte count for tables with at most 8 fields (one byte
+   per 8 columns).  Used when scanning the stop-word loader's single
+   VARCHAR column.  Larger tables compute null bitmap width from
+   table->s->null_bytes. */
+static constexpr uint NULL_BITMAP_SINGLE_FIELD = 1;
+
+/* Length prefix Field::pack writes ahead of a VARCHAR payload.
+   Two bytes covers VARCHAR up to 65535 chars in either byte order. */
+static constexpr uint FIELD_VARCHAR_LEN_PREFIX = 2;
+
+/* Sign-bit XOR mask used to translate a signed integer's MSB into
+   sortable form (and back).  Big-endian sort keys flip this bit so
+   negative values sort below positive ones lexicographically. */
+static constexpr uint8_t INT_SORT_SIGN_FLIP_MASK = 0x80;
+
+/* MariaDB packed-field widths used by sort-key decoders. */
+static constexpr uint DATE_PACK_LEN = 3;
+static constexpr uint DATETIME_MAX_PACK_LEN = 8;
+
+/* Sysvar enum index for tidesdb_object_store_backend.  0 = LOCAL, 1 = S3. */
+static constexpr uint OBJSTORE_BACKEND_LOCAL = 0;
+static constexpr uint OBJSTORE_BACKEND_S3 = 1;
+
+/* Separator that joins db and table names when forming a TidesDB CF name
+   from a MariaDB path (e.g. "test/foo" -> "test__foo").  Centralized so
+   path_to_cf_name, schema_cf, and discover stay in sync. */
+static constexpr const char CF_DB_TABLE_SEP[] = "__";
+
+/* Schema CF key encoding: "db_name<SEP>table_name" with no trailing NUL.
+   The null byte separator is unambiguous because MariaDB identifiers
+   cannot contain NUL.  Used by schema_cf_key, schema_cf_key_from_path,
+   the discover prefix builders, and the schema_cf_ensure_databases scan. */
+static constexpr char SCHEMA_CF_KEY_SEP = '\0';
+
+/* MariaDB temp-table marker character.  Internal temp/exchange tables
+   carry one or more '#' in their on-disk name (e.g. "#sql-..."); we
+   substitute '_' so the resulting CF name remains valid. */
+static constexpr char MARIADB_TEMP_NAME_MARKER = '#';
+static constexpr char MARIADB_TEMP_NAME_REPLACEMENT = '_';
+
+/* Relative-path prefix that MariaDB prepends to table paths handed
+   to handler callbacks ("./db/table").  schema_cf_key_from_path and
+   path_to_cf_name strip it before extracting db/table components. */
+static constexpr const char MARIADB_REL_PATH_PREFIX[] = "./";
+static constexpr size_t MARIADB_REL_PATH_PREFIX_LEN = 2;
+
+/* MariaDB sort-key null-indicator bytes prepended to nullable key parts
+   in make_comparable_key.  Convention: 0 sorts NULLs first under memcmp,
+   1 marks a present value. */
+static constexpr uchar SORT_KEY_NULL = 0;
+static constexpr uchar SORT_KEY_NOT_NULL = 1;
+
+/* Slot indices into the 4-double MBR layout used by spatial_qmbr_ and
+   tdb_mbr_t-shaped buffers.  Order matches the on-disk SPATIAL_MBR_VALUE_LEN
+   layout: [xmin, ymin, xmax, ymax]. */
+static constexpr uint MBR_XMIN_IDX = 0;
+static constexpr uint MBR_YMIN_IDX = 1;
+static constexpr uint MBR_XMAX_IDX = 2;
+static constexpr uint MBR_YMAX_IDX = 3;
+
+/* Inclusive bounds of the full 64-bit Hilbert value space.  Used when a
+   spatial query has no decomposable cells (e.g. HA_READ_MBR_DISJOINT) and
+   we have to scan the entire curve. */
+static constexpr uint64_t HILBERT_RANGE_FULL_LO = 0;
+static constexpr uint64_t HILBERT_RANGE_FULL_HI = UINT64_MAX;
+
+/* Minimum number of point ranges in a multi-range request before our
+   custom MRR path takes over from MariaDB's default implementation.
+   Single-range plans bypass MRR so pessimistic row locking still
+   engages on the index_read_map fast path. */
+static constexpr uint MRR_ACCEPT_MIN_RANGES = 2;
+
+/* Selectivity values used in info() / analyze() for index rec_per_key.
+   UNIQUE: exactly one row per distinct value.  FLOOR: smallest plausible
+   estimate so the optimizer never sees rec_per_key=0 (treated as "unknown"). */
+static constexpr ulong REC_PER_KEY_UNIQUE = 1;
+static constexpr ulong REC_PER_KEY_FLOOR = 1;
+
+/* Divisor used to compute the centroid of an MBR ((min + max) / 2) when
+   building a Hilbert spatial index key.  The centroid is the point that
+   feeds hilbert_xy2d_64 -- the MBR corners themselves are stored in the
+   value, not the key. */
+static constexpr double MBR_CENTROID_DIV = 2.0;
+
+/* Multiplier used to convert a 0..1 ratio (cache hit rate, etc.) into
+   a percentage for human-readable status output. */
+static constexpr double PERCENT_SCALE = 100.0;
+
+/* First row id assigned to a freshly created (or fully truncated)
+   hidden-PK table.  Row ids are one-based so that "0" remains a clean
+   sentinel for "no row id yet" / "uninitialized". */
+static constexpr uint64_t HIDDEN_PK_FIRST_ROW_ID = 1;
+
+/* Inclusive bounds of a probability / cost fraction in [0, 1].  Used to
+   clamp tidesdb_range_cost ratios in records_in_range so floating-point
+   noise from the cost estimator can't push the fraction outside its
+   semantic range. */
+static constexpr double FRACTION_MIN = 0.0;
+static constexpr double FRACTION_MAX = 1.0;
+
+/* Read-amplification value reported when TidesDB has not yet collected
+   enough statistics to compute a real read_amp.  1.0 means "one disk op
+   per logical op" -- the optimistic baseline that won't penalize plans. */
+static constexpr double READ_AMP_NONE = 1.0;
+
+/* Per-document delta values for fts_update_meta when maintaining the
+   FTS metadata row alongside DML.  ADD/DEL track whether a document
+   was inserted or removed; word-count deltas use the matching sign. */
+static constexpr int FTS_DOC_DELTA_ADD = 1;
+static constexpr int FTS_DOC_DELTA_DEL = -1;
+
+/* mkdir mode used when the discover_table callback creates a missing
+   database directory under datadir. */
+static constexpr int TIDESDB_DB_DIR_MODE = 0755;
+
+/* Default ENCRYPTION_KEY_ID applied when a table is opened with
+   encryption enabled but no explicit key id is provided.  Mirrors the
+   default in the ENCRYPTION_KEY_ID HA_TOPTION_NUMBER declaration. */
+static constexpr uint TIDESDB_DEFAULT_ENCRYPTION_KEY_ID = 1;
+
+/* Sentinel value stored in TidesDB_share::ttl_field_idx when no TTL
+   column is configured for the table.  Valid TTL field indexes are
+   non-negative; >= 0 implies a TTL_COL column is present. */
+static constexpr int TIDESDB_TTL_FIELD_NONE = -1;
+
+/* Fallback divisor when rec_per_key is unset for a non-unique secondary
+   index in info().  Estimate is total_records / N, biasing toward more
+   selective lookups (10 ~= one decimal order of magnitude). */
+static constexpr ha_rows STATS_REC_PER_KEY_FALLBACK_DIVISOR = 10;
+
+/* IEEE-754 double-precision bit layout used by the spatial code's
+   lexicographic-orderable encoding.  The sign bit is bit 63 of the 64-bit
+   representation; LEX_UINT32_HI_SHIFT extracts the high 32 bits after
+   sign-flipping for big-endian comparison. */
+static constexpr uint64_t IEEE754_DOUBLE_SIGN_MASK = (uint64_t)1 << 63;
+static constexpr uint LEX_UINT32_HI_SHIFT = 32;
+
+/* Number of bits per byte for shift-based byte (de)serialization in the
+   spatial encoder/decoder loops.  Equivalent to CHAR_BIT on POSIX. */
+static constexpr uint BITS_PER_BYTE = 8;
+
+/* yesno flag values used by the FTS boolean-mode parser to mark each
+   query term as required (`+term`), excluded (`-term`), or neutral
+   (just `term`).  Compared with `> 0` and `< 0` in the BM25 reducer. */
+static constexpr int FTS_TERM_REQUIRED = 1;
+static constexpr int FTS_TERM_EXCLUDED = -1;
+static constexpr int FTS_TERM_NEUTRAL = 0;
+
+/* Operator characters recognized by fts_parse_boolean for queries
+   issued in `IN BOOLEAN MODE`.  These are part of the MariaDB FTS
+   query DSL, not arbitrary punctuation. */
+static constexpr char FTS_BOOL_OP_REQUIRED = '+';
+static constexpr char FTS_BOOL_OP_EXCLUDED = '-';
+static constexpr char FTS_BOOL_OP_PHRASE = '"';
+static constexpr char FTS_BOOL_OP_TRUNC = '*';
+
+/* BM25 (Okapi / Robertson Walker) ranking formula constants.
+   Used in ft_init_ext to score postings.  IDF uses the Lucene
+   smoothed form: log((N - df + EPS) / (df + EPS) + SHIFT).  TF
+   normalization uses (tf * (k1 + BOOST)) / (tf + k1 * (BASE - b +
+   b * dl / avgdl)). */
+static constexpr double BM25_IDF_EPSILON = 0.5;
+static constexpr double BM25_IDF_NONNEG_SHIFT = 1.0;
+static constexpr double BM25_TF_SATURATION_BOOST = 1.0;
+static constexpr double BM25_LENGTH_NORM_BASE = 1.0;
+/* Fallback average document length when the FTS metadata reports
+   zero total documents.  A value of 1.0 collapses the length
+   normalization term to neutral so scoring still proceeds. */
+static constexpr double BM25_DEFAULT_AVGDL = 1.0;
+/* Floor for total_docs in the IDF denominator.  Guards std::log
+   from a divide-by-zero when no documents have been indexed yet. */
+static constexpr int64_t BM25_MIN_TOTAL_DOCS = 1;
+
 /* Inplace index builds rows between mid-txn commits and between
    thd_killed polls. */
 static constexpr ha_rows TIDESDB_INDEX_BUILD_BATCH = 100;
@@ -106,6 +304,10 @@ static constexpr uint TIDESDB_ENC_KEY_LEN = 32;
 
 /* Bloom filter FPR conversion (table option stores parts per 10000) */
 static constexpr double TIDESDB_BLOOM_FPR_DIVISOR = 10000.0;
+
+/* Tombstone density trigger conversion (table option stores parts per
+   10000; library config is a 0.0..1.0 ratio). */
+static constexpr double TIDESDB_TOMBSTONE_DENSITY_DIVISOR = 10000.0;
 
 /* Skip list probability conversion (table option stores percentage) */
 static constexpr float TIDESDB_SKIP_LIST_PROB_DIV = 100.0f;
@@ -410,6 +612,18 @@ class ha_tidesdb : public handler
     bool in_bulk_update_;
     bool in_bulk_delete_;
     ha_rows bulk_insert_ops_; /* ops buffered since last mid-txn commit */
+
+    /* Auto-compact-after-range-delete tracking.  When the session var
+       tidesdb_compact_after_range_delete_min_rows is non-zero, delete_row
+       updates these fields with the comparable PK bytes of each deleted
+       row, and end_bulk_delete fires tidesdb_compact_range over the
+       observed [min_pk, max_pk] range if the deleted-row count meets the
+       threshold.  Cleared on start_bulk_delete and on each
+       cached-THDVAR refresh. */
+    ulonglong cached_compact_after_range_delete_min_rows_;
+    ha_rows bulk_delete_rows_;
+    std::string bulk_delete_min_pk_;
+    std::string bulk_delete_max_pk_;
 
     /* Multi-Range Read state.  We accept MRR when every range the optimizer
        hands us is UNIQUE_RANGE|EQ_RANGE (i.e. the WHERE col IN (...) case on
