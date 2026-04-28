@@ -742,6 +742,38 @@ setup_mariadb() {
             user_line="user    = ${run_user}"
         fi
 
+        # When --allocator selects a non-system allocator, locate the
+        # matching shared library so we can wire it into mariadbd_safe's
+        # malloc-lib option. mariadbd_safe LD_PRELOADs malloc-lib before
+        # forking mariadbd, which makes the allocator's TLS reservations
+        # happen before the static TLS budget is exhausted, sidestepping
+        # the "cannot allocate memory in static TLS block" failure when
+        # the plugin pulls in libjemalloc/mimalloc/tcmalloc via dlopen.
+        local mysqld_safe_section=""
+        if [[ "$OS" != "windows" && "$ALLOCATOR" != "system" ]]; then
+            local alloc_pattern alloc_lib=""
+            case "$ALLOCATOR" in
+                jemalloc) alloc_pattern='libjemalloc\.so\.2' ;;
+                mimalloc) alloc_pattern='libmimalloc\.so(\.[0-9]+)?' ;;
+                tcmalloc) alloc_pattern='libtcmalloc\.so(\.[0-9]+)?' ;;
+            esac
+            if [[ -n "$alloc_pattern" ]]; then
+                alloc_lib=$(ldconfig -p 2>/dev/null \
+                            | awk -v pat="$alloc_pattern" \
+                                  '$1 ~ ("^"pat"$") {print $NF; exit}')
+            fi
+            if [[ -n "$alloc_lib" && -f "$alloc_lib" ]]; then
+                mysqld_safe_section="
+[mysqld_safe]
+# Preload the ${ALLOCATOR} allocator before forking mariadbd so the
+# plugin's transitive libjemalloc/mimalloc/tcmalloc load does not run
+# out of static TLS slots.
+malloc-lib = ${alloc_lib}"
+            else
+                warn "Allocator ${ALLOCATOR} requested but ${alloc_pattern} not found via ldconfig; mysqld_safe malloc-lib will not be set"
+            fi
+        fi
+
         local cnf_content
         cnf_content="[mysqld]
 basedir = ${MARIADB_PREFIX}
@@ -794,7 +826,8 @@ quick
 max_allowed_packet = 64M
 
 [mariadb-backup]
-# mariabackup settings (defaults are fine)"
+# mariabackup settings (defaults are fine)
+${mysqld_safe_section}"
 
         if [[ "$OS" == "windows" ]]; then
             mkdir -p "$(dirname "${cnf_file}")"
@@ -815,11 +848,18 @@ max_allowed_packet = 64M
     info "Initializing MariaDB data directory..."
 
     local install_db=""
+    # The script CONFIGURE_FILE'd into the build tree always lives at
+    # ${BUILD_DIR}/mariadb-server/build/scripts/, regardless of whether
+    # cmake --install copied it onward. Check the install prefix first,
+    # then fall back to the build tree so a partial install still
+    # bootstraps cleanly.
     for candidate in \
         "${MARIADB_PREFIX}/scripts/mariadb-install-db" \
         "${MARIADB_PREFIX}/scripts/mysql_install_db" \
         "${MARIADB_PREFIX}/bin/mariadb-install-db" \
-        "${MARIADB_PREFIX}/bin/mysql_install_db"; do
+        "${MARIADB_PREFIX}/bin/mysql_install_db" \
+        "${BUILD_DIR}/mariadb-server/build/scripts/mariadb-install-db" \
+        "${BUILD_DIR}/mariadb-server/build/scripts/mysql_install_db"; do
         if [[ -f "$candidate" ]]; then
             install_db="$candidate"
             break
@@ -827,29 +867,59 @@ max_allowed_packet = 64M
     done
 
     if [[ -z "$install_db" ]]; then
-        warn "Could not find mariadb-install-db - skipping data directory init"
-        warn "You may need to run it manually after installation"
+        # A silent warn here used to leave the user with a fully built
+        # mariadbd against an empty data dir, which manifests as
+        # "Table 'mysql.plugin' doesn't exist" at first startup. Fail
+        # loudly instead so the operator sees the cause immediately.
+        error "Could not find mariadb-install-db. Looked in:"
+        error "  ${MARIADB_PREFIX}/{scripts,bin}/"
+        error "  ${BUILD_DIR}/mariadb-server/build/scripts/"
+        error "Cannot initialize the data directory. Aborting."
+        exit 1
     elif [[ -d "${datadir}/mysql" ]]; then
         warn "Data directory already exists at ${datadir}, skipping initialization"
     else
+        # mariadb-install-db spawns a temporary mariadbd to populate the
+        # mysql.* system tables. We pass --no-defaults so that bootstrap
+        # mariadbd does NOT read ${cnf_file}; that file already contains
+        # `plugin_load_add = ha_tidesdb.so`, which would force the
+        # bootstrap mariadbd to dlopen the plugin and pull in libjemalloc
+        # via libtidesdb. With jemalloc not preloaded into the bootstrap
+        # process, dlopen aborts with "cannot allocate memory in static
+        # TLS block" and the data dir ends up empty. Bootstrap doesn't
+        # need anything from my.cnf -- only basedir/datadir/user, which
+        # we pass on the command line.
+        local -a install_db_env=()
+        if [[ "$ALLOCATOR" == "jemalloc" && "$OS" != "windows" ]]; then
+            local jelib
+            jelib=$(ldconfig -p 2>/dev/null \
+                    | awk '/libjemalloc\.so\.2/ {print $NF; exit}')
+            if [[ -n "$jelib" && -f "$jelib" ]]; then
+                install_db_env+=("LD_PRELOAD=$jelib")
+            fi
+        fi
+
         if [[ "$OS" == "windows" ]]; then
             "${install_db}" \
-                --defaults-file="${cnf_file}" \
+                --no-defaults \
                 --basedir="${MARIADB_PREFIX}" \
-                --datadir="${datadir}" 2>&1 || true
+                --datadir="${datadir}" \
+                --skip-test-db
         elif $use_mysql_user; then
-            sudo "${install_db}" \
-                --defaults-file="${cnf_file}" \
+            sudo env "${install_db_env[@]}" "${install_db}" \
+                --no-defaults \
                 --user=mysql \
                 --basedir="${MARIADB_PREFIX}" \
-                --datadir="${datadir}" 2>&1 || true
+                --datadir="${datadir}" \
+                --skip-test-db
             sudo chown -R mysql:mysql "${datadir}"
         else
-            "${install_db}" \
-                --defaults-file="${cnf_file}" \
+            env "${install_db_env[@]}" "${install_db}" \
+                --no-defaults \
                 --user="${run_user}" \
                 --basedir="${MARIADB_PREFIX}" \
-                --datadir="${datadir}" 2>&1 || true
+                --datadir="${datadir}" \
+                --skip-test-db
         fi
         ok "Data directory initialized"
     fi
