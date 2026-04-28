@@ -815,11 +815,18 @@ max_allowed_packet = 64M
     info "Initializing MariaDB data directory..."
 
     local install_db=""
+    # The script CONFIGURE_FILE'd into the build tree always lives at
+    # ${BUILD_DIR}/mariadb-server/build/scripts/, regardless of whether
+    # cmake --install copied it onward. Check the install prefix first,
+    # then fall back to the build tree so a partial install still
+    # bootstraps cleanly.
     for candidate in \
         "${MARIADB_PREFIX}/scripts/mariadb-install-db" \
         "${MARIADB_PREFIX}/scripts/mysql_install_db" \
         "${MARIADB_PREFIX}/bin/mariadb-install-db" \
-        "${MARIADB_PREFIX}/bin/mysql_install_db"; do
+        "${MARIADB_PREFIX}/bin/mysql_install_db" \
+        "${BUILD_DIR}/mariadb-server/build/scripts/mariadb-install-db" \
+        "${BUILD_DIR}/mariadb-server/build/scripts/mysql_install_db"; do
         if [[ -f "$candidate" ]]; then
             install_db="$candidate"
             break
@@ -827,8 +834,15 @@ max_allowed_packet = 64M
     done
 
     if [[ -z "$install_db" ]]; then
-        warn "Could not find mariadb-install-db - skipping data directory init"
-        warn "You may need to run it manually after installation"
+        # A silent warn here used to leave the user with a fully built
+        # mariadbd against an empty data dir, which manifests as
+        # "Table 'mysql.plugin' doesn't exist" at first startup. Fail
+        # loudly instead so the operator sees the cause immediately.
+        error "Could not find mariadb-install-db. Looked in:"
+        error "  ${MARIADB_PREFIX}/{scripts,bin}/"
+        error "  ${BUILD_DIR}/mariadb-server/build/scripts/"
+        error "Cannot initialize the data directory. Aborting."
+        exit 1
     elif [[ -d "${datadir}/mysql" ]]; then
         warn "Data directory already exists at ${datadir}, skipping initialization"
     else
