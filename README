@@ -46,7 +46,7 @@ allocator at mariadbd startup:
     /usr/local/mariadb/bin/mariadbd-safe \
     --defaults-file=/usr/local/mariadb/my.cnf &
 
-Note that --rebuild-plugin does NOT rebuild libtidesdb, so changing the
+Note that --rebuild-plugin does not rebuild libtidesdb, so changing the
 allocator requires a full install run (omit --rebuild-plugin) to take
 effect.  Verify the linkage with:
 

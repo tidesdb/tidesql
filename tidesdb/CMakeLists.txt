@@ -13,7 +13,8 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-############# Optional Plugin-level ASAN + UBSAN #############
+# Optional Plugin-level ASAN + UBSAN 
+#
 # You enable with cmake -DTIDESDB_WITH_ASAN=ON -DTIDESDB_WITH_UBSAN=ON ..
 # This instruments only the TidesDB plugin .so, not the whole server, though its good to build the server with sanitizers too.
 # At runtime, LD_PRELOAD the ASAN runtime for shared-lib mode:
@@ -49,9 +50,9 @@ FIND_LIBRARY(TIDESDB_LIB
         PATH_SUFFIXES lib
 )
 
-############# We find compression libraries and always use FIND_LIBRARY to get full paths.#############
-############# We cannot use pkg-config because it returns library names like "zstd" which #############
-############# conflict with MariaDB's own "zstd" MODULE target (provider_zstd plugin).    #############
+# We find compression libraries and always use FIND_LIBRARY to get full paths
+# We cannot use pkg-config because it returns library names like "zstd" which 
+# conflict with MariaDB's own "zstd" MODULE target (provider_zstd plugin).    
 FIND_LIBRARY(ZSTD_LIBRARY
         NAMES zstd zstd_static
         HINTS ENV LIBRARY_PATH ENV VCPKG_INSTALLED_DIR
@@ -88,8 +89,8 @@ FIND_LIBRARY(SNAPPY_LIBRARY
         "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/lib"
 )
 
-############# We find include directories #############
-# We look for tidesdb/db.h to get the parent include directory
+# We find include directories
+# and look for tidesdb/db.h to get the parent include directory
 # The plugin primarily uses #include <tidesdb/db.h> so we need the parent of the tidesdb folder
 FIND_PATH(TIDESDB_INCLUDE_DIR
         NAMES tidesdb/db.h
@@ -107,7 +108,7 @@ FIND_PATH(TIDESDB_INCLUDE_DIR
         PATH_SUFFIXES include
 )
 
-############# Validate required dependencies #############
+# We validate required dependencies
 IF(NOT TIDESDB_LIB)
   MESSAGE(STATUS "TidesDB: library not found - plugin will not be built. Install TidesDB or set TIDESDB_ROOT.")
   RETURN()
@@ -128,17 +129,17 @@ IF(NOT LZ4_LIBRARY)
   RETURN()
 ENDIF()
 
-############# Add include directories #############
+
 INCLUDE_DIRECTORIES(${TIDESDB_INCLUDE_DIR})
 
-############# Build list of libraries to link -- we use full paths from FIND_LIBRARY ############
+# We build list of libraries to link, we use full paths from FIND_LIBRARY 
 SET(TIDESDB_LIBS ${TIDESDB_LIB} ${ZSTD_LIBRARY} ${LZ4_LIBRARY})
 
 IF(SNAPPY_LIBRARY)
   LIST(APPEND TIDESDB_LIBS ${SNAPPY_LIBRARY})
 ENDIF()
 
-############# On Windows, we need pthreads library ############
+# On Windows, we need pthreads library 
 IF(WIN32)
   FIND_LIBRARY(PTHREADS_LIBRARY
           NAMES pthreadVC3 pthreadVC2 pthread pthreads
@@ -152,7 +153,7 @@ IF(WIN32)
   ENDIF()
 ENDIF()
 
-############# Optional S3 object store connector #############
+# Optional S3 object store connector 
 OPTION(TIDESDB_WITH_S3 "Enable S3-compatible object store connector" OFF)
 IF(TIDESDB_WITH_S3)
   FIND_PACKAGE(CURL REQUIRED)
@@ -161,17 +162,17 @@ IF(TIDESDB_WITH_S3)
   MESSAGE(STATUS "TidesDB: S3 object store connector enabled")
 ENDIF()
 
-############# Define the storage engine using MariaDB's MYSQL_ADD_PLUGIN macro #############
+# Define the storage engine using MariaDB's MYSQL_ADD_PLUGIN macro 
 MYSQL_ADD_PLUGIN(tidesdb ha_tidesdb.cc STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS})
 
-############# S3 compile definition for the plugin #############
+# S3 compile definition for the plugin 
 IF(TIDESDB_WITH_S3)
   IF(TARGET tidesdb)
     TARGET_COMPILE_DEFINITIONS(tidesdb PRIVATE TIDESDB_WITH_S3)
   ENDIF()
 ENDIF()
 
-############# Apply sanitizer flags to the plugin target only #############
+# We apply sanitizer flags to the plugin target only 
 IF(TIDESDB_SANITIZER_COMPILE_FLAGS)
   IF(TARGET tidesdb)
     TARGET_COMPILE_OPTIONS(tidesdb PRIVATE ${TIDESDB_SANITIZER_COMPILE_FLAGS})

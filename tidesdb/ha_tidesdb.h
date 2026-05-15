@@ -329,9 +329,9 @@ class TidesDB_share : public Handler_share
     std::string cf_name;
 
     /* Primary key info */
-    bool has_user_pk; /* true when table has an explicit PRIMARY KEY */
-    uint pk_index;    /* MariaDB key number of the PK (usually 0)   */
-    uint pk_key_len;  /* byte-length of PK in MariaDB key format    */
+    bool has_user_pk;
+    uint pk_index; /* MariaDB key number of the PK (usually 0)   */
+    uint pk_key_len;
 
     /* Hidden PK row-id generator (used when has_user_pk == false) */
     std::atomic<uint64_t> next_row_id;
@@ -348,13 +348,13 @@ class TidesDB_share : public Handler_share
     int ttl_field_idx;     /* field index of TTL_COL column (-1 = none)     */
 
     /* Data-at-rest encryption */
-    bool encrypted;              /* true when ENCRYPTED=YES table option set */
+    bool encrypted;
     uint encryption_key_id;      /* ENCRYPTION_KEY_ID table option (default 1) */
     uint encryption_key_version; /* cached latest key version */
 
     /* Cached table shape flags (set once at open time) */
-    bool has_blobs;             /* true when table contains any BLOB/TEXT columns */
-    bool has_ttl;               /* true when TTL is configured (default_ttl or ttl_field_idx) */
+    bool has_blobs;
+    bool has_ttl;
     uint num_secondary_indexes; /* count of non-NULL secondary index CFs */
     size_t cached_row_est{0};   /* cached serialize_row size estimate for non-BLOB tables */
 
@@ -362,6 +362,36 @@ class TidesDB_share : public Handler_share
        has_blobs is true.  serialize_row iterates only these instead of
        scanning all fields for the BLOB_FLAG. */
     std::vector<uint16> blob_field_indices;
+
+    /* Per-field plan for the serialize/deserialize hot path.
+       Built once at open() so the row loops avoid per-row recomputation
+       of `f->ptr - table->record[0]` and skip the Field::pack/unpack
+       vtable dispatch for fields whose pack() is the default memcpy.
+
+       memcpy_ok is true when the field's pack format is exactly
+       `pack_length()` bytes of memcpy (the Field::pack default, used by
+       all integer, FLOAT/DOUBLE, fixed DATETIME/DATE/TIME/TIMESTAMP,
+       YEAR, ENUM, SET, BIT and NEWDECIMAL types).  CHAR/VARCHAR/BLOB/
+       VARBINARY/GEOMETRY/JSON keep the slow path because their pack()
+       trims trailing spaces or emits a length prefix.
+
+       maybe_null is cached so the loop branches off a single bool
+       instead of calling Field::real_maybe_null() per row.
+
+       src_off is the field's offset within table->record[0] -- the loops
+       still rebase by ptrdiff at runtime so the same plan serves reads
+       and writes that target record[1] too. */
+    struct field_plan_t
+    {
+        uint32 src_off;  /* offset within table->record[0]                */
+        uint16 pack_len; /* f->pack_length(), used when memcpy_ok         */
+        bool memcpy_ok;  /* true -> inline memcpy; false -> Field::pack   */
+        bool maybe_null; /* cached f->maybe_null() (NOT real_maybe_null)  */
+    };
+    std::vector<field_plan_t> field_plan;
+    bool has_no_nullable{false};
+    uint8 null_bytes_cached{0}; /* cached table->s->null_bytes            */
+    uint16 fields_cached{0};    /* cached table->s->fields                */
 
     /* Cached scan_time range cost (refreshed every TIDESDB_STATS_REFRESH_US) */
     std::atomic<double> cached_scan_cost{0.0};
@@ -377,8 +407,8 @@ class TidesDB_share : public Handler_share
     std::atomic<uint64_t> cached_data_size{0};     /* total_data_size from CF */
     std::atomic<uint64_t> cached_idx_data_size{0}; /* sum of secondary CF sizes */
     std::atomic<uint32_t> cached_mean_rec_len{0};  /* avg_key_size + avg_value_size */
-    std::atomic<long long> stats_refresh_us{0};    /* last refresh timestamp (µs) */
-    std::atomic<double> cached_read_amp{1.0};      /* read amplification factor */
+    std::atomic<long long> stats_refresh_us{0};
+    std::atomic<double> cached_read_amp{1.0}; /* read amplification factor */
 
     /* Precomputed comparable key length per index (avoids per-row recomputation) */
     uint idx_comp_key_len[MAX_KEY];
@@ -537,8 +567,9 @@ class ha_tidesdb : public handler
        point-lookup.  Retains heap capacity across calls. */
     std::string get_val_buf_;
 
-    /* Separate encryption output buffer so row_buf_ retains its capacity
-       across calls (tidesdb_encrypt_row used to replace row_buf_). */
+    /* Separate encryption output buffer so row_buf_ retains its heap
+       capacity across rows.  serialize_row writes plaintext into row_buf_
+       and the encrypted blob into enc_buf_. */
     std::string enc_buf_;
 
     /* Per-statement cached encryption key version -- avoids calling
