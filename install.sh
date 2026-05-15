@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 
-# install.sh - Build & install MariaDB with InnoDB + TidesDB(TideSQL)
+# install.sh - Build & install MariaDB with InnoDB and TidesDB(TideSQL)
 #
 # Supported platforms: Linux (Debian/Ubuntu, RHEL/Fedora, Arch), macOS, Windows
 # (MSYS2/Git Bash).
@@ -56,7 +56,7 @@
 #   --allocator  NAME           Memory allocator for libtidesdb.so: system (default), jemalloc, mimalloc, or tcmalloc.
 #                               Only affects TidesDB's internal allocations; mariadbd's allocator is unchanged.
 #                               For a process-wide swap also LD_PRELOAD the allocator at mariadbd startup.
-#                               Note: --rebuild-plugin does NOT rebuild libtidesdb, so changing this flag
+#                               Note: --rebuild-plugin does not rebuild libtidesdb, so changing this flag
 #                               requires a full install run (omit --rebuild-plugin) to take effect.
 #   --help                      Show this help message
 #
@@ -881,7 +881,7 @@ ${mysqld_safe_section}"
     else
         # mariadb-install-db spawns a temporary mariadbd to populate the
         # mysql.* system tables. We pass --no-defaults so that bootstrap
-        # mariadbd does NOT read ${cnf_file}; that file already contains
+        # mariadbd does not read ${cnf_file}; that file already contains
         # `plugin_load_add = ha_tidesdb.so`, which would force the
         # bootstrap mariadbd to dlopen the plugin and pull in libjemalloc
         # via libtidesdb. With jemalloc not preloaded into the bootstrap
