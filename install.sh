@@ -2,7 +2,7 @@
 # 
 # install.sh - Build & install MariaDB with InnoDB and TidesDB(TideSQL)
 #
-# Supported platforms: Linux (Debian/Ubuntu, RHEL/Fedora, Arch), macOS, Windows
+# Supported platforms: Linux (Debian/Ubuntu, RHEL/Fedora, Arch), BSDs, macOS, Windows
 # (MSYS2/Git Bash).
 #
 # Flow:
@@ -110,6 +110,9 @@ detect_os() {
             ;;
         Darwin*)  echo "macos"   ;;
         MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
+        FreeBSD*) echo "freebsd" ;;
+        OpenBSD*) echo "openbsd" ;;
+        NetBSD*|DragonFly*) echo "netbsd" ;;
         *)        echo "unknown" ;;
     esac
 }
@@ -696,7 +699,148 @@ install_mariadb() {
 
     run_privileged cmake --install "${mariadb_build}" --config "${build_config}"
 
+    register_mariadb_client_lib
+
     ok "MariaDB installed to ${MARIADB_PREFIX}"
+}
+
+# Register the MariaDB Connector/C shared library with the platform's
+# dynamic linker so external tools that dlopen libmariadb.so.3 (HammerDB's
+# mariatcl, sysbench-mysql, etc.) can find it without per-shell setup.
+#
+# The mariadb CLI itself is usually statically linked against the connector
+# and so "the client works" even when the .so isn't on the linker's path --
+# that fools you into thinking the install is healthy when third-party
+# bindings will still fail at dlopen time.  This step closes that gap.
+#
+# Platform handling:
+#   - Linux : write /etc/ld.so.conf.d/mariadb-tidesql.conf, run ldconfig.
+#   - macOS : the dylib carries install_name=@rpath/libmariadb.dylib so
+#             tools linked at build time resolve via rpath.  Tools that
+#             dlopen by bare filename need DYLD_LIBRARY_PATH; we print
+#             the guidance instead of touching system state.
+#   - Windows: same as macOS, with PATH and LoadLibraryEx.
+register_mariadb_client_lib() {
+    case "$OS" in
+        debian|redhat|arch|linux-unknown)
+            local mariadb_libdir=""
+            local cand
+            for cand in \
+                "${MARIADB_PREFIX}/lib" \
+                "${MARIADB_PREFIX}/lib64" \
+                "${MARIADB_PREFIX}/lib/mariadb" \
+                "${MARIADB_PREFIX}/lib/x86_64-linux-gnu"; do
+                if [[ -f "${cand}/libmariadb.so.3" || -f "${cand}/libmariadb.so" ]]; then
+                    mariadb_libdir="$cand"
+                    break
+                fi
+            done
+
+            if [[ -z "$mariadb_libdir" ]]; then
+                warn "Could not locate libmariadb.so under ${MARIADB_PREFIX}"
+                warn "  Tools that dlopen libmariadb.so.3 (HammerDB, sysbench-mysql) may fail."
+                warn "  Find the lib with:  find ${MARIADB_PREFIX} -name 'libmariadb.so*'"
+                return 0
+            fi
+
+            local ldconf=/etc/ld.so.conf.d/mariadb-tidesql.conf
+            local need_write=1
+            if [[ -f "$ldconf" ]] && grep -qxF "$mariadb_libdir" "$ldconf" 2>/dev/null; then
+                need_write=0
+            fi
+            if (( need_write )); then
+                info "Registering ${mariadb_libdir} with ldconfig (writing ${ldconf})..."
+                echo "$mariadb_libdir" | run_privileged tee "$ldconf" >/dev/null
+            fi
+            run_privileged ldconfig
+
+            if ldconfig -p 2>/dev/null | grep -q 'libmariadb\.so\.3'; then
+                ok "libmariadb.so.3 is now resolvable via ldconfig"
+            else
+                warn "ldconfig ran but libmariadb.so.3 still not resolvable."
+                warn "  Inspect:  ldconfig -p | grep libmariadb"
+                warn "  Inspect:  cat ${ldconf}"
+            fi
+            ;;
+        macos)
+            info "macOS: skipping system-wide registration."
+            info "  Tools linked against ${MARIADB_PREFIX}/lib/libmariadb.dylib at"
+            info "  build time pick it up via @rpath.  For tools that dlopen by"
+            info "  bare filename, export DYLD_LIBRARY_PATH=${MARIADB_PREFIX}/lib"
+            info "  in the shell that runs them."
+            ;;
+        windows)
+            info "Windows: skipping system-wide registration."
+            info "  Add ${MARIADB_PREFIX}/lib to your PATH so LoadLibraryEx"
+            info "  finds libmariadb.dll for tools that load it by bare name."
+            ;;
+        freebsd|netbsd|openbsd)
+            # BSD ldconfig is similar in spirit to Linux's but lives in
+            # different files and supports a live -m flag.  Try the most
+            # appropriate path; the live add is sufficient for the current
+            # process and any child it spawns until reboot.
+            local mariadb_libdir=""
+            local cand
+            for cand in "${MARIADB_PREFIX}/lib" "${MARIADB_PREFIX}/lib64"; do
+                if [[ -f "${cand}/libmariadb.so.3" || -f "${cand}/libmariadb.so" ]]; then
+                    mariadb_libdir="$cand"
+                    break
+                fi
+            done
+            if [[ -z "$mariadb_libdir" ]]; then
+                warn "BSD: could not locate libmariadb.so under ${MARIADB_PREFIX}"
+                return 0
+            fi
+
+            case "$OS" in
+                freebsd)
+                    info "FreeBSD: ldconfig -m ${mariadb_libdir}"
+                    run_privileged ldconfig -m "$mariadb_libdir"
+                    # Persist across reboot by adding the dir to one of
+                    # the standard conf files.  /usr/local/libdata/ldconfig
+                    # is the modern snippets dir; fall back to editing
+                    # /etc/ld-elf.so.conf if the snippets dir isn't there.
+                    if [[ -d /usr/local/libdata/ldconfig ]]; then
+                        local snip=/usr/local/libdata/ldconfig/tidesql-mariadb
+                        echo "$mariadb_libdir" | run_privileged tee "$snip" >/dev/null
+                        ok "FreeBSD: persisted via ${snip}"
+                    elif [[ -f /etc/ld-elf.so.conf ]]; then
+                        if ! grep -qxF "$mariadb_libdir" /etc/ld-elf.so.conf 2>/dev/null; then
+                            echo "$mariadb_libdir" | run_privileged tee -a /etc/ld-elf.so.conf >/dev/null
+                            ok "FreeBSD: appended to /etc/ld-elf.so.conf"
+                        fi
+                    fi
+                    ;;
+                netbsd)
+                    info "NetBSD: ldconfig -mr ${mariadb_libdir}"
+                    run_privileged ldconfig -mr "$mariadb_libdir"
+                    if [[ -f /etc/ld.so.conf ]] && \
+                       ! grep -qxF "$mariadb_libdir" /etc/ld.so.conf 2>/dev/null; then
+                        echo "$mariadb_libdir" | run_privileged tee -a /etc/ld.so.conf >/dev/null
+                        ok "NetBSD: appended to /etc/ld.so.conf"
+                    fi
+                    ;;
+                openbsd)
+                    # OpenBSD's ldconfig only consults /etc/rc.conf's
+                    # ldconfig=... and the per-boot hints file; there is
+                    # no .d/ snippet dir.  Adding the dir is therefore an
+                    # rc.conf edit which is too invasive for an installer
+                    # to do automatically.  Print the exact command.
+                    info "OpenBSD: append ${mariadb_libdir} to the ldconfig= line in /etc/rc.conf"
+                    info "  then run:  sudo ldconfig \$(cat /etc/rc.conf | sed -n 's/^ldconfig=\"\\(.*\\)\"/\\1/p')"
+                    info "  or per-session:  export LD_LIBRARY_PATH=${mariadb_libdir}:\$LD_LIBRARY_PATH"
+                    ;;
+            esac
+
+            if command -v ldconfig >/dev/null 2>&1 && \
+               ldconfig -r 2>/dev/null | grep -q 'libmariadb\.so\.3'; then
+                ok "libmariadb.so.3 is now resolvable via ldconfig"
+            fi
+            ;;
+        *)
+            warn "Unknown OS '$OS' -- skipped libmariadb registration."
+            ;;
+    esac
 }
 
 # Initialize MariaDB data directory & enable plugins 
