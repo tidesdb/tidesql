@@ -240,9 +240,23 @@ Core:
 - SQL savepoints (SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT)
 - START TRANSACTION WITH CONSISTENT SNAPSHOT
 - Lock-free concurrency (no THR_LOCK, TidesDB handles isolation internally)
-- Optional pessimistic row locking (tidesdb_pessimistic_locking=ON) for
-  workloads that depend on row-level serialization (e.g. TPC-C).
-  Locks are acquired by SELECT ... FOR UPDATE, UPDATE, DELETE, and INSERT
+- Pessimistic row locking (tidesdb_pessimistic_locking, ON by default).
+  Two-mode lock manager with shared (S) and exclusive (X) locks over a
+  65536-way hash-partitioned table.  Multiple S holders coexist on the
+  same row, X conflicts with any other holder, and new S requests block
+  while an X is queued so writers are never starved.  Writes acquire X
+  (write_row, fetch_row_by_pk in write-intent paths, write_row UNIQUE
+  secondary).  Plain reads acquire S under REPEATABLE-READ or
+  SERIALIZABLE, no lock under READ-COMMITTED or SNAPSHOT (MVCC snapshot
+  suffices).  Wait-for-graph deadlock detection bounded by
+  DEADLOCK_MAX_DEPTH, lock-wait timeout configurable via
+  tidesdb_lock_wait_timeout_ms (default 50 s, mirrors
+  innodb_lock_wait_timeout).  Lock entries recycle in place once empty
+  so per-partition memory is bounded by peak concurrent locks.  Status
+  counters tidesdb_lock_waits, tidesdb_lock_wait_us,
+  tidesdb_lock_deadlocks, tidesdb_lock_timeouts, tidesdb_lock_held,
+  tidesdb_lock_entries, tidesdb_lock_entry_recycles surface contention
+  for observability
 - LSM-tree storage with optional B+tree SSTable format
 - Compression (NONE, LZ4, LZ4_FAST, ZSTD, Snappy)
 - Bloom filters for fast key lookups
@@ -288,8 +302,13 @@ Core:
 - FLUSH TABLES FOR EXPORT (HA_CAN_EXPORT, consistent file copy)
 - Semi-consistent read (optimistic reads for UPDATE/DELETE at READ_COMMITTED)
 - SHOW ENGINE TIDESDB STATUS (DB stats, memory, cache, conflict info)
-- SHOW GLOBAL STATUS LIKE 'tidesdb%' (25 machine-readable status variables
-  for monitoring tools -- Prometheus, PMM, Datadog, etc.)
+- SHOW GLOBAL STATUS LIKE 'tidesdb%' monitoring variables for tools like
+  Prometheus, PMM, Datadog -- column-family and memtable bytes, cache hit
+  rate, tombstone density aggregates, plus lock-manager observability
+  (tidesdb_lock_waits, tidesdb_lock_wait_us, tidesdb_lock_deadlocks,
+  tidesdb_lock_timeouts, tidesdb_lock_held, tidesdb_lock_entries,
+  tidesdb_lock_entry_recycles) and back-pressure wait counters
+  (tidesdb_backpressure_waits, tidesdb_backpressure_wait_us)
 - Handlerton lifecycle + administrative hooks wired:
     drop_database    DROP DATABASE removes all TidesDB CFs for the db
     flush_logs       FLUSH LOGS syncs the TidesDB WAL (safe before backup)
@@ -372,12 +391,21 @@ Dynamic (SET GLOBAL at runtime):
   checkpoint_dir            Set to a path to trigger hard-link checkpoint
   print_all_conflicts       Log all TDB_ERR_CONFLICT events (default: OFF)
   pessimistic_locking       Enable plugin-level row locks for SELECT...FOR UPDATE,
-                            UPDATE, DELETE, and INSERT (default: OFF). All
-                            write-intent statements acquire per-row locks,
-                            including autocommit. Uses a partitioned hash-table
-                            lock manager with wait-for-graph deadlock detection.
-                            Locks can cover non-existing PK values. Enable for
-                            TPC-C or workloads needing row-level serialization.
+                            UPDATE, DELETE, and INSERT (default: ON).  Two-mode
+                            S/X lock manager over a 65536-way hash-partitioned
+                            table.  Writes acquire X; plain reads under
+                            REPEATABLE-READ or SERIALIZABLE acquire S (multiple
+                            S holders coexist), while READ-COMMITTED and
+                            SNAPSHOT reads take no lock and rely on MVCC.
+                            A new S blocks while an X is queued so writers
+                            cannot be starved.  Wait-for-graph deadlock
+                            detection with bounded depth, lock-wait timeout
+                            controlled by tidesdb_lock_wait_timeout_ms.  Locks
+                            can cover non-existing keys (SFU on a missing row
+                            blocks INSERT of that key).  OFF reverts to pure
+                            optimistic MVCC, where conflicts surface as
+                            HA_ERR_LOCK_DEADLOCK at COMMIT and the application
+                            must retry.
   promote_primary           Set to ON to promote a replica to primary
                             (trigger variable, resets to OFF after promotion)
   fts_min_word_len          Minimum word length for FTS indexing (default: 3)
@@ -391,6 +419,19 @@ Session (SET SESSION tidesdb_...):
 
   ttl                       Per-session TTL override in seconds (default: 0)
   skip_unique_check         Skip PK/unique checks on INSERT (default: OFF)
+  lock_wait_timeout_ms      Milliseconds a pessimistic row-lock acquire
+                            waits before returning HA_ERR_LOCK_WAIT_TIMEOUT
+                            (default: 50000, mirrors innodb_lock_wait_timeout).
+                            0 disables the bound and the wait is interrupted
+                            only by KILL QUERY.
+  backpressure_wait_timeout_ms
+                            Milliseconds the plugin blocks a writer on
+                            TidesDB back-pressure (memtable, flush queue,
+                            or L0 backlog at soft cap) before surfacing
+                            the condition to the SQL layer as
+                            HA_ERR_LOCK_WAIT_TIMEOUT (default: 60000).
+                            0 disables blocking and the back-pressure
+                            signal returns immediately.
   single_delete_primary     Route primary-CF DELETEs through
                             tidesdb_txn_single_delete (default: OFF).
                             Caller promises the session does no UPDATE
@@ -560,6 +601,12 @@ Available tests (51 total, 300+ cases):
   tidesdb_per_index_btree     Per-index USE_BTREE option
   tidesdb_pessimistic_forupdate    SELECT FOR UPDATE serialization (pessimistic locking)
   tidesdb_pessimistic_insert_lock  Pessimistic locking edge cases (non-existing rows, INSERT)
+  tidesdb_pessimistic_shared       Shared-lock coexistence, X waits for S, writer fairness, RC no-lock
+  tidesdb_pessimistic_deadlock_cycle  Two-row deadlock cycle, walker returns ER_LOCK_DEADLOCK
+  tidesdb_pessimistic_reentry      Same-trx re-acquire is a no-op (X subsumes S, same-mode skipped)
+  tidesdb_pessimistic_upgrade      Sole-holder S to X upgrade; multi-holder upgrade rejection
+  tidesdb_pessimistic_killwait     KILL QUERY wakes a blocked acquire promptly
+  tidesdb_pessimistic_timeout      tidesdb_lock_wait_timeout_ms bounds a blocked acquire
   tidesdb_pk_index            Primary key and secondary index scans
   tidesdb_rename              Table rename
   tidesdb_replace_iodku       REPLACE INTO and INSERT ON DUPLICATE KEY UPDATE

@@ -1,0 +1,58 @@
+--source include/have_tidesdb.inc
+#
+# Exercises the pessimistic lock manager's wait-for graph traversal by
+# forcing a real two-row cycle.  T1 holds X on row 1 and waits for X on
+# row 2; T2 holds X on row 2 and asks for X on row 1.  The walker on T2's
+# acquire must follow T1's wait edge back to T2's grant and return
+# HA_ERR_LOCK_DEADLOCK, which MariaDB surfaces as ER_LOCK_DEADLOCK.
+#
+
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
+
+CREATE TABLE c (
+  id  INT PRIMARY KEY,
+  v   INT NOT NULL
+) ENGINE=TidesDB;
+
+INSERT INTO c VALUES (1, 10), (2, 20);
+
+connect (a, localhost, root,,);
+connect (b, localhost, root,,);
+
+connection a;
+BEGIN;
+UPDATE c SET v = v + 1 WHERE id = 1;
+
+connection b;
+BEGIN;
+UPDATE c SET v = v + 1 WHERE id = 2;
+
+# T1 (a) blocks waiting for T2 (b)'s X on row 2.
+connection a;
+--send UPDATE c SET v = v + 1 WHERE id = 2
+
+# T2 (b) asks for X on row 1.  The walker sees T1 waiting on row 2,
+# whose holder is T2, and concludes that granting row 1 to T2 closes
+# the cycle.  T2 is the requestor, so it is the trx that takes the
+# deadlock abort.
+connection b;
+--error ER_LOCK_DEADLOCK
+UPDATE c SET v = v + 1 WHERE id = 1;
+ROLLBACK;
+
+# T2's rollback released its X on row 2, so T1's --send completes.
+connection a;
+--reap
+COMMIT;
+
+connection default;
+--echo # Row 1 incremented by T1 only (T2 aborted); row 2 incremented by T1 only.
+SELECT * FROM c ORDER BY id;
+
+disconnect a;
+disconnect b;
+connection default;
+DROP TABLE c;
+
+--source suite/tidesdb/include/cleanup_tidesdb.inc
+--echo # Done.
