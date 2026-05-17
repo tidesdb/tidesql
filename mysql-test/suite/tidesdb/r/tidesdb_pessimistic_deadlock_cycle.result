@@ -12,8 +12,10 @@ UPDATE c SET v = v + 1 WHERE id = 1;
 connection b;
 BEGIN;
 UPDATE c SET v = v + 1 WHERE id = 2;
+connection default;
 connection a;
 UPDATE c SET v = v + 1 WHERE id = 2;
+connection default;
 connection b;
 UPDATE c SET v = v + 1 WHERE id = 1;
 ERROR 40001: Deadlock found when trying to get lock; try restarting transaction
