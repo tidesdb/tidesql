@@ -100,9 +100,27 @@ SET SESSION transaction_isolation = 'REPEATABLE-READ';
 BEGIN;
 SELECT bal FROM acct WHERE id = 1;
 
+# Snapshot the lock-wait counter so we can detect s2 entering cond_wait.
+connection default;
+--disable_query_log
+let $waits_before_s2 = `SELECT VARIABLE_VALUE+0 FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='TIDESDB_LOCK_WAITS'`;
+--enable_query_log
+
 connection s2;
 BEGIN;
 --send UPDATE acct SET bal = bal + 1 WHERE id = 1
+
+# Without this barrier s3's SELECT can reach the lock manager before s2's
+# UPDATE does, take S alongside s1, and prevent s2 from ever being
+# promoted (writer fairness only applies when the X request is already
+# queued).  Wait until Tidesdb_lock_waits increments to confirm s2 is
+# parked in the wait queue before firing s3.
+connection default;
+let $wait_condition =
+  SELECT (VARIABLE_VALUE+0) > $waits_before_s2
+    FROM information_schema.GLOBAL_STATUS
+   WHERE VARIABLE_NAME = 'TIDESDB_LOCK_WAITS';
+--source include/wait_condition.inc
 
 connection s3;
 SET SESSION transaction_isolation = 'REPEATABLE-READ';
