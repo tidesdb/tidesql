@@ -144,7 +144,7 @@ static constexpr uint OBJSTORE_BACKEND_S3 = 1;
    path_to_cf_name, schema_cf, and discover stay in sync. */
 static constexpr const char CF_DB_TABLE_SEP[] = "__";
 
-/* Schema CF key encoding: "db_name<SEP>table_name" with no trailing NUL.
+/* Schema CF key encoding "db_name<SEP>table_name" with no trailing NUL.
    The null byte separator is unambiguous because MariaDB identifiers
    cannot contain NUL.  Used by schema_cf_key, schema_cf_key_from_path,
    the discover prefix builders, and the schema_cf_ensure_databases scan. */
@@ -163,14 +163,14 @@ static constexpr const char MARIADB_REL_PATH_PREFIX[] = "./";
 static constexpr size_t MARIADB_REL_PATH_PREFIX_LEN = 2;
 
 /* MariaDB sort-key null-indicator bytes prepended to nullable key parts
-   in make_comparable_key.  Convention: 0 sorts NULLs first under memcmp,
+   in make_comparable_key.  Convention 0 sorts NULLs first under memcmp,
    1 marks a present value. */
 static constexpr uchar SORT_KEY_NULL = 0;
 static constexpr uchar SORT_KEY_NOT_NULL = 1;
 
 /* Slot indices into the 4-double MBR layout used by spatial_qmbr_ and
    tdb_mbr_t-shaped buffers.  Order matches the on-disk SPATIAL_MBR_VALUE_LEN
-   layout: [xmin, ymin, xmax, ymax]. */
+   layout [xmin, ymin, xmax, ymax]. */
 static constexpr uint MBR_XMIN_IDX = 0;
 static constexpr uint MBR_YMIN_IDX = 1;
 static constexpr uint MBR_XMAX_IDX = 2;
@@ -189,7 +189,7 @@ static constexpr uint64_t HILBERT_RANGE_FULL_HI = UINT64_MAX;
 static constexpr uint MRR_ACCEPT_MIN_RANGES = 2;
 
 /* Selectivity values used in info() / analyze() for index rec_per_key.
-   UNIQUE: exactly one row per distinct value.  FLOOR: smallest plausible
+   UNIQUE exactly one row per distinct value.  FLOOR smallest plausible
    estimate so the optimizer never sees rec_per_key=0 (treated as "unknown"). */
 static constexpr ulong REC_PER_KEY_UNIQUE = 1;
 static constexpr ulong REC_PER_KEY_FLOOR = 1;
@@ -274,7 +274,7 @@ static constexpr char FTS_BOOL_OP_TRUNC = '*';
 
 /* BM25 (Okapi / Robertson Walker) ranking formula constants.
    Used in ft_init_ext to score postings.  IDF uses the Lucene
-   smoothed form: log((N - df + EPS) / (df + EPS) + SHIFT).  TF
+   smoothed form, log((N - df + EPS) / (df + EPS) + SHIFT).  TF
    normalization uses (tf * (k1 + BOOST)) / (tf + k1 * (BASE - b +
    b * dl / avgdl)). */
 static constexpr double BM25_IDF_EPSILON = 0.5;
@@ -459,6 +459,15 @@ class ha_tidesdb_inplace_ctx : public inplace_alter_handler_ctx
     }
 };
 
+/* Pessimistic lock mode.  Shared is read-intent and compatible with itself,
+   exclusive is write-intent and conflicts with everything.  Declared here
+   because tidesdb_trx_t carries a waiting_on_mode field. */
+enum tdb_lock_mode_t
+{
+    TDB_LOCK_MODE_S = 0,
+    TDB_LOCK_MODE_X = 1,
+};
+
 /*
   Per-connection TidesDB transaction context.
   Stored via thd_set_ha_data(); shared by all handler objects on the
@@ -475,21 +484,27 @@ struct tidesdb_trx_t
     tidesdb_isolation_level_t isolation_level; /* from first table opened */
     uint64_t txn_generation; /* monotonic counter; incremented each time a new txn is created */
 
-    /* Plugin-level row locks -- lock table entries held by this txn.
-       Acquired during SELECT FOR UPDATE (index_read_map with write intent)
-       and UPDATE/DELETE (update_row/delete_row).  Released on commit/rollback.
-       Implements pessimistic row locking with deadlock detection via a global
-       lock table (hash table with wait queues and wait-for graph traversal).
-       This in a way emulates InnoDB-style row locks for workloads like TPC-C that
-       require read-modify-write serialization on the same key. */
+    /* Plugin-level row lock state for this txn.  The lock manager supports
+       shared (read-intent) and exclusive (write-intent) modes; multiple S
+       holders coexist on the same lock, X blocks any other holder, and a
+       new S blocks while an X is queued so writers are never starved by a
+       stream of readers.  Locks are acquired from write_row, fetch_row_by_pk,
+       and iter_read_current depending on session isolation and write intent,
+       and released en masse at commit or rollback. */
 
-    struct tdb_row_lock_t *held_locks_head; /* singly-linked list of held lock entries */
-    uint64_t lock_txn_id; /* unique ID for deadlock detection (= txn_generation) */
-    /* `waiting_on` is read by other threads during deadlock graph walks (from
-       arbitrary partitions) without holding this trx's partition mutex.
-       Atomic access guarantees the reader sees a published pointer value and
-       never a torn write. */
-    std::atomic<struct tdb_row_lock_t *> waiting_on;
+    struct tdb_lock_request_t *held_locks_head;
+
+    /* What this txn is currently waiting for, published as two fields the
+       deadlock walker can read lock-free from other partitions without ever
+       dereferencing a request struct.  Lock entries themselves are never
+       freed at runtime (find_or_create recycles empty slots in place), so
+       waiting_on_lock is always a safe pointer to follow.  The writing
+       thread stores waiting_on_mode before waiting_on_lock with release
+       ordering, and walkers load waiting_on_lock with acquire then read the
+       mode, so a walker that sees a non-null lock pointer also sees the
+       matching mode. */
+    std::atomic<struct tdb_row_lock_t *> waiting_on_lock;
+    tdb_lock_mode_t waiting_on_mode;
 };
 
 /*

@@ -37,6 +37,7 @@ extern "C"
 #include <cstring>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -57,7 +58,7 @@ extern "C"
 
 /* Forward-declared for tdb_rc_to_ha(); defined with sysvars below */
 static my_bool srv_print_all_conflicts = 0;
-static my_bool srv_pessimistic_locking = 0;
+static my_bool srv_pessimistic_locking = 1;
 static mysql_mutex_t last_conflict_mutex;
 /* Buffer for the most recent conflict diagnostic surfaced under
    `Last conflict:` in SHOW ENGINE TIDESDB STATUS.  Sized comfortably above
@@ -101,14 +102,19 @@ static int tdb_rc_to_ha(int rc, const char *ctx)
         case TDB_ERR_LOCKED:
             return HA_ERR_LOCK_WAIT_TIMEOUT;
 
-        /* Memory pressure -- retriable, back off and let flush/compaction
-           free memory. mapped to deadlock so MariaDB retries. */
+        /* Back-pressure signal from the library (memtable / flush queue
+           / L0 backlog at soft cap).  Callers that go through the
+           tdb_txn_*_blocking wrappers absorb this transparently by
+           waiting for capacity, so this fall-through path only fires
+           when the configured wait timeout has been exhausted or no
+           wrapper is in play -- in either case lock-wait-timeout is the
+           accurate name (not deadlock; nothing is locked). */
         case TDB_ERR_MEMORY_LIMIT:
-            return HA_ERR_LOCK_DEADLOCK;
+            return HA_ERR_LOCK_WAIT_TIMEOUT;
 
-        /* Hard out-of-memory.  Distinct from TDB_ERR_MEMORY_LIMIT above,
-           which is a soft pressure signal mapped to deadlock so MariaDB
-           retries; TDB_ERR_MEMORY means the allocator itself failed. */
+        /* Hard out-of-memory.  Distinct from TDB_ERR_MEMORY_LIMIT above
+           (a soft back-pressure signal); TDB_ERR_MEMORY means the
+           allocator itself failed. */
         case TDB_ERR_MEMORY:
             sql_print_error("[TIDESDB] %s: TDB_ERR_MEMORY", ctx);
             return HA_ERR_OUT_OF_MEM;
@@ -170,6 +176,127 @@ static inline int tidesdb_txn_delete_cf(tidesdb_txn_t *txn, tidesdb_column_famil
                              : tidesdb_txn_delete(txn, cf, key, key_size);
 }
 
+/* ******************** Library back-pressure wait ******************** */
+/*
+  TDB_ERR_MEMORY_LIMIT is the library's soft back-pressure signal -- the
+  memtable / flush queue / L0 backlog is at its cap and the writer should
+  pause until flush+compaction free capacity.  Surfacing that to the SQL
+  layer as HA_ERR_LOCK_DEADLOCK -- as earlier revisions did -- breaks
+  clients that treat 1213 as fatal and do not retry (bulk loaders, batch
+  ETL, schema-build scripts), failing entire sessions after long writes
+  even though nothing is locked and the engine just needs a moment to
+  drain.
+
+  The put/commit/delete wrappers below sleep with exponential backoff
+  until the library accepts the operation again, the wait timeout
+  expires, or the connection is killed.  After exhaustion the original
+  TDB_ERR_MEMORY_LIMIT bubbles up through tdb_rc_to_ha and maps to
+  HA_ERR_LOCK_WAIT_TIMEOUT, which is the accurate name (no lock is held).
+*/
+static constexpr uint TDB_BACKPRESSURE_BACKOFF_MIN_US = 100;   /* 0.1 ms initial */
+static constexpr uint TDB_BACKPRESSURE_BACKOFF_MAX_US = 50000; /* 50 ms cap   */
+static constexpr uint TDB_BACKPRESSURE_BACKOFF_MULTIPLIER = 2;
+static constexpr ulong TDB_BACKPRESSURE_DEFAULT_TIMEOUT_MS = 60000;     /* 60 s default */
+static constexpr ulong TDB_BACKPRESSURE_MAX_TIMEOUT_MS = 3600000;       /* 1 h max */
+static constexpr ulong TDB_BACKPRESSURE_MIN_TIMEOUT_MS = 0;             /* 0 disables blocking */
+static constexpr uint TDB_BACKPRESSURE_KILL_CHECK_INTERVAL_US = 100000; /* 100 ms */
+
+/* Pessimistic row-lock wait bounds.  Default mirrors innodb_lock_wait_timeout
+   (50 seconds).  0 means wait indefinitely, bounded only by KILL QUERY. */
+static constexpr ulong TDB_LOCK_WAIT_DEFAULT_TIMEOUT_MS = 50000;
+static constexpr ulong TDB_LOCK_WAIT_MIN_TIMEOUT_MS = 0;
+static constexpr ulong TDB_LOCK_WAIT_MAX_TIMEOUT_MS = 3600000;
+static constexpr ulonglong TDB_NS_PER_MS = 1000000ULL;
+static constexpr ulonglong TDB_US_PER_S = 1000000ULL;
+
+/* Stats -- bumped from the wrapper, read by tidesdb_refresh_status_vars. */
+static std::atomic<long long> srv_stat_backpressure_waits{0};
+static std::atomic<long long> srv_stat_backpressure_wait_us{0};
+static std::atomic<long long> srv_stat_lock_waits{0};
+static std::atomic<long long> srv_stat_lock_wait_us{0};
+static std::atomic<long long> srv_stat_lock_deadlocks{0};
+static std::atomic<long long> srv_stat_lock_timeouts{0};
+static std::atomic<long long> srv_stat_lock_held{0};
+static std::atomic<long long> srv_stat_lock_entries{0};
+static std::atomic<long long> srv_stat_lock_entry_recycles{0};
+
+static ulong tdb_backpressure_timeout_ms(THD *thd);
+static ulong tdb_lock_wait_timeout_ms(THD *thd);
+
+/*
+  Run op() and, if the library reports back-pressure, sleep with exponential
+  backoff and retry until success, timeout exhaustion, or connection kill.
+  The kill-check cadence is bounded so even a long sleep responds promptly
+  to KILL QUERY.  After the deadline the unmodified TDB_ERR_MEMORY_LIMIT is
+  returned so the caller's existing error mapping still applies.
+*/
+template <typename Op>
+static int tdb_with_backpressure_wait(THD *thd, Op &&op)
+{
+    int rc = op();
+    if (likely(rc != TDB_ERR_MEMORY_LIMIT)) return rc;
+
+    const ulong timeout_ms = tdb_backpressure_timeout_ms(thd);
+    if (timeout_ms == 0) return rc;
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    uint sleep_us = TDB_BACKPRESSURE_BACKOFF_MIN_US;
+    bool counted = false;
+    long long waited_us = 0;
+
+    while (rc == TDB_ERR_MEMORY_LIMIT)
+    {
+        if (thd && thd_killed(thd)) break;
+
+        auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) break;
+        auto remaining_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+        uint capped_sleep_us = std::min(sleep_us, TDB_BACKPRESSURE_KILL_CHECK_INTERVAL_US);
+        if ((long long)capped_sleep_us > remaining_us) capped_sleep_us = (uint)remaining_us;
+
+        std::this_thread::sleep_for(std::chrono::microseconds(capped_sleep_us));
+        waited_us += capped_sleep_us;
+        if (!counted)
+        {
+            srv_stat_backpressure_waits.fetch_add(1, std::memory_order_relaxed);
+            counted = true;
+        }
+        sleep_us = std::min<uint>(sleep_us * TDB_BACKPRESSURE_BACKOFF_MULTIPLIER,
+                                  TDB_BACKPRESSURE_BACKOFF_MAX_US);
+        rc = op();
+    }
+
+    if (waited_us > 0)
+        srv_stat_backpressure_wait_us.fetch_add(waited_us, std::memory_order_relaxed);
+    return rc;
+}
+
+/* Thin wrappers around the three library write entry points that can return
+   TDB_ERR_MEMORY_LIMIT under sustained write load.  Other callers that do
+   not go through these still get the accurate HA_ERR_LOCK_WAIT_TIMEOUT
+   mapping from tdb_rc_to_ha but without the in-plugin block. */
+static inline int tdb_txn_put_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
+                                       const uint8_t *key, size_t key_size, const uint8_t *value,
+                                       size_t value_size, time_t ttl)
+{
+    return tdb_with_backpressure_wait(
+        thd, [&]() { return tidesdb_txn_put(txn, cf, key, key_size, value, value_size, ttl); });
+}
+
+static inline int tdb_txn_commit_blocking(THD *thd, tidesdb_txn_t *txn)
+{
+    return tdb_with_backpressure_wait(thd, [&]() { return tidesdb_txn_commit(txn); });
+}
+
+static inline int tdb_txn_delete_cf_blocking(THD *thd, tidesdb_txn_t *txn,
+                                             tidesdb_column_family_t *cf, const uint8_t *key,
+                                             size_t key_size, bool use_single_delete)
+{
+    return tdb_with_backpressure_wait(
+        thd, [&]() { return tidesdb_txn_delete_cf(txn, cf, key, key_size, use_single_delete); });
+}
+
 /* MariaDB data directory */
 extern MYSQL_PLUGIN_IMPORT char mysql_real_data_home[];
 
@@ -184,53 +311,78 @@ static handlerton *tidesdb_hton;
 
 /* ******************** Plugin-level row lock table ******************** */
 /*
-  Hash-table-based row-level lock manager with deadlock detection.
+  Hash-table-based row-level lock manager with two modes (S, X), wait queue
+  for fairness, and best-effort deadlock detection.
 
   Design:
-  -- Partitioned hash table       hash(pk_bytes) % NUM_PARTITIONS -> partition
-  -- Each partition has its own mutex protecting a linked-list hash chain
-  -- Lock entries track           owner txn, PK bytes, condition variable for waiters
-  -- Deadlock detection           on wait, walk the wait-for graph (waiter->holder->waiter)
-     If a cycle is found, return HA_ERR_LOCK_DEADLOCK immediately
-  -- Per-txn held_locks list for bulk release at COMMIT/ROLLBACK
-
-  This gives per-row granularity without false sharing, proper blocking
-  semantics for SELECT ... FOR UPDATE, and deadlock resolution for
-  multi-table transactions.
+  - 65536 hash partitions over XXH3 of the row key; each partition has its
+    own mutex and a linked-list hash chain of lock entries.
+  - Each lock entry has two intrusive lists, both mutex-guarded:
+      granted_head -- currently-granted requests on this row
+      waiting_head -- FIFO of requests still waiting
+  - Each request (tdb_lock_request_t) ties (trx, lock, mode) together and
+    threads onto trx->held_locks_head (granted) or trx->waiting_on (waiting).
+  - Compatibility S/S is compatible; S/X and X/X are not.  A new S also
+    blocks when an X is waiting, so writers cannot be starved by a stream
+    of readers.
+  - Re-entry on the same lock, if this trx already holds it in a mode
+    compatible with the request (X subsumes S; S satisfies S), return 0.
+    Upgrade S->X is allowed only when this trx is the sole granted holder
+    AND no waiters exist; otherwise we reject as HA_ERR_LOCK_DEADLOCK
+    rather than introduce a self-deadlock with our own S-grant.
+  - For deadlock detection, when we wait on a lock, walk every granted holder's
+    wait-for chain.  Loads are atomic, lock+trx structs are never freed,
+    so a stale read can only produce a false-positive (caller retries) or
+    a false-negative (caller times out via lock-wait-timeout) -- never
+    memory corruption.
+  - Release walks the trx's held_locks_head, unlinks each request from its
+    lock's granted list, promotes any waiting requests now compatible with
+    the remaining granted set, and broadcasts the lock's cond.
 */
 
-/* Number of hash partitions for the row lock table.
-   65536 partitions (~3 MB of mutex+pointer state on x86_64 Linux)
-   virtually eliminates false contention between unrelated rows.  The chain
-   pointers themselves are zero-initialised, so the only real cost is the
-   mutex array. */
+/* Number of hash partitions for the row lock table.  65536 partitions
+   (~3 MB of mutex+pointer state on x86_64 Linux) virtually eliminates
+   false contention between unrelated rows. */
 static constexpr ulong ROW_LOCK_PARTITIONS = 65536;
 
-/* Maximum depth for wait-for-graph traversal during deadlock detection.
-   Prevents infinite loops on corrupted graph state. */
+/* Maximum depth for wait-for-graph traversal during deadlock detection. */
 static constexpr int DEADLOCK_MAX_DEPTH = 100;
 
-/* Row lock entry in the hash table.
-   owner_txn_id and owner_trx are read by deadlock graph walks running on
-   OTHER threads without holding this partition's mutex -- they must be
-   atomic so readers never observe a torn write.  All writes still happen
-   under the owning partition's mutex.  Lock entries are never freed once
-   created (only the owner fields reset to 0/null on release), so pointers
-   traversed during the walk always point to valid memory. */
-struct tdb_row_lock_t
+/* tdb_lock_mode_t is declared in ha_tidesdb.h so the trx struct can name it. */
+
+/* Lock request -- one per (trx, lock, mode) instance.
+   Lifetime is allocated in row_lock_acquire, freed when the trx releases
+   the lock (commit/rollback) or when the wait is aborted (deadlock,
+   timeout, kill).  Lives on exactly one of:
+     - lock->granted_head  (after grant)        + trx->held_locks_head
+     - lock->waiting_head  (before grant)       + trx->waiting_on
+   list_next chains the per-lock list (granted or waiting).
+   held_next chains the per-trx held-list. */
+struct tdb_lock_request_t
 {
-    uchar *pk;                              /* heap-allocated PK bytes */
-    uint pk_len;                            /* length of PK bytes */
-    std::atomic<uint64_t> owner_txn_id;     /* txn that holds this lock (0 = free) */
-    std::atomic<tidesdb_trx_t *> owner_trx; /* trx struct of the holder */
-    mysql_cond_t cond;                      /* waiters sleep on this */
-    uint waiters;                           /* number of threads waiting (mutex-guarded) */
-    tdb_row_lock_t *hash_next;              /* next in hash chain (mutex-guarded) */
-    tdb_row_lock_t *held_next;              /* next in per-txn held list (owner-only) */
-    uint partition;                         /* which partition this belongs to */
+    tidesdb_trx_t *trx;
+    struct tdb_row_lock_t *lock;
+    tdb_lock_mode_t mode;
+    bool granted;
+    tdb_lock_request_t *list_next; /* in lock->granted_head OR lock->waiting_head */
+    tdb_lock_request_t *held_next; /* in trx->held_locks_head (granted requests only) */
 };
 
-/* One partition of the lock table */
+/* Lock-table entry.  Granted and waiting lists are mutex-guarded by the
+   owning partition's mutex.  Lock entries are never freed during runtime
+   (only at plugin deinit), so deadlock walkers can read these pointers
+   from other partitions without worrying about freed memory. */
+struct tdb_row_lock_t
+{
+    uchar *pk;                        /* heap-allocated key bytes */
+    uint pk_len;                      /* length of key bytes */
+    tdb_lock_request_t *granted_head; /* mutex-guarded */
+    tdb_lock_request_t *waiting_head; /* mutex-guarded; FIFO */
+    mysql_cond_t cond;                /* waiters sleep on this */
+    tdb_row_lock_t *hash_next;        /* mutex-guarded */
+    uint partition;                   /* which partition (cached for release) */
+};
+
 struct tdb_lock_partition_t
 {
     mysql_mutex_t mutex;
@@ -245,15 +397,47 @@ static inline uint tdb_lock_part(const uchar *key, uint len)
     return (uint)(h % ROW_LOCK_PARTITIONS);
 }
 
+/* S/S compatible; everything else conflicts. */
+static inline bool tdb_lock_modes_compatible(tdb_lock_mode_t held, tdb_lock_mode_t want)
+{
+    return held == TDB_LOCK_MODE_S && want == TDB_LOCK_MODE_S;
+}
+
 /* Find or create a lock entry in the partition's hash chain.
-   Caller must hold partition mutex. */
+   Caller must hold partition mutex.
+
+   For memory hygiene, we lock entry structs are never my_free'd during runtime
+   because lock-free deadlock walkers from other partitions can hold
+   pointers into them (transiently, via cur->waiting_on->lock).  Instead,
+   an entry whose granted_head and waiting_head are both empty is recycled
+   here -- on the next lookup for a different key on this partition, we
+   overwrite the empty entry's pk bytes and reuse its mutex/cond.  Walkers
+   never dereference an entry's pk, so a key rewrite is invisible to them.
+   The result is per-partition memory is bounded by peak-concurrent-locks, not
+   running-total. */
 static tdb_row_lock_t *tdb_lock_find_or_create(tdb_lock_partition_t *part, uint part_idx,
                                                const uchar *pk, uint pk_len)
 {
+    tdb_row_lock_t *reusable = NULL;
     for (tdb_row_lock_t *e = part->chain; e; e = e->hash_next)
     {
         if (e->pk_len == pk_len && memcmp(e->pk, pk, pk_len) == 0) return e;
+        if (!reusable && e->granted_head == NULL && e->waiting_head == NULL) reusable = e;
     }
+
+    if (reusable)
+    {
+        uchar *new_pk = (uchar *)my_malloc(PSI_NOT_INSTRUMENTED, pk_len, MYF(0));
+        if (!new_pk) return NULL;
+        memcpy(new_pk, pk, pk_len);
+        my_free(reusable->pk);
+        reusable->pk = new_pk;
+        reusable->pk_len = pk_len;
+        /* granted_head, waiting_head, cond, hash_next, partition stay. */
+        srv_stat_lock_entry_recycles.fetch_add(1, std::memory_order_relaxed);
+        return reusable;
+    }
+
     tdb_row_lock_t *e =
         (tdb_row_lock_t *)my_malloc(PSI_NOT_INSTRUMENTED, sizeof(tdb_row_lock_t), MYF(MY_ZEROFILL));
     if (!e) return NULL;
@@ -265,57 +449,160 @@ static tdb_row_lock_t *tdb_lock_find_or_create(tdb_lock_partition_t *part, uint 
     }
     memcpy(e->pk, pk, pk_len);
     e->pk_len = pk_len;
-    e->owner_txn_id.store(0, std::memory_order_relaxed);
-    e->owner_trx.store(NULL, std::memory_order_relaxed);
-    e->waiters = 0;
+    e->granted_head = NULL;
+    e->waiting_head = NULL;
     e->partition = part_idx;
     mysql_cond_init(0, &e->cond, NULL);
     e->hash_next = part->chain;
     part->chain = e;
+    srv_stat_lock_entries.fetch_add(1, std::memory_order_relaxed);
     return e;
 }
 
-/* Deadlock detection -- walk the wait-for graph with atomic loads.
-   Returns true if the requestor waiting on target_lock would create a cycle.
-
-   The walk does not hold any partition mutex, lock and trx structs are never
-   freed (locks stay in their hash chain for the lifetime of the plugin; trx
-   structs are freed only at connection close, which requires the connection
-   to have released all locks first).  The owner / waiting_on fields are
-   atomic so that cross-partition reads never tear.  Racy state observed
-   during the walk can produce a stale answer (false positive rare spurious
-   deadlock return, application retries; false negative wait and rely on
-   the lock-wait-timeout to recover).  Neither outcome corrupts memory. */
-static bool tdb_lock_would_deadlock(tidesdb_trx_t *requestor, tdb_row_lock_t *target_lock)
+static tdb_lock_request_t *tdb_lock_request_alloc(tidesdb_trx_t *trx, tdb_row_lock_t *lock,
+                                                  tdb_lock_mode_t mode, bool granted)
 {
-    /* Walk owner -> owner.waiting_on -> next_owner -> ... starting from
-       target_lock's current owner.  If the walk reaches `requestor` there
-       is a cycle and granting the lock would deadlock.  Depth capped at
-       DEADLOCK_MAX_DEPTH to bound pathological cases. */
-    tidesdb_trx_t *cur = target_lock->owner_trx.load(std::memory_order_acquire);
-    for (int depth = 0; depth < DEADLOCK_MAX_DEPTH && cur; depth++)
+    tdb_lock_request_t *req = (tdb_lock_request_t *)my_malloc(
+        PSI_NOT_INSTRUMENTED, sizeof(tdb_lock_request_t), MYF(MY_ZEROFILL));
+    if (!req) return NULL;
+    req->trx = trx;
+    req->lock = lock;
+    req->mode = mode;
+    req->granted = granted;
+    req->list_next = NULL;
+    req->held_next = NULL;
+    return req;
+}
+
+/* Find the granted request held by `trx` on `lock`, or NULL.
+   Caller must hold partition mutex. */
+static tdb_lock_request_t *tdb_lock_find_self_granted(tdb_row_lock_t *lock, tidesdb_trx_t *trx)
+{
+    for (tdb_lock_request_t *r = lock->granted_head; r; r = r->list_next)
     {
-        if (cur == requestor) return true; /* cycle */
-        tdb_row_lock_t *cur_waiting = cur->waiting_on.load(std::memory_order_acquire);
-        if (!cur_waiting) break; /* not currently waiting */
-        cur = cur_waiting->owner_trx.load(std::memory_order_acquire);
+        if (r->trx == trx) return r;
+    }
+    return NULL;
+}
+
+/* Append req to the lock's waiting FIFO.  Caller must hold partition mutex. */
+static void tdb_lock_waiting_append(tdb_row_lock_t *lock, tdb_lock_request_t *req)
+{
+    req->list_next = NULL;
+    if (!lock->waiting_head)
+    {
+        lock->waiting_head = req;
+        return;
+    }
+    tdb_lock_request_t *tail = lock->waiting_head;
+    while (tail->list_next) tail = tail->list_next;
+    tail->list_next = req;
+}
+
+/* Remove req from the lock's waiting list (if present).  Caller must hold
+   partition mutex.  Safe to call when req is not on the list. */
+static void tdb_lock_waiting_remove(tdb_row_lock_t *lock, tdb_lock_request_t *req)
+{
+    tdb_lock_request_t **pp = &lock->waiting_head;
+    while (*pp && *pp != req) pp = &(*pp)->list_next;
+    if (*pp == req)
+    {
+        *pp = req->list_next;
+        req->list_next = NULL;
+    }
+}
+
+/* Can a new request of mode `want` be granted given the current granted set?
+   For S, also blocks if any waiting X exists (writer fairness).
+   Caller must hold partition mutex. */
+static bool tdb_lock_can_grant(tdb_row_lock_t *lock, tdb_lock_mode_t want, tidesdb_trx_t *self)
+{
+    for (tdb_lock_request_t *r = lock->granted_head; r; r = r->list_next)
+    {
+        if (r->trx == self) continue; /* self never blocks self */
+        if (!tdb_lock_modes_compatible(r->mode, want)) return false;
+    }
+    if (want == TDB_LOCK_MODE_S)
+    {
+        for (tdb_lock_request_t *r = lock->waiting_head; r; r = r->list_next)
+        {
+            if (r->trx == self) continue;
+            if (r->mode == TDB_LOCK_MODE_X) return false;
+        }
+    }
+    return true;
+}
+
+/* Move newly-grantable waiters from waiting_head to granted_head.
+   Caller must hold partition mutex; caller is responsible for broadcasting
+   the lock's cond after this returns so promoted waiters wake up and link
+   themselves into their trx->held_locks_head. */
+static void tdb_lock_promote_waiters(tdb_row_lock_t *lock)
+{
+    while (lock->waiting_head)
+    {
+        tdb_lock_request_t *head = lock->waiting_head;
+        if (!tdb_lock_can_grant(lock, head->mode, head->trx)) break;
+        lock->waiting_head = head->list_next;
+        head->list_next = lock->granted_head;
+        lock->granted_head = head;
+        head->granted = true;
+    }
+}
+
+/* Deadlock detection that walks the wait-for graph one hop at a time,
+   always under the partition mutex of the lock being inspected.  Lock
+   entries are never freed at runtime so the lock pointers stored in
+   waiting_on_lock are always safe to follow, and trx structs outlive
+   any held lock so trx pointers are valid through the walk.  Request
+   structs are touched only while holding the relevant partition mutex,
+   so a concurrent release cannot free a request the walker is reading.
+   The walk follows one conflicting holder per hop; any cycle that
+   passes through other holders will be found as the parent acquire
+   path iterates.  Bounded by DEADLOCK_MAX_DEPTH. */
+static bool tdb_lock_would_deadlock(tidesdb_trx_t *requestor, tdb_row_lock_t *target_lock,
+                                    tdb_lock_mode_t want_mode)
+{
+    tdb_row_lock_t *cur_lock = target_lock;
+    tdb_lock_mode_t cur_mode = want_mode;
+
+    for (int depth = 0; depth < DEADLOCK_MAX_DEPTH; depth++)
+    {
+        tdb_lock_partition_t *part = &lock_partitions[cur_lock->partition];
+        tidesdb_trx_t *step_holder = NULL;
+
+        mysql_mutex_lock(&part->mutex);
+        for (tdb_lock_request_t *h = cur_lock->granted_head; h; h = h->list_next)
+        {
+            tidesdb_trx_t *holder = h->trx;
+            if (!holder) continue;
+            if (tdb_lock_modes_compatible(h->mode, cur_mode)) continue;
+            if (holder == requestor)
+            {
+                mysql_mutex_unlock(&part->mutex);
+                return true;
+            }
+            if (!step_holder) step_holder = holder;
+        }
+        mysql_mutex_unlock(&part->mutex);
+
+        if (!step_holder) return false;
+
+        tdb_row_lock_t *next_lock = step_holder->waiting_on_lock.load(std::memory_order_acquire);
+        if (!next_lock) return false;
+        cur_mode = step_holder->waiting_on_mode;
+        cur_lock = next_lock;
     }
     return false;
 }
 
 /*
-  Acquire a row lock. Returns 0 on success, HA_ERR_LOCK_DEADLOCK on deadlock.
-  Blocks if the row is locked by another transaction (unless deadlock detected).
-  Re-entrant -- returns immediately if already held by this txn.
-
-  Deadlock detection runs without the partition mutex held we publish our
-  wait intent (trx->waiting_on) under the mutex so other walkers see us,
-  drop the mutex, walk the wait-for graph with atomic loads, then re-acquire.
-  This keeps other lockers on the same partition unblocked while we walk
-  and removes the data races that the old code had when traversing pointers
-  in unrelated partitions.
+  Acquire a row lock in the given mode.  Returns 0 on success, an
+  HA_ERR_* code on failure.  Re-entrant for same/weaker mode; rejects
+  S->X upgrades that would self-deadlock as HA_ERR_LOCK_DEADLOCK.
 */
-static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len, THD *thd)
+static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len, THD *thd,
+                            tdb_lock_mode_t mode)
 {
     if (!lock_partitions || !trx) return 0;
 
@@ -331,114 +618,215 @@ static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len, THD 
         return HA_ERR_OUT_OF_MEM;
     }
 
-    /* Already own it? */
-    if (lock->owner_txn_id.load(std::memory_order_relaxed) == trx->lock_txn_id &&
-        lock->owner_trx.load(std::memory_order_relaxed) == trx)
+    /* Re-entry, do we already hold this lock? */
+    tdb_lock_request_t *self = tdb_lock_find_self_granted(lock, trx);
+    if (self)
     {
+        if (self->mode == TDB_LOCK_MODE_X || self->mode == mode)
+        {
+            /* X subsumes S; same-mode is identity. */
+            mysql_mutex_unlock(&part->mutex);
+            return 0;
+        }
+        /* self->mode == S, want X -- upgrade.  Allowed only when we are the
+           sole granted holder AND no waiters are queued; otherwise we'd
+           block on ourselves indirectly through our own S-grant. */
+        if (lock->granted_head == self && self->list_next == NULL && !lock->waiting_head)
+        {
+            self->mode = TDB_LOCK_MODE_X;
+            mysql_mutex_unlock(&part->mutex);
+            return 0;
+        }
         mysql_mutex_unlock(&part->mutex);
+        srv_stat_lock_deadlocks.fetch_add(1, std::memory_order_relaxed);
+        return HA_ERR_LOCK_DEADLOCK;
+    }
+
+    /* Fresh request from this trx. */
+    if (tdb_lock_can_grant(lock, mode, trx))
+    {
+        tdb_lock_request_t *req = tdb_lock_request_alloc(trx, lock, mode, true);
+        if (!req)
+        {
+            mysql_mutex_unlock(&part->mutex);
+            return HA_ERR_OUT_OF_MEM;
+        }
+        req->list_next = lock->granted_head;
+        lock->granted_head = req;
+        req->held_next = trx->held_locks_head;
+        trx->held_locks_head = req;
+        mysql_mutex_unlock(&part->mutex);
+        srv_stat_lock_held.fetch_add(1, std::memory_order_relaxed);
         return 0;
     }
 
-    /* Free? Claim it. */
-    if (lock->owner_txn_id.load(std::memory_order_relaxed) == 0)
+    /* Need to wait.  Append to the lock's FIFO waiting queue and publish
+       the lock and mode this trx is blocked on so the deadlock walker can
+       follow the wait-for edge without ever dereferencing a request
+       struct from another partition. */
+    tdb_lock_request_t *req = tdb_lock_request_alloc(trx, lock, mode, false);
+    if (!req)
     {
-        lock->owner_txn_id.store(trx->lock_txn_id, std::memory_order_release);
-        lock->owner_trx.store(trx, std::memory_order_release);
-        lock->held_next = trx->held_locks_head;
-        trx->held_locks_head = lock;
         mysql_mutex_unlock(&part->mutex);
-        return 0;
+        return HA_ERR_OUT_OF_MEM;
     }
-
-    /* Owned by someone else -- publish our wait intent so concurrent deadlock
-       walks that traverse through this trx can see what we're waiting on,
-       then drop the mutex to run the walk without blocking our partition. */
-    trx->waiting_on.store(lock, std::memory_order_release);
+    tdb_lock_waiting_append(lock, req);
+    trx->waiting_on_mode = mode;
+    trx->waiting_on_lock.store(lock, std::memory_order_release);
     mysql_mutex_unlock(&part->mutex);
 
-    bool deadlock = tdb_lock_would_deadlock(trx, lock);
+    bool deadlock = tdb_lock_would_deadlock(trx, lock, mode);
 
     mysql_mutex_lock(&part->mutex);
 
     if (deadlock)
     {
-        trx->waiting_on.store(NULL, std::memory_order_relaxed);
+        tdb_lock_waiting_remove(lock, req);
+        trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
         mysql_mutex_unlock(&part->mutex);
+        my_free(req);
+        srv_stat_lock_deadlocks.fetch_add(1, std::memory_order_relaxed);
         return HA_ERR_LOCK_DEADLOCK;
     }
 
-    /* The owner may have released while we were walking.  If so, claim the
-       lock directly instead of falling through to cond_wait. */
-    if (lock->owner_txn_id.load(std::memory_order_relaxed) == 0)
-    {
-        lock->owner_txn_id.store(trx->lock_txn_id, std::memory_order_release);
-        lock->owner_trx.store(trx, std::memory_order_release);
-        lock->held_next = trx->held_locks_head;
-        trx->held_locks_head = lock;
-        trx->waiting_on.store(NULL, std::memory_order_relaxed);
-        mysql_mutex_unlock(&part->mutex);
-        return 0;
-    }
+    /* Holders may have released while we were walking the wait-for graph.
+       Promote any newly-grantable waiters, then check whether we got our
+       grant in that pass. */
+    tdb_lock_promote_waiters(lock);
 
-    /* Still owned -- wait for release.  kill_query wakes us by broadcasting
-       on lock->cond; we re-check thd_killed() on every wake-up and bail
-       with HA_ERR_LOCK_WAIT_TIMEOUT so the client sees a proper error
-       instead of hanging until the holder eventually commits. */
-    lock->waiters++;
+    /* Bounded wait until our request is granted, the wait times out, or
+       the connection is killed.  kill_query wakes us by broadcasting on
+       lock->cond. */
     bool killed = false;
-    while (lock->owner_txn_id.load(std::memory_order_relaxed) != 0 &&
-           lock->owner_trx.load(std::memory_order_relaxed) != trx)
+    bool timed_out = false;
+    const ulong timeout_ms = tdb_lock_wait_timeout_ms(thd);
+    const bool bounded = (timeout_ms > 0);
+    struct timespec deadline;
+    if (bounded) set_timespec_nsec(deadline, (ulonglong)timeout_ms * TDB_NS_PER_MS);
+
+    auto wait_t0 = std::chrono::steady_clock::now();
+    srv_stat_lock_waits.fetch_add(1, std::memory_order_relaxed);
+
+    while (!req->granted)
     {
         if (thd && thd_killed(thd))
         {
             killed = true;
             break;
         }
-        mysql_cond_wait(&lock->cond, &part->mutex);
+        if (bounded)
+        {
+            int wrc = mysql_cond_timedwait(&lock->cond, &part->mutex, &deadline);
+            if (wrc == ETIMEDOUT && !req->granted)
+            {
+                timed_out = true;
+                break;
+            }
+        }
+        else
+        {
+            mysql_cond_wait(&lock->cond, &part->mutex);
+        }
     }
-    lock->waiters--;
-    trx->waiting_on.store(NULL, std::memory_order_relaxed);
 
-    if (killed)
+    auto wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                       std::chrono::steady_clock::now() - wait_t0)
+                       .count();
+    srv_stat_lock_wait_us.fetch_add(wait_us, std::memory_order_relaxed);
+
+    if (killed || timed_out)
     {
+        tdb_lock_waiting_remove(lock, req);
+        trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
+        /* Removing us may have unblocked an X behind a string of S
+           waiters.  Re-evaluate and broadcast so any newly-granted
+           waiter wakes up. */
+        tdb_lock_promote_waiters(lock);
+        bool wake = (lock->waiting_head != NULL) || (lock->granted_head != NULL);
         mysql_mutex_unlock(&part->mutex);
+        if (wake) mysql_cond_broadcast(&lock->cond);
+        my_free(req);
+        if (timed_out) srv_stat_lock_timeouts.fetch_add(1, std::memory_order_relaxed);
         return HA_ERR_LOCK_WAIT_TIMEOUT;
     }
 
-    lock->owner_txn_id.store(trx->lock_txn_id, std::memory_order_release);
-    lock->owner_trx.store(trx, std::memory_order_release);
-    lock->held_next = trx->held_locks_head;
-    trx->held_locks_head = lock;
+    /* Granted.  tdb_lock_promote_waiters moved us onto granted_head;
+       link onto trx->held_locks_head and clear waiting_on_lock so the
+       walker no longer treats this trx as waiting. */
+    req->held_next = trx->held_locks_head;
+    trx->held_locks_head = req;
+    trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
     mysql_mutex_unlock(&part->mutex);
+    srv_stat_lock_held.fetch_add(1, std::memory_order_relaxed);
     return 0;
 }
 
 /*
-  Release all row locks held by this transaction.
-  Called from tidesdb_commit() and tidesdb_rollback().
+  Release all row locks held by this transaction.  Walks the trx's
+  held-list of requests, unlinks each from its lock's granted list,
+  promotes any waiters now compatible with the remaining granted set,
+  and broadcasts the lock's cond.  Called from commit and rollback.
 */
 static void row_locks_release_all(tidesdb_trx_t *trx)
 {
     if (!lock_partitions || !trx) return;
 
-    tdb_row_lock_t *lock = trx->held_locks_head;
-    while (lock)
+    long long released = 0;
+    tdb_lock_request_t *req = trx->held_locks_head;
+    while (req)
     {
-        tdb_row_lock_t *next = lock->held_next;
+        tdb_lock_request_t *next = req->held_next;
+        tdb_row_lock_t *lock = req->lock;
         uint part_idx = lock->partition;
         tdb_lock_partition_t *part = &lock_partitions[part_idx];
 
         mysql_mutex_lock(&part->mutex);
-        lock->owner_txn_id.store(0, std::memory_order_release);
-        lock->owner_trx.store(NULL, std::memory_order_release);
-        lock->held_next = NULL;
-        if (lock->waiters > 0) mysql_cond_broadcast(&lock->cond);
+
+        /* Unlink req from lock->granted_head. */
+        tdb_lock_request_t **pp = &lock->granted_head;
+        while (*pp && *pp != req) pp = &(*pp)->list_next;
+        if (*pp == req) *pp = req->list_next;
+
+        /* Promote any waiters now grantable, then wake them up. */
+        bool had_waiters = (lock->waiting_head != NULL);
+        tdb_lock_promote_waiters(lock);
+        bool promoted_any = had_waiters && (lock->granted_head != NULL);
+
         mysql_mutex_unlock(&part->mutex);
 
-        lock = next;
+        if (had_waiters && (promoted_any || lock->waiting_head == NULL))
+            mysql_cond_broadcast(&lock->cond);
+
+        my_free(req);
+        released++;
+        req = next;
     }
     trx->held_locks_head = NULL;
-    trx->waiting_on.store(NULL, std::memory_order_relaxed);
+    trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
+    if (released > 0) srv_stat_lock_held.fetch_sub(released, std::memory_order_relaxed);
+}
+
+/* Pick the lock mode for a row materialised on a read path, or report
+   that no lock is needed.
+     - write_intent ........ X (covers SELECT FOR UPDATE / UPDATE / DELETE)
+     - REPEATABLE_READ / SERIALIZABLE ... S (prevents concurrent modification
+       of read rows within the txn; phantom prevention is incomplete
+       because we have no range/gap locks, only row locks)
+     - READ_COMMITTED / SNAPSHOT ... no lock (MVCC snapshot suffices) */
+static inline bool tdb_lock_mode_for_read(THD *thd, bool write_intent, tdb_lock_mode_t *mode)
+{
+    if (write_intent)
+    {
+        *mode = TDB_LOCK_MODE_X;
+        return true;
+    }
+    int iso = thd ? thd_tx_isolation(thd) : ISO_READ_COMMITTED;
+    if (iso == ISO_REPEATABLE_READ || iso == ISO_SERIALIZABLE)
+    {
+        *mode = TDB_LOCK_MODE_S;
+        return true;
+    }
+    return false;
 }
 
 static handler *tidesdb_create_handler(handlerton *hton, TABLE_SHARE *table, MEM_ROOT *mem_root);
@@ -636,9 +1024,11 @@ static int fts_load_meta(tidesdb_txn_t *txn, tidesdb_column_family_t *data_cf, u
     return 0;
 }
 
-/* Update FTS metadata counters atomically within the current transaction. */
-static int fts_update_meta(tidesdb_txn_t *txn, tidesdb_column_family_t *data_cf, uint keynr,
-                           int64_t delta_docs, int64_t delta_words)
+/* Update FTS metadata counters atomically within the current transaction.
+   thd may be NULL for paths where no session is available (e.g. recovery);
+   in that case the back-pressure block falls through to the unwrapped put. */
+static int fts_update_meta(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *data_cf,
+                           uint keynr, int64_t delta_docs, int64_t delta_words)
 {
     int64_t total_docs = 0, total_words = 0;
     fts_load_meta(txn, data_cf, keynr, &total_docs, &total_words);
@@ -656,8 +1046,8 @@ static int fts_update_meta(tidesdb_txn_t *txn, tidesdb_column_family_t *data_cf,
     uchar mv[FTS_META_VALUE_LEN];
     int8store(mv, total_docs);
     int8store(mv + FTS_META_VALUE_WORDS_OFFSET, total_words);
-    return tidesdb_txn_put(txn, data_cf, mk, FTS_META_KEY_LEN, mv, FTS_META_VALUE_LEN,
-                           TIDESDB_TTL_NONE);
+    return tdb_txn_put_blocking(thd, txn, data_cf, mk, FTS_META_KEY_LEN, mv, FTS_META_VALUE_LEN,
+                                TIDESDB_TTL_NONE);
 }
 
 /* Tokenize a text string using MariaDB's default FT parser.
@@ -1248,7 +1638,7 @@ static inline void hilbert_rot(uint32_t n, uint32_t *x, uint32_t *y, uint32_t rx
    32, each axis 32-bit precision, output 64-bit.  Iterative algorithm
    per Skilling 2004 / Wikipedia, O(32) loop, no recursion.  The literal
    `3` and the XOR encode the four-quadrant visit order of the Hilbert
-   d-value: (rx, ry) = (0,0)->0, (0,1)->1, (1,1)->2, (1,0)->3.  The
+   d-value (rx, ry) = (0,0)->0, (0,1)->1, (1,1)->2, (1,0)->3.  The
    `s << 1` doubles s so hilbert_rot receives the full sub-grid size
    for this level, not the half-size step. */
 static uint64_t hilbert_xy2d_64(uint32_t x, uint32_t y)
@@ -1572,7 +1962,7 @@ static void spatial_decompose_ranges(uint32_t qx_min, uint32_t qy_min, uint32_t 
     std::sort(cells.begin(), cells.end());
 
     /* Each coarse cell covers a range of 2^(HILBERT_DIM*shift) fine hilbert
-       values: shift bits per axis times HILBERT_DIM axes. */
+       values, er shift bits per axis times HILBERT_DIM axes. */
     uint64_t cell_span = (uint64_t)1 << (HILBERT_DIM * shift);
 
     uint64_t range_lo = cells[0];
@@ -1650,7 +2040,7 @@ static MYSQL_THDVAR_ULONGLONG(
    each (col_values, pk) / (term, pk) / (hilbert, pk) composite is written
    exactly once per row lifetime and deleted exactly once -- the
    single-delete contract holds unconditionally for those.
-   For the primary CF the contract is narrower: UPDATE ... SET non_pk_col
+   For the primary CF the contract is narrower, UPDATE ... SET non_pk_col
    writes tidesdb_txn_put(share->cf, data_key(pk), ...) with the same PK,
    producing a put-over-put, and REPLACE INTO / INSERT ... ON DUPLICATE
    KEY UPDATE on tables with no secondary indexes does the same via a
@@ -1667,6 +2057,38 @@ static MYSQL_THDVAR_BOOL(single_delete_primary, PLUGIN_VAR_RQCMDARG,
                          "leave OFF unless the session is INSERT-and-DELETE only.  "
                          "SET SESSION tidesdb_single_delete_primary=1",
                          NULL, NULL, 0);
+
+static MYSQL_THDVAR_ULONG(backpressure_wait_timeout_ms, PLUGIN_VAR_RQCMDARG,
+                          "Milliseconds the plugin will block a writer on TidesDB "
+                          "back-pressure (memtable/flush queue/L0 backlog at soft cap) "
+                          "before surfacing it to the SQL layer as a lock-wait-timeout. "
+                          "0 disables blocking and returns the timeout immediately",
+                          NULL, NULL, TDB_BACKPRESSURE_DEFAULT_TIMEOUT_MS,
+                          TDB_BACKPRESSURE_MIN_TIMEOUT_MS, TDB_BACKPRESSURE_MAX_TIMEOUT_MS, 0);
+
+static MYSQL_THDVAR_ULONG(lock_wait_timeout_ms, PLUGIN_VAR_RQCMDARG,
+                          "Milliseconds a pessimistic row-lock acquire will wait "
+                          "before returning HA_ERR_LOCK_WAIT_TIMEOUT.  Mirrors "
+                          "innodb_lock_wait_timeout (default 50000 = 50 s).  "
+                          "0 disables the timeout (wait bounded only by KILL QUERY)",
+                          NULL, NULL, TDB_LOCK_WAIT_DEFAULT_TIMEOUT_MS,
+                          TDB_LOCK_WAIT_MIN_TIMEOUT_MS, TDB_LOCK_WAIT_MAX_TIMEOUT_MS, 0);
+
+/* Definitions for the forward decls near tidesdb_txn_delete_cf -- placed here
+   so they have the THDVAR macros in scope.  Each returns the configured wait
+   budget for the session, or the compile-time default when called without a
+   THD (e.g. background paths). */
+static ulong tdb_backpressure_timeout_ms(THD *thd)
+{
+    if (!thd) return TDB_BACKPRESSURE_DEFAULT_TIMEOUT_MS;
+    return THDVAR(thd, backpressure_wait_timeout_ms);
+}
+
+static ulong tdb_lock_wait_timeout_ms(THD *thd)
+{
+    if (!thd) return TDB_LOCK_WAIT_DEFAULT_TIMEOUT_MS;
+    return THDVAR(thd, lock_wait_timeout_ms);
+}
 
 /* Session-level defaults for table options.
    These are used by HA_TOPTION_SYSVAR so that CREATE TABLE without
@@ -1831,17 +2253,19 @@ static MYSQL_SYSVAR_BOOL(print_all_conflicts, srv_print_all_conflicts, PLUGIN_VA
 static MYSQL_SYSVAR_BOOL(pessimistic_locking, srv_pessimistic_locking, PLUGIN_VAR_RQCMDARG,
                          "Enable plugin-level row locks for SELECT ... FOR UPDATE, "
                          "UPDATE, DELETE, and INSERT on user-defined primary keys. "
-                         "OFF (default): pure optimistic MVCC -- concurrent writers on the "
-                         "same row are detected at COMMIT time (TDB_ERR_CONFLICT). "
-                         "ON: all write-intent statements acquire per-row locks via a "
-                         "partitioned hash-table lock manager with wait-for-graph "
-                         "deadlock detection. Locks are held until COMMIT or ROLLBACK. "
-                         "Both explicit transactions and autocommit statements participate. "
-                         "Locks can be acquired on non-existing PK values (e.g. SELECT "
-                         "... FOR UPDATE on a missing row blocks INSERT of that key). "
-                         "Enable for TPC-C or workloads that depend on row-level "
-                         "serialization semantics",
-                         NULL, NULL, 0);
+                         "ON (default): write-intent statements acquire per-row X locks "
+                         "and plain reads under REPEATABLE_READ / SERIALIZABLE acquire "
+                         "S locks; multiple S holders coexist, S blocks while an X is "
+                         "waiting (writer fairness).  Deadlock detection via wait-for "
+                         "graph traversal; bounded by tidesdb_lock_wait_timeout_ms.  "
+                         "Locks held until COMMIT or ROLLBACK.  Both explicit and "
+                         "autocommit transactions participate.  Locks can be acquired "
+                         "on non-existing keys (e.g. SFU on a missing row blocks INSERT "
+                         "of that key). "
+                         "OFF: pure optimistic MVCC -- concurrent writers on the same "
+                         "row are detected at COMMIT time (TDB_ERR_CONFLICT) and the "
+                         "application must retry",
+                         NULL, NULL, 1);
 
 static MYSQL_SYSVAR_ULONG(fts_min_word_len, srv_fts_min_word_len, PLUGIN_VAR_RQCMDARG,
                           "Minimum word length (in characters) for full-text indexing. "
@@ -2211,6 +2635,8 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(ttl),
     MYSQL_SYSVAR(skip_unique_check),
     MYSQL_SYSVAR(single_delete_primary),
+    MYSQL_SYSVAR(backpressure_wait_timeout_ms),
+    MYSQL_SYSVAR(lock_wait_timeout_ms),
     MYSQL_SYSVAR(compact_after_range_delete_min_rows),
     MYSQL_SYSVAR(default_compression),
     MYSQL_SYSVAR(default_write_buffer_size),
@@ -2590,9 +3016,9 @@ static tidesdb_trx_t *get_or_create_trx(THD *thd, handlerton *hton, tidesdb_isol
     trx->dirty = false;
     trx->isolation_level = iso;
     trx->txn_generation = 1;
-    trx->lock_txn_id = 1;
     trx->held_locks_head = NULL;
-    trx->waiting_on.store(NULL, std::memory_order_relaxed);
+    trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
+    trx->waiting_on_mode = TDB_LOCK_MODE_S;
     thd_set_ha_data(thd, hton, trx);
     return trx;
 }
@@ -2741,7 +3167,7 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
        If commit fails, fall back to rollback+free. */
     if (trx->dirty)
     {
-        int rc = tidesdb_txn_commit(trx->txn);
+        int rc = tdb_txn_commit_blocking(thd, trx->txn);
         if (rc != TDB_SUCCESS)
         {
             /* Only log truly unexpected errors (not transient conflicts). */
@@ -3686,15 +4112,15 @@ static void tidesdb_hton_pre_shutdown(void)
 }
 
 /*
-  Handlerton-level kill_query callback.  MariaDB calls this when the user
-  runs KILL QUERY <id> or when the connection is killed.  Our job is to
-  wake the victim if it is currently blocked in row_lock_acquire so that
-  the wait loop observes thd_killed() and bails out promptly.
+  Handlerton-level kill_query callback.  MariaDB calls this on KILL QUERY
+  and on connection shutdown.  When the victim is blocked in
+  row_lock_acquire we wake it by broadcasting on the lock entry's cond,
+  and the wait loop sees thd_killed() on the next pass and bails out.
+  Spurious wake-ups are harmless because the wait loop re-checks
+  req->granted before exiting.
 
-  The trx's waiting_on pointer is the lock entry being waited on; a
-  broadcast on that entry's cond var wakes the waiter.  False wake-ups
-  are harmless -- the wait loop re-checks ownership and goes back to
-  sleep if the lock is still contended.
+  trx->waiting_on_lock points directly at the lock entry, which is never
+  freed at runtime, so dereferencing it here is always safe.
 */
 static void tidesdb_hton_kill_query(handlerton *, THD *thd, enum thd_kill_levels)
 {
@@ -3702,7 +4128,7 @@ static void tidesdb_hton_kill_query(handlerton *, THD *thd, enum thd_kill_levels
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (!trx) return;
 
-    tdb_row_lock_t *wait = trx->waiting_on.load(std::memory_order_acquire);
+    tdb_row_lock_t *wait = trx->waiting_on_lock.load(std::memory_order_acquire);
     if (!wait) return;
 
     /* We broadcast under the owning partition's mutex so the wake-up is
@@ -4545,7 +4971,7 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
            The whitelist below covers the field types whose pack() output
            is byte-identical to memcpy(pack_length()) on a little-endian
            host.  CHAR / VARCHAR / BLOB / GEOMETRY / JSON / BIT / DECIMAL
-           keep the slow path: their pack() trims trailing pad bytes,
+           keep the slow path, their pack() trims trailing pad bytes,
            emits a length prefix, or layers a null-bit on top.
 
            Field_long / Field_longlong / Field_short etc. emit data in
@@ -4841,7 +5267,7 @@ static std::string tidesdb_decrypt_row(const char *data, size_t len, uint key_id
 
 /* Row format header constants live in ha_tidesdb.h so the stop-word
    loader and other callers can reference them without forward decls.
-   Layout: [ROW_HEADER_MAGIC] [null_bytes_stored (2 LE)] [field_count (2 LE)]
+   Layout is [ROW_HEADER_MAGIC] [null_bytes_stored (2 LE)] [field_count (2 LE)]
    for ROW_HEADER_SIZE bytes total.  Enables instant ADD/DROP COLUMN. */
 
 const std::string &ha_tidesdb::serialize_row(const uchar *buf)
@@ -5089,6 +5515,22 @@ void ha_tidesdb::deserialize_row(uchar *buf, const std::string &row)
 */
 int ha_tidesdb::fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len, uchar *buf)
 {
+    /* Pessimistic row lock for point reads.  Covers both the direct PK
+       lookup path (HA_READ_KEY_EXACT) and the secondary-index resolved-PK
+       path (sec idx returns [prefix][pk]; caller passes the suffix here).
+       Mode is X for write-intent, S under RR/SR for plain reads; RC/SI
+       reads take no lock (snapshot suffices).  Re-entrant -- a no-op when
+       the caller already holds the lock in a compatible-or-stronger mode. */
+    if (unlikely(srv_pessimistic_locking) && cached_trx_)
+    {
+        tdb_lock_mode_t mode;
+        if (tdb_lock_mode_for_read(cached_thd_, stmt_has_write_lock_, &mode))
+        {
+            int lrc = row_lock_acquire(cached_trx_, pk, pk_len, cached_thd_, mode);
+            if (lrc) return lrc;
+        }
+    }
+
     uchar dk[DATA_KEY_BUF_LEN];
     uint dk_len = build_data_key(pk, pk_len, dk);
 
@@ -5201,6 +5643,21 @@ int ha_tidesdb::iter_read_current(uchar *buf)
         current_pk_len_ = (uint)(key_size - KEY_NAMESPACE_LEN);
         memcpy(current_pk_buf_, key + KEY_NAMESPACE_LEN, current_pk_len_);
 
+        /* Pessimistic row lock for range/prefix scans.  Mode chosen by
+           write-intent + session isolation; covers SELECT ... FOR UPDATE
+           / UPDATE / DELETE walking the PK iterator, plus plain SELECT
+           under RR/SR. */
+        if (unlikely(srv_pessimistic_locking) && cached_trx_)
+        {
+            tdb_lock_mode_t mode;
+            if (tdb_lock_mode_for_read(cached_thd_, stmt_has_write_lock_, &mode))
+            {
+                int lrc = row_lock_acquire(cached_trx_, current_pk_buf_, current_pk_len_,
+                                           cached_thd_, mode);
+                if (lrc) return lrc;
+            }
+        }
+
         if (likely(!has_blobs_ && !encrypted_))
         {
             deserialize_row(buf, (const uchar *)value, value_size);
@@ -5310,7 +5767,7 @@ int ha_tidesdb::write_row(const uchar *buf)
        format used by index_read_map() for lock acquisition. */
     if (unlikely(srv_pessimistic_locking) && share->has_user_pk && trx)
     {
-        int lrc = row_lock_acquire(trx, pk, pk_len, cached_thd_);
+        int lrc = row_lock_acquire(trx, pk, pk_len, cached_thd_, TDB_LOCK_MODE_X);
         if (lrc)
         {
             tmp_restore_column_map(&table->read_set, old_map);
@@ -5380,6 +5837,23 @@ int ha_tidesdb::write_row(const uchar *buf)
             uint idx_prefix_len = make_comparable_key(
                 &table->key_info[i], buf, table->key_info[i].user_defined_key_parts, idx_prefix);
 
+            /* Pessimistic row lock on the UNIQUE-secondary prefix.  Without
+               this, the dup-check below uses the txn's MVCC view and two
+               concurrent INSERTs of the same unique value can both pass
+               the check and both commit, producing a logical UNIQUE
+               violation.  Locking the prefix serialises the check+put on
+               the same value across writers. */
+            if (unlikely(srv_pessimistic_locking) && trx)
+            {
+                int lrc =
+                    row_lock_acquire(trx, idx_prefix, idx_prefix_len, cached_thd_, TDB_LOCK_MODE_X);
+                if (lrc)
+                {
+                    tmp_restore_column_map(&table->read_set, old_map);
+                    DBUG_RETURN(lrc);
+                }
+            }
+
             /* We get or create cached dup-check iterator for this index.
                Invalidate if the txn changed (commit/reset frees txn ops
                that the iterator's MERGE_SOURCE_TXN_OPS depends on). */
@@ -5434,7 +5908,8 @@ int ha_tidesdb::write_row(const uchar *buf)
     time_t row_ttl =
         (share->has_ttl || cached_sess_ttl_ > 0) ? compute_row_ttl(buf) : TIDESDB_TTL_NONE;
 
-    int rc = tidesdb_txn_put(txn, share->cf, dk, dk_len, row_ptr, row_len, row_ttl);
+    int rc =
+        tdb_txn_put_blocking(cached_thd_, txn, share->cf, dk, dk_len, row_ptr, row_len, row_ttl);
     if (rc != TDB_SUCCESS) goto err;
 
     memcpy(current_pk_buf_, pk, pk_len);
@@ -5474,12 +5949,13 @@ int ha_tidesdb::write_row(const uchar *buf)
                     uint fk_len = fts_build_key(term.data(), (uint)term.size(), pk, pk_len, fk);
                     uchar fv[FTS_VALUE_LEN];
                     fts_build_value(tf, word_count, fv);
-                    rc = tidesdb_txn_put(txn, share->idx_cfs[i], fk, fk_len, fv, FTS_VALUE_LEN,
-                                         row_ttl);
+                    rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], fk, fk_len, fv,
+                                              FTS_VALUE_LEN, row_ttl);
                     if (rc != TDB_SUCCESS) goto err;
                 }
 
-                fts_update_meta(txn, share->cf, i, FTS_DOC_DELTA_ADD, (int64_t)word_count);
+                fts_update_meta(cached_thd_, txn, share->cf, i, FTS_DOC_DELTA_ADD,
+                                (int64_t)word_count);
             }
             else if (ki->algorithm == HA_KEY_ALG_RTREE)
             {
@@ -5502,8 +5978,8 @@ int ha_tidesdb::write_row(const uchar *buf)
                     uint sk_len = spatial_build_key(cx, cy, pk, pk_len, sk);
                     uchar sv[SPATIAL_MBR_VALUE_LEN];
                     spatial_build_value(xmin, ymin, xmax, ymax, sv);
-                    rc = tidesdb_txn_put(txn, share->idx_cfs[i], sk, sk_len, sv,
-                                         SPATIAL_MBR_VALUE_LEN, row_ttl);
+                    rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], sk, sk_len, sv,
+                                              SPATIAL_MBR_VALUE_LEN, row_ttl);
                     if (rc != TDB_SUCCESS) goto err;
                 }
             }
@@ -5512,8 +5988,8 @@ int ha_tidesdb::write_row(const uchar *buf)
                 /* Regular secondary index maintenance */
                 uchar ik[SEC_IDX_KEY_BUF_LEN];
                 uint ik_len = sec_idx_key(i, buf, ik);
-                rc = tidesdb_txn_put(txn, share->idx_cfs[i], ik, ik_len, &tdb_empty_val,
-                                     sizeof(tdb_empty_val), row_ttl);
+                rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], ik, ik_len,
+                                          &tdb_empty_val, sizeof(tdb_empty_val), row_ttl);
                 if (rc != TDB_SUCCESS) goto err;
             }
         }
@@ -5846,24 +6322,11 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
             uint full_pk_comp_len = share->idx_comp_key_len[share->pk_index];
             if (comp_len >= full_pk_comp_len)
             {
-                /* We acquire pessimistic row lock when pessimistic_locking=ON
-                   and this is a write-intent read (UPDATE, DELETE, or
-                   SELECT ... FOR UPDATE).  Autocommit statements must also
-                   participate so they block on locks held by multi-statement
-                   transactions -- otherwise an autocommit UPDATE silently
-                   bypasses a FOR UPDATE lock and causes commit conflicts. */
-                if (unlikely(srv_pessimistic_locking) && stmt_has_write_lock_)
-                {
-                    tidesdb_trx_t *trx = cached_trx_;
-                    if (trx)
-                    {
-                        int lrc = row_lock_acquire(trx, comp_key, comp_len, cached_thd_);
-                        if (lrc) DBUG_RETURN(lrc);
-                    }
-                }
-
                 /* Full PK match, point lookup only, no iterator needed.
-                   If index_next is called later, ensure_scan_iter will create it. */
+                   Pessimistic row locking happens inside fetch_row_by_pk
+                   (covers the autocommit UPDATE bypass case as well, since
+                   stmt_has_write_lock_ gates write-intent reads regardless
+                   of multi-statement context). */
                 int ret = fetch_row_by_pk(scan_txn, comp_key, comp_len, buf);
                 if (ret == 0) idx_pk_exact_done_ = true;
                 DBUG_RETURN(ret);
@@ -6454,15 +6917,16 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     {
         uchar old_dk[DATA_KEY_BUF_LEN];
         uint old_dk_len = build_data_key(old_pk, old_pk_len, old_dk);
-        rc = tidesdb_txn_delete_cf(txn, share->cf, old_dk, old_dk_len,
-                                   cached_single_delete_primary_);
+        rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->cf, old_dk, old_dk_len,
+                                        cached_single_delete_primary_);
         if (rc != TDB_SUCCESS) goto err;
     }
 
     {
         uchar new_dk[DATA_KEY_BUF_LEN];
         uint new_dk_len = build_data_key(new_pk, new_pk_len, new_dk);
-        rc = tidesdb_txn_put(txn, share->cf, new_dk, new_dk_len, row_ptr, row_len, row_ttl);
+        rc = tdb_txn_put_blocking(cached_thd_, txn, share->cf, new_dk, new_dk_len, row_ptr, row_len,
+                                  row_ttl);
         if (rc != TDB_SUCCESS) goto err;
     }
 
@@ -6529,7 +6993,8 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                         uchar fk[FTS_KEY_BUF_LEN];
                         uint fk_len =
                             fts_build_key(term.data(), (uint)term.size(), old_pk, old_pk_len, fk);
-                        tidesdb_txn_delete_cf(txn, share->idx_cfs[i], fk, fk_len, true);
+                        tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], fk, fk_len,
+                                                   true);
                     }
                     for (auto &[term, tf] : new_tf)
                     {
@@ -6538,8 +7003,8 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                             fts_build_key(term.data(), (uint)term.size(), new_pk, new_pk_len, fk);
                         uchar fv[FTS_VALUE_LEN];
                         fts_build_value(tf, new_wc, fv);
-                        rc = tidesdb_txn_put(txn, share->idx_cfs[i], fk, fk_len, fv, FTS_VALUE_LEN,
-                                             row_ttl);
+                        rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], fk, fk_len,
+                                                  fv, FTS_VALUE_LEN, row_ttl);
                         if (rc != TDB_SUCCESS) goto err;
                     }
                 }
@@ -6557,7 +7022,8 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                         uchar fk[FTS_KEY_BUF_LEN];
                         uint fk_len =
                             fts_build_key(term.data(), (uint)term.size(), old_pk, old_pk_len, fk);
-                        tidesdb_txn_delete_cf(txn, share->idx_cfs[i], fk, fk_len, true);
+                        tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], fk, fk_len,
+                                                   true);
                     }
 
                     for (auto &[term, new_cnt] : new_tf)
@@ -6578,8 +7044,8 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                             fts_build_key(term.data(), (uint)term.size(), new_pk, new_pk_len, fk);
                         uchar fv[FTS_VALUE_LEN];
                         fts_build_value(new_cnt, new_wc, fv);
-                        rc = tidesdb_txn_put(txn, share->idx_cfs[i], fk, fk_len, fv, FTS_VALUE_LEN,
-                                             row_ttl);
+                        rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], fk, fk_len,
+                                                  fv, FTS_VALUE_LEN, row_ttl);
                         if (rc != TDB_SUCCESS) goto err;
                     }
                 }
@@ -6588,7 +7054,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                    new_wc - old_wc; only write the meta row when it actually
                    moved to avoid a pointless read-modify-write. */
                 int64_t wc_delta = (int64_t)new_wc - (int64_t)old_wc;
-                if (wc_delta != 0) fts_update_meta(txn, share->cf, i, 0, wc_delta);
+                if (wc_delta != 0) fts_update_meta(cached_thd_, txn, share->cf, i, 0, wc_delta);
             }
             else if (share->idx_is_spatial[i])
             {
@@ -6613,7 +7079,8 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                         uint sk_len = spatial_build_key((xmn + xmx) / MBR_CENTROID_DIV,
                                                         (ymn + ymx) / MBR_CENTROID_DIV, old_pk,
                                                         old_pk_len, sk);
-                        tidesdb_txn_delete_cf(txn, share->idx_cfs[i], sk, sk_len, true);
+                        tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], sk, sk_len,
+                                                   true);
                     }
                 }
 
@@ -6634,8 +7101,8 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                                                         new_pk_len, sk);
                         uchar sv[SPATIAL_MBR_VALUE_LEN];
                         spatial_build_value(xmn, ymn, xmx, ymx, sv);
-                        rc = tidesdb_txn_put(txn, share->idx_cfs[i], sk, sk_len, sv,
-                                             SPATIAL_MBR_VALUE_LEN, row_ttl);
+                        rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], sk, sk_len,
+                                                  sv, SPATIAL_MBR_VALUE_LEN, row_ttl);
                         if (rc != TDB_SUCCESS) goto err;
                     }
                 }
@@ -6677,10 +7144,11 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
 
                 if (old_ik_len == new_ik_len && memcmp(old_ik, new_ik, old_ik_len) == 0) continue;
 
-                rc = tidesdb_txn_delete_cf(txn, share->idx_cfs[i], old_ik, old_ik_len, true);
+                rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], old_ik,
+                                                old_ik_len, true);
                 if (rc != TDB_SUCCESS) goto err;
-                rc = tidesdb_txn_put(txn, share->idx_cfs[i], new_ik, new_ik_len, &tdb_empty_val,
-                                     sizeof(tdb_empty_val), row_ttl);
+                rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], new_ik, new_ik_len,
+                                          &tdb_empty_val, sizeof(tdb_empty_val), row_ttl);
                 if (rc != TDB_SUCCESS) goto err;
             }
         }
@@ -6784,7 +7252,8 @@ int ha_tidesdb::delete_row(const uchar *buf)
         bulk_delete_rows_++;
     }
 
-    int rc = tidesdb_txn_delete_cf(txn, share->cf, dk, dk_len, cached_single_delete_primary_);
+    int rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->cf, dk, dk_len,
+                                        cached_single_delete_primary_);
     if (rc != TDB_SUCCESS)
     {
         tmp_restore_column_map(&table->read_set, old_map);
@@ -6822,10 +7291,12 @@ int ha_tidesdb::delete_row(const uchar *buf)
                     uchar fk[FTS_KEY_BUF_LEN];
                     uint fk_len = fts_build_key(term.data(), (uint)term.size(), current_pk_buf_,
                                                 current_pk_len_, fk);
-                    tidesdb_txn_delete_cf(txn, share->idx_cfs[i], fk, fk_len, true);
+                    tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], fk, fk_len,
+                                               true);
                 }
 
-                fts_update_meta(txn, share->cf, i, FTS_DOC_DELTA_DEL, -(int64_t)word_count);
+                fts_update_meta(cached_thd_, txn, share->cf, i, FTS_DOC_DELTA_DEL,
+                                -(int64_t)word_count);
             }
             else if (share->idx_is_spatial[i])
             {
@@ -6845,14 +7316,16 @@ int ha_tidesdb::delete_row(const uchar *buf)
                     double cy = (ymin + ymax) / MBR_CENTROID_DIV;
                     uchar sk[SPATIAL_HILBERT_KEY_LEN + MAX_KEY_LENGTH];
                     uint sk_len = spatial_build_key(cx, cy, current_pk_buf_, current_pk_len_, sk);
-                    tidesdb_txn_delete_cf(txn, share->idx_cfs[i], sk, sk_len, true);
+                    tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], sk, sk_len,
+                                               true);
                 }
             }
             else
             {
                 uchar ik[SEC_IDX_KEY_BUF_LEN];
                 uint ik_len = sec_idx_key(i, buf, ik);
-                rc = tidesdb_txn_delete_cf(txn, share->idx_cfs[i], ik, ik_len, true);
+                rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], ik, ik_len,
+                                                true);
                 if (rc != TDB_SUCCESS)
                 {
                     tmp_restore_column_map(&table->read_set, old_map);
@@ -7003,7 +7476,7 @@ int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
 {
     if (!trx || !trx->txn) return 0;
 
-    int crc = tidesdb_txn_commit(trx->txn);
+    int crc = tdb_txn_commit_blocking(cached_thd_, trx->txn);
     if (crc != TDB_SUCCESS)
     {
         sql_print_error(
@@ -8557,13 +9030,15 @@ int ha_tidesdb::ensure_stmt_txn()
     tidesdb_isolation_level_t effective_iso;
     if (is_ddl || is_autocommit)
         effective_iso = TDB_ISOLATION_READ_COMMITTED;
-    else if (unlikely(srv_pessimistic_locking))
-        /* When pessimistic row locks are active, the locks already serialize
-           access to hot rows.  Use READ_COMMITTED to skip the library's
-           write-write conflict tracking at commit time -- the lock manager
-           prevents the conflicts that tracking would detect. */
-        effective_iso = TDB_ISOLATION_READ_COMMITTED;
     else
+        /* Honour session isolation regardless of pessimistic_locking.
+           Lock manager and library OCC compose -- the locks serialise
+           hot-row write contention, and OCC continues to enforce the
+           session's chosen isolation semantics (snapshot reads under
+           SNAPSHOT, read-set tracking under REPEATABLE_READ, full SSI
+           under SERIALIZABLE).  Earlier revisions silently downgraded
+           to READ_COMMITTED here, which broke higher isolation levels
+           when pessimistic_locking was on. */
         effective_iso = resolve_effective_isolation(
             thd, share ? share->isolation_level : TDB_ISOLATION_SNAPSHOT);
     tidesdb_trx_t *trx = get_or_create_trx(thd, ht, effective_iso);
@@ -9026,8 +9501,8 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
             memcpy(ik + pos, pk, pk_len);
             pos += pk_len;
 
-            rc = tidesdb_txn_put(txn, ctx->add_cfs[a], ik, pos, &tdb_empty_val,
-                                 sizeof(tdb_empty_val), TIDESDB_TTL_NONE);
+            rc = tdb_txn_put_blocking(ha_thd(), txn, ctx->add_cfs[a], ik, pos, &tdb_empty_val,
+                                      sizeof(tdb_empty_val), TIDESDB_TTL_NONE);
             if (rc != TDB_SUCCESS)
             {
                 if (!idx_put_fail_logged[a])
@@ -9554,8 +10029,8 @@ static long long srv_stat_cache_partitions;
    tidesdb_show_status can read them directly.  Their definitions live up
    there. */
 
-#define TIDESQL_VERSION_STR "4.5.0"
-#define TIDESQL_VERSION_HEX 0x40500
+#define TIDESQL_VERSION_STR "4.5.1"
+#define TIDESQL_VERSION_HEX 0x40501
 
 static const char *srv_stat_version = TIDESQL_VERSION_STR;
 static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;
@@ -9587,6 +10062,15 @@ static struct st_mysql_show_var tidesdb_status_variables[] = {
     {"tidesdb_max_sst_tombstone_density", (char *)&srv_stat_max_sst_density, SHOW_DOUBLE},
     {"tidesdb_max_sst_tombstone_density_level", (char *)&srv_stat_max_sst_density_level,
      SHOW_LONGLONG},
+    {"tidesdb_backpressure_waits", (char *)&srv_stat_backpressure_waits, SHOW_LONGLONG},
+    {"tidesdb_backpressure_wait_us", (char *)&srv_stat_backpressure_wait_us, SHOW_LONGLONG},
+    {"tidesdb_lock_waits", (char *)&srv_stat_lock_waits, SHOW_LONGLONG},
+    {"tidesdb_lock_wait_us", (char *)&srv_stat_lock_wait_us, SHOW_LONGLONG},
+    {"tidesdb_lock_deadlocks", (char *)&srv_stat_lock_deadlocks, SHOW_LONGLONG},
+    {"tidesdb_lock_timeouts", (char *)&srv_stat_lock_timeouts, SHOW_LONGLONG},
+    {"tidesdb_lock_held", (char *)&srv_stat_lock_held, SHOW_LONGLONG},
+    {"tidesdb_lock_entries", (char *)&srv_stat_lock_entries, SHOW_LONGLONG},
+    {"tidesdb_lock_entry_recycles", (char *)&srv_stat_lock_entry_recycles, SHOW_LONGLONG},
     {NullS, NullS, SHOW_ULONG}};
 
 /* Refresh the static status variables from live tidesdb stats.  Cost is
