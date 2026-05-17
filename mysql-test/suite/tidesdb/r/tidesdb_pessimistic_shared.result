@@ -90,11 +90,9 @@ COMMIT;
 connection s2;
 COMMIT;
 connection s3;
-bal
-200
 COMMIT;
 connection default;
-# s2 incremented 200 -> 201; s3 then read 201
+# s2 incremented 200 -> 201; s3 then read either 200 or 201 (both valid)
 SELECT bal FROM acct WHERE id = 1;
 bal
 201

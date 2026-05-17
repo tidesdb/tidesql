@@ -681,6 +681,23 @@ static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len, THD 
 
     if (deadlock)
     {
+        /* Between dropping the mutex for the wait-for walk and re-acquiring
+           it, another transaction's release path may have called
+           promote_waiters and moved our request from waiting_head onto
+           granted_head, flipping req->granted to true.  In that case the
+           walker's verdict is based on stale state and the lock is already
+           ours.  Taking the grant is correct and avoids a serious UAF --
+           freeing the request while it sits on granted_head would leave a
+           dangling pointer that the next acquire walks into. */
+        if (req->granted)
+        {
+            req->held_next = trx->held_locks_head;
+            trx->held_locks_head = req;
+            trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
+            mysql_mutex_unlock(&part->mutex);
+            srv_stat_lock_held.fetch_add(1, std::memory_order_relaxed);
+            return 0;
+        }
         tdb_lock_waiting_remove(lock, req);
         trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
         mysql_mutex_unlock(&part->mutex);
