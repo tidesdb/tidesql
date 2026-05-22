@@ -2016,6 +2016,7 @@ static void spatial_decompose_ranges(uint32_t qx_min, uint32_t qy_min, uint32_t 
 /* ******************** System variables (global DB config) ******************** */
 
 static ulong srv_flush_threads = 4;
+static ulong srv_max_concurrent_flushes = 0; /* 0 = align with srv_flush_threads */
 static ulong srv_compaction_threads = 4;
 static ulong srv_log_level = 0;                                      /* TDB_LOG_DEBUG */
 static ulonglong srv_block_cache_size = TIDESDB_DEFAULT_BLOCK_CACHE; /* 256M */
@@ -2149,8 +2150,11 @@ static TYPELIB sync_mode_typelib = {array_elements(sync_mode_names) - 1, "sync_m
                                     sync_mode_names, NULL, NULL};
 
 static MYSQL_THDVAR_ENUM(default_sync_mode, PLUGIN_VAR_RQCMDARG,
-                         "Default sync mode for new tables (NONE, INTERVAL, FULL); "
-                         "FULL ensures every commit is immediately durable",
+                         "Default sync mode for new tables.  Governs SSTable file sync "
+                         "(klog and vlog).  Under tidesdb_unified_memtable=ON the shared "
+                         "WAL is fsynced according to tidesdb_unified_memtable_sync_mode "
+                         "instead, so this option does not control WAL durability for "
+                         "new tables.  Choose NONE, INTERVAL or FULL",
                          NULL, NULL, 2 /* FULL */, &sync_mode_typelib);
 
 static MYSQL_THDVAR_ULONGLONG(default_sync_interval_us, PLUGIN_VAR_RQCMDARG,
@@ -2257,6 +2261,15 @@ static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_le
 static MYSQL_SYSVAR_ULONG(flush_threads, srv_flush_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                           "Number of TidesDB flush threads", NULL, NULL, 4, 1, 64, 0);
+
+static MYSQL_SYSVAR_ULONG(max_concurrent_flushes, srv_max_concurrent_flushes,
+                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+                          "Global cap on in-flight memtable flushes.  0 (default) "
+                          "aligns the cap with tidesdb_flush_threads so every "
+                          "configured flush worker can run.  Setting a cap below "
+                          "tidesdb_flush_threads leaves workers idle and logs a "
+                          "startup warning",
+                          NULL, NULL, 0, 0, 1024, 0);
 
 static MYSQL_SYSVAR_ULONG(compaction_threads, srv_compaction_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -2383,11 +2396,13 @@ static ulong srv_unified_memtable_sync_mode = 2; /* FULL */
 
 static MYSQL_SYSVAR_ENUM(unified_memtable_sync_mode, srv_unified_memtable_sync_mode,
                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                         "Sync mode for the unified WAL (NONE, INTERVAL, FULL). "
-                         "Only meaningful when tidesdb_unified_memtable=ON. "
-                         "NONE: fastest, relies on OS page cache. "
-                         "INTERVAL: periodic sync every unified_memtable_sync_interval_us. "
-                         "FULL: fsync on every commit (default, most durable)",
+                         "Sync mode for the unified WAL when tidesdb_unified_memtable=ON.  "
+                         "NONE relies on the OS page cache and is the fastest.  INTERVAL "
+                         "syncs periodically every unified_memtable_sync_interval_us.  FULL "
+                         "fsyncs on every commit and is the most durable.  This setting "
+                         "governs WAL durability for every table under unified mode "
+                         "regardless of any per-table SYNC_MODE option, which only "
+                         "controls SSTable file sync",
                          NULL, NULL, 2 /* FULL */, &sync_mode_typelib);
 
 static ulonglong srv_unified_memtable_sync_interval = 128000;
@@ -2642,6 +2657,7 @@ static MYSQL_SYSVAR_STR(checkpoint_dir, srv_checkpoint_dir,
 
 static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(flush_threads),
+    MYSQL_SYSVAR(max_concurrent_flushes),
     MYSQL_SYSVAR(compaction_threads),
     MYSQL_SYSVAR(log_level),
     MYSQL_SYSVAR(block_cache_size),
@@ -2846,21 +2862,21 @@ static const int tdb_isolation_map[] = {TDB_ISOLATION_READ_UNCOMMITTED,
                                         TDB_ISOLATION_SNAPSHOT, TDB_ISOLATION_SERIALIZABLE};
 
 /*
-  Map MariaDB session isolation level (from SET TRANSACTION ISOLATION LEVEL)
-  to TidesDB isolation level.  Falls back to table-level ISOLATION_LEVEL
-  option only when the session has the default (REPEATABLE READ) and the
-  table overrides it.
+  Map the MariaDB session isolation level (from SET TRANSACTION ISOLATION
+  LEVEL) to a TidesDB isolation level.  An explicitly chosen session level
+  always wins.  When the session is left at the SQL default of REPEATABLE
+  READ the table-level ISOLATION_LEVEL option decides, because that is the
+  signal that the client expressed no preference of its own.
 
-  MariaDB enum_tx_isolation:
-    ISO_READ_UNCOMMITTED = 0
-    ISO_READ_COMMITTED   = 1
-    ISO_REPEATABLE_READ  = 2
-    ISO_SERIALIZABLE     = 3
+  The MariaDB enum_tx_isolation values are ISO_READ_UNCOMMITTED 0,
+  ISO_READ_COMMITTED 1, ISO_REPEATABLE_READ 2 and ISO_SERIALIZABLE 3.
 
-  TidesDB has a 5th level (SNAPSHOT) that has no SQL equivalent.
-  It can only be selected via the table option.  When the session
-  isolation is REPEATABLE READ and the table option specifies SNAPSHOT,
-  we honor the table-level SNAPSHOT setting.
+  TidesDB has a fifth level, SNAPSHOT, with no SQL equivalent.  A table
+  that leaves ISOLATION_LEVEL at REPEATABLE READ resolves to SNAPSHOT for
+  InnoDB parity, since TidesDB's strict REPEATABLE_READ tracks the read
+  set and produces excessive TDB_ERR_CONFLICT under normal OLTP.  A table
+  that sets SNAPSHOT, SERIALIZABLE, READ COMMITTED or READ UNCOMMITTED is
+  honored as written.
 */
 static tidesdb_isolation_level_t resolve_effective_isolation(THD *thd,
                                                              tidesdb_isolation_level_t table_iso)
@@ -2874,15 +2890,14 @@ static tidesdb_isolation_level_t resolve_effective_isolation(THD *thd,
         case ISO_READ_COMMITTED:
             return TDB_ISOLATION_READ_COMMITTED;
         case ISO_REPEATABLE_READ:
-            /* InnoDB's REPEATABLE_READ is MVCC snapshot reads with
-               pessimistic row locks -- no read-set conflict detection.
-               TidesDB's closest equivalent is SNAPSHOT isolation:
-               consistent read snapshot + write-write conflict only.
-               TidesDB's REPEATABLE_READ is stricter (tracks read-set,
-               detects read-write conflicts at commit) and causes
-               excessive TDB_ERR_CONFLICT under normal OLTP concurrency.
-               Map MariaDB RR -> TidesDB SNAPSHOT for InnoDB parity. */
-            return TDB_ISOLATION_SNAPSHOT;
+            /* The session is at the SQL default, so the table-level
+               ISOLATION_LEVEL option decides.  A table left at REPEATABLE
+               READ maps to TidesDB SNAPSHOT for InnoDB parity, since
+               TidesDB's strict REPEATABLE_READ tracks the read set and
+               produces excessive TDB_ERR_CONFLICT under normal OLTP.  An
+               explicit SNAPSHOT, SERIALIZABLE, READ COMMITTED or READ
+               UNCOMMITTED table option is honored as written. */
+            return table_iso == TDB_ISOLATION_REPEATABLE_READ ? TDB_ISOLATION_SNAPSHOT : table_iso;
         case ISO_SERIALIZABLE:
             return TDB_ISOLATION_SERIALIZABLE;
         default:
@@ -3970,6 +3985,28 @@ static int tidesdb_init_func(void *p)
     cfg.num_flush_threads = (int)srv_flush_threads;
     cfg.num_compaction_threads = (int)srv_compaction_threads;
     cfg.log_level = (tidesdb_log_level_t)log_level_map[srv_log_level];
+    /* The library caps concurrent flushes by config.max_concurrent_flushes
+       (default 4 in the library), independent of num_flush_threads, so
+       leaving the cap below the worker count would silently idle workers.
+       Default tidesdb_max_concurrent_flushes=0 means align the cap with
+       tidesdb_flush_threads so every worker can run.  A non-zero user
+       value is honoured but warned when it leaves workers idle. */
+    if (srv_max_concurrent_flushes == 0)
+    {
+        cfg.max_concurrent_flushes = (int)srv_flush_threads;
+    }
+    else
+    {
+        cfg.max_concurrent_flushes = (int)srv_max_concurrent_flushes;
+        if (srv_max_concurrent_flushes < srv_flush_threads)
+            sql_print_warning(
+                "[TIDESDB] tidesdb_max_concurrent_flushes=%lu is lower than "
+                "tidesdb_flush_threads=%lu, %lu flush worker(s) will remain idle.  "
+                "Raise tidesdb_max_concurrent_flushes to at least %lu (or leave it "
+                "at 0 to align automatically) to use every configured worker",
+                srv_max_concurrent_flushes, srv_flush_threads,
+                srv_flush_threads - srv_max_concurrent_flushes, srv_flush_threads);
+    }
     cfg.block_cache_size = (size_t)srv_block_cache_size;
     cfg.max_open_sstables = (int)srv_max_open_sstables;
     cfg.log_to_file = srv_log_to_file ? 1 : 0;
@@ -5172,6 +5209,22 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 
     ha_table_option_struct *opts = TDB_TABLE_OPTIONS(table_arg);
     DBUG_ASSERT(opts);
+
+    /* Under unified-memtable mode the shared WAL's fsync behaviour is owned
+       by tidesdb_unified_memtable_sync_mode; the per-table SYNC_MODE option
+       only governs SSTable file sync (klog and vlog).  Warn the user when
+       the two differ so they do not assume the table option controls WAL
+       durability for this table. */
+    if (srv_unified_memtable && opts->sync_mode != srv_unified_memtable_sync_mode)
+    {
+        push_warning_printf(ha_thd(), Sql_condition::WARN_LEVEL_WARN, ER_UNKNOWN_ERROR,
+                            "[TIDESDB] Table SYNC_MODE=%s governs SSTable file sync only.  Under "
+                            "tidesdb_unified_memtable=ON the shared WAL is fsynced according to "
+                            "tidesdb_unified_memtable_sync_mode=%s, so the table option does not "
+                            "change WAL durability for this table",
+                            sync_mode_names[opts->sync_mode],
+                            sync_mode_names[srv_unified_memtable_sync_mode]);
+    }
 
     tidesdb_column_family_config_t cfg = build_cf_config(opts);
 
