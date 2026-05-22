@@ -6929,6 +6929,119 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     time_t row_ttl =
         (share->has_ttl || cached_sess_ttl_ > 0) ? compute_row_ttl(new_data) : TIDESDB_TTL_NONE;
 
+    /* Uniqueness enforcement.  A TidesDB put silently overwrites, so an
+       UPDATE that moves a row onto an existing primary key would destroy
+       the colliding row, and one that moves it onto an existing UNIQUE
+       secondary value would create a duplicate.  The server relies on the
+       engine to surface HA_ERR_FOUND_DUPP_KEY, so these checks run before
+       any txn mutation and leave the txn untouched on a violation.  A
+       session that set tidesdb_skip_unique_check bypasses them by caller
+       contract, matching write_row. */
+    if (!cached_skip_unique_)
+    {
+        if (pk_changed && share->has_user_pk)
+        {
+            uchar chk_dk[DATA_KEY_BUF_LEN];
+            uint chk_dk_len = build_data_key(new_pk, new_pk_len, chk_dk);
+            uint8_t *dup_val = NULL;
+            size_t dup_len = 0;
+            int grc = tidesdb_txn_get(txn, share->cf, chk_dk, chk_dk_len, &dup_val, &dup_len);
+            if (grc == TDB_SUCCESS)
+            {
+                tidesdb_free(dup_val);
+                errkey = lookup_errkey = share->pk_index;
+                memcpy(dup_ref, new_pk, new_pk_len);
+                tmp_restore_column_map(&table->read_set, old_map);
+                DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
+            }
+            if (grc != TDB_ERR_NOT_FOUND)
+            {
+                tmp_restore_column_map(&table->read_set, old_map);
+                DBUG_RETURN(tdb_rc_to_ha(grc, "update_row pk_dup_check"));
+            }
+        }
+
+        if (share->num_secondary_indexes > 0)
+        {
+            const my_ptrdiff_t nd_ptrdiff = (my_ptrdiff_t)(new_data - table->record[0]);
+            for (uint i = 0; i < table->s->keys; i++)
+            {
+                if (share->has_user_pk && i == share->pk_index) continue;
+                if (i >= share->idx_cfs.size() || !share->idx_cfs[i]) continue;
+                if (share->idx_is_fts[i] || share->idx_is_spatial[i]) continue;
+                if (!(table->key_info[i].flags & HA_NOSAME)) continue;
+
+                KEY *ki = &table->key_info[i];
+
+                /* SQL gives NULL no identity, so a UNIQUE index never
+                   constrains a row whose indexed value is NULL in any part.
+                   Skip the check entirely in that case, matching InnoDB.
+                   This also keeps the engine off the server's internal
+                   MHNSW graph table, whose UNIQUE(tref) column is NULL for
+                   the graph metadata rows. */
+                bool any_null = false;
+                for (uint p = 0; p < ki->user_defined_key_parts; p++)
+                {
+                    Field *f = ki->key_part[p].field;
+                    if (f->real_maybe_null() && f->is_real_null(nd_ptrdiff))
+                    {
+                        any_null = true;
+                        break;
+                    }
+                }
+                if (any_null) continue;
+
+                /* Compare the old and new comparable index keys.  Equal
+                   keys mean the indexed value did not change, so no new
+                   collision is possible no matter whether the primary key
+                   moved.  When they differ, this row's own existing entry
+                   sits under the old key, so any entry found under the new
+                   key necessarily belongs to a different row. */
+                uchar *old_prefix = upd_old_ik_;
+                uchar *new_prefix = upd_new_ik_;
+                uint old_prefix_len =
+                    make_comparable_key(ki, old_data, ki->user_defined_key_parts, old_prefix);
+                uint new_prefix_len =
+                    make_comparable_key(ki, new_data, ki->user_defined_key_parts, new_prefix);
+                if (old_prefix_len == new_prefix_len &&
+                    memcmp(old_prefix, new_prefix, new_prefix_len) == 0)
+                    continue;
+
+                tidesdb_iter_t *dup_iter = NULL;
+                int irc = tidesdb_iter_new(txn, share->idx_cfs[i], &dup_iter);
+                if (irc != TDB_SUCCESS || !dup_iter)
+                {
+                    tmp_restore_column_map(&table->read_set, old_map);
+                    DBUG_RETURN(tdb_rc_to_ha(irc, "update_row dup_iter_new"));
+                }
+
+                tidesdb_iter_seek(dup_iter, new_prefix, new_prefix_len);
+                bool dup = false;
+                if (tidesdb_iter_valid(dup_iter))
+                {
+                    uint8_t *fk = NULL;
+                    size_t fks = 0;
+                    if (tidesdb_iter_key(dup_iter, &fk, &fks) == TDB_SUCCESS &&
+                        fks >= new_prefix_len && memcmp(fk, new_prefix, new_prefix_len) == 0)
+                    {
+                        dup = true;
+                        size_t suffix_len = fks - new_prefix_len;
+                        if (suffix_len > 0 && suffix_len <= ref_length)
+                            memcpy(dup_ref, fk + new_prefix_len, suffix_len);
+                    }
+                }
+                tidesdb_iter_free(dup_iter);
+
+                if (dup)
+                {
+                    errkey = lookup_errkey = i;
+                    tmp_restore_column_map(&table->read_set, old_map);
+                    DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
+                }
+            }
+        }
+    }
+
     /* If PK changed, we delete old entry and insert new */
     if (pk_changed)
     {
