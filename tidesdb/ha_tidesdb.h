@@ -116,14 +116,9 @@ static constexpr uint8_t KEY_INF_LO_BYTE = 0x00;
 static constexpr uchar ROW_HEADER_MAGIC = 0xFE;
 static constexpr uint ROW_HEADER_SIZE = 5;
 
-/* Null bitmap byte count for tables with at most 8 fields (one byte
-   per 8 columns).  Used when scanning the stop-word loader's single
-   VARCHAR column.  Larger tables compute null bitmap width from
-   table->s->null_bytes. */
-static constexpr uint NULL_BITMAP_SINGLE_FIELD = 1;
-
-/* Length prefix Field::pack writes ahead of a VARCHAR payload.
-   Two bytes covers VARCHAR up to 65535 chars in either byte order. */
+/* Length prefix Field::pack writes ahead of a wide VARCHAR payload.
+   Two bytes covers VARCHAR above 255 chars; narrower columns use a
+   single-byte prefix. */
 static constexpr uint FIELD_VARCHAR_LEN_PREFIX = 2;
 
 /* Sign-bit XOR mask used to translate a signed integer's MSB into

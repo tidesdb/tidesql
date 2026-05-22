@@ -1181,7 +1181,10 @@ static bool tdb_load_stopwords_from_table_spec(const char *table_spec)
     std::string db_name(table_spec, slash - table_spec);
     std::string tbl_name(slash + 1);
 
-    std::string cf_name = db_name + "/" + tbl_name;
+    /* CF names join the database and table with CF_DB_TABLE_SEP, the same
+       way path_to_cf_name builds them, so the lookup has to use that
+       separator rather than the slash from the user-facing spec. */
+    std::string cf_name = db_name + CF_DB_TABLE_SEP + tbl_name;
     tidesdb_column_family_t *sw_cf =
         tdb_global ? tidesdb_get_column_family(tdb_global, cf_name.c_str()) : NULL;
 
@@ -1213,35 +1216,41 @@ static bool tdb_load_stopwords_from_table_spec(const char *table_spec)
     {
         uint8_t *val = NULL;
         size_t val_size = 0;
-        if (tidesdb_iter_value(iter, &val, &val_size) == TDB_SUCCESS && val && val_size > 0)
+        if (tidesdb_iter_value(iter, &val, &val_size) == TDB_SUCCESS && val &&
+            val_size > ROW_HEADER_SIZE && val[0] == ROW_HEADER_MAGIC)
         {
-            /* The row is in our packed format-- [header][null_bitmap][fields...].
-               For a simple single-column VARCHAR table, the value starts after
-               ROW_HEADER_SIZE + 1 byte of null bitmap. For robustness we just
-               treat the rest of the value as the word if it is short enough. */
-            const uint8_t *data = val;
-            size_t data_len = val_size;
-
-            if (data_len > ROW_HEADER_SIZE)
+            /* The row carries the self-describing header written by
+               serialize_row, so the null bitmap width is read from the
+               header rather than assumed.  After the header and the bitmap
+               a single-column table holds just the one packed VARCHAR. */
+            uint stored_null_bytes = uint2korr(val + 1);
+            size_t off = (size_t)ROW_HEADER_SIZE + stored_null_bytes;
+            if (off < val_size)
             {
-                data += ROW_HEADER_SIZE;
-                data_len -= ROW_HEADER_SIZE;
-                if (data_len > NULL_BITMAP_SINGLE_FIELD)
+                const uint8_t *data = val + off;
+                size_t data_len = val_size - off;
+
+                /* Field::pack stores a VARCHAR with a one-byte length prefix
+                   when the column is at most 255 chars wide and a two-byte
+                   prefix otherwise.  The packed field of a single-column row
+                   spans the whole remaining buffer, so the prefix width is
+                   the one whose recorded length consumes exactly the rest. */
+                uint prefix = 0;
+                size_t str_len = 0;
+                if (data_len >= 1 && (size_t)data[0] + 1 == data_len)
                 {
-                    data += NULL_BITMAP_SINGLE_FIELD;
-                    data_len -= NULL_BITMAP_SINGLE_FIELD;
+                    prefix = 1;
+                    str_len = data[0];
                 }
-            }
-
-            /* The remaining bytes are the packed field data.
-               For a simple VARCHAR, Field::pack stores [length][data] where
-               the length is FIELD_VARCHAR_LEN_PREFIX bytes, little-endian. */
-            if (data_len >= FIELD_VARCHAR_LEN_PREFIX)
-            {
-                uint16 str_len = (uint16)data[0] | ((uint16)data[1] << 8);
-                if (str_len <= data_len - FIELD_VARCHAR_LEN_PREFIX && str_len > 0)
+                else if (data_len >= FIELD_VARCHAR_LEN_PREFIX &&
+                         (size_t)uint2korr(data) + FIELD_VARCHAR_LEN_PREFIX == data_len)
                 {
-                    std::string word((const char *)(data + FIELD_VARCHAR_LEN_PREFIX), str_len);
+                    prefix = FIELD_VARCHAR_LEN_PREFIX;
+                    str_len = uint2korr(data);
+                }
+                if (prefix && str_len > 0)
+                {
+                    std::string word((const char *)(data + prefix), str_len);
                     std::transform(word.begin(), word.end(), word.begin(), ::tolower);
                     tdb_stopwords.insert(std::move(word));
                 }
