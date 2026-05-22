@@ -10369,8 +10369,8 @@ static long long srv_stat_cache_partitions;
    tidesdb_show_status can read them directly.  Their definitions live up
    there. */
 
-#define TIDESQL_VERSION_STR "4.5.1"
-#define TIDESQL_VERSION_HEX 0x40501
+#define TIDESQL_VERSION_STR "4.5.2"
+#define TIDESQL_VERSION_HEX 0x40502
 
 static const char *srv_stat_version = TIDESQL_VERSION_STR;
 static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;
