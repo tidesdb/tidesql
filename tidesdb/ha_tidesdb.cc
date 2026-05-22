@@ -5213,8 +5213,10 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
 /* ******************** Data-at-rest encryption helpers ******************** */
 
 /*
-  Encrypt plaintext into enc_buf_.  Format is [IV (16 bytes)] [ciphertext].
-  Returns the encrypted blob as a std::string.
+  Encrypt plaintext into out.  The on-disk blob is the 4-byte little-endian
+  key version, then the 16-byte IV, then the ciphertext.  Storing the key
+  version lets tidesdb_decrypt_row recover the exact key a row was written
+  under, so encrypted rows remain readable across a key rotation.
 */
 static bool tidesdb_encrypt_row_into(const std::string &plain, uint key_id, uint key_version,
                                      std::string &out)
@@ -5228,42 +5230,49 @@ static bool tidesdb_encrypt_row_into(const std::string &plain, uint key_id, uint
 
     unsigned int slen = (unsigned int)plain.size();
     unsigned int enc_len = encryption_encrypted_length(slen, key_id, key_version);
-    out.resize(TIDESDB_ENC_IV_LEN + enc_len);
+    out.resize(TIDESDB_ENC_VERSION_LEN + TIDESDB_ENC_IV_LEN + enc_len);
 
-    memcpy(&out[0], iv, TIDESDB_ENC_IV_LEN);
+    int4store(&out[0], (uint32)key_version);
+    memcpy(&out[TIDESDB_ENC_VERSION_LEN], iv, TIDESDB_ENC_IV_LEN);
 
     unsigned int dlen = enc_len;
-    int rc = encryption_crypt((const unsigned char *)plain.data(), slen,
-                              (unsigned char *)&out[TIDESDB_ENC_IV_LEN], &dlen, key, klen, iv,
-                              TIDESDB_ENC_IV_LEN, ENCRYPTION_FLAG_ENCRYPT, key_id, key_version);
+    int rc = encryption_crypt(
+        (const unsigned char *)plain.data(), slen,
+        (unsigned char *)&out[TIDESDB_ENC_VERSION_LEN + TIDESDB_ENC_IV_LEN], &dlen, key, klen, iv,
+        TIDESDB_ENC_IV_LEN, ENCRYPTION_FLAG_ENCRYPT, key_id, key_version);
     if (rc != 0)
     {
         sql_print_error("[TIDESDB] encryption_crypt(encrypt) failed rc=%d", rc);
         out.clear();
         return false;
     }
-    out.resize(TIDESDB_ENC_IV_LEN + dlen);
+    out.resize(TIDESDB_ENC_VERSION_LEN + TIDESDB_ENC_IV_LEN + dlen);
     return true;
 }
 
 /*
-  Decrypt a row stored as [IV (16)] [ciphertext] back to plaintext.
+  Decrypt a row stored as [key version (4)] [IV (16)] [ciphertext].  The key
+  version is read back from the blob so a row encrypted before a key rotation
+  is decrypted with the key it was actually written under, not the latest.
 */
-static std::string tidesdb_decrypt_row(const char *data, size_t len, uint key_id, uint key_version)
+static std::string tidesdb_decrypt_row(const char *data, size_t len, uint key_id)
 {
-    if (len <= TIDESDB_ENC_IV_LEN)
+    if (len <= TIDESDB_ENC_VERSION_LEN + TIDESDB_ENC_IV_LEN)
     {
         sql_print_error("[TIDESDB] encrypted row too short (%zu bytes)", len);
         return std::string(); /* signal failure */
     }
 
+    uint key_version = (uint)uint4korr(data);
+
     unsigned char key[TIDESDB_ENC_KEY_LEN];
     unsigned int klen = sizeof(key);
     encryption_key_get(key_id, key_version, key, &klen);
 
-    const unsigned char *iv = (const unsigned char *)data;
-    const unsigned char *src = (const unsigned char *)data + TIDESDB_ENC_IV_LEN;
-    unsigned int slen = (unsigned int)(len - TIDESDB_ENC_IV_LEN);
+    const unsigned char *iv = (const unsigned char *)data + TIDESDB_ENC_VERSION_LEN;
+    const unsigned char *src =
+        (const unsigned char *)data + TIDESDB_ENC_VERSION_LEN + TIDESDB_ENC_IV_LEN;
+    unsigned int slen = (unsigned int)(len - TIDESDB_ENC_VERSION_LEN - TIDESDB_ENC_IV_LEN);
 
     std::string out;
     unsigned int dlen = slen + TIDESDB_ENC_KEY_LEN; /* padding slack */
@@ -5508,8 +5517,7 @@ void ha_tidesdb::deserialize_row(uchar *buf, const std::string &row)
 
     if (share->encrypted)
     {
-        decrypted = tidesdb_decrypt_row(row.data(), row.size(), share->encryption_key_id,
-                                        share->encryption_key_version);
+        decrypted = tidesdb_decrypt_row(row.data(), row.size(), share->encryption_key_id);
         if (decrypted.empty())
         {
             /* Decryption failed! we zero record to avoid returning garbage */

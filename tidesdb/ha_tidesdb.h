@@ -302,6 +302,12 @@ static constexpr ha_rows TIDESDB_BULK_INSERT_BATCH_OPS = 500;
 static constexpr uint TIDESDB_ENC_IV_LEN = 16;
 static constexpr uint TIDESDB_ENC_KEY_LEN = 32;
 
+/* Bytes of key-version prefix on every encrypted row blob.  The on-disk
+   layout is the 4-byte little-endian key version, then the IV, then the
+   ciphertext, so a row always decrypts under the exact key version it was
+   written with and survives an encryption key rotation. */
+static constexpr uint TIDESDB_ENC_VERSION_LEN = 4;
+
 /* Bloom filter FPR conversion (table option stores parts per 10000) */
 static constexpr double TIDESDB_BLOOM_FPR_DIVISOR = 10000.0;
 
