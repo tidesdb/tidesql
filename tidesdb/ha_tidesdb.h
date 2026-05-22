@@ -469,6 +469,21 @@ enum tdb_lock_mode_t
     TDB_LOCK_MODE_X = 1,
 };
 
+/* Per-txn accumulator entry for one FTS index's metadata key.  The
+   plugin folds the per-row delta_docs and delta_words contributions
+   from every write_row / update_row / delete_row in a transaction here
+   and writes one combined update at commit time, so the FTS meta key
+   does not become a write-write serialisation point under concurrent
+   writers and a long statement does not produce N read-modify-writes
+   on the same key. */
+struct fts_meta_delta_t
+{
+    tidesdb_column_family_t *data_cf;
+    uint keynr;
+    int64_t doc_delta;
+    int64_t word_delta;
+};
+
 /*
   Per-connection TidesDB transaction context.
   Stored via thd_set_ha_data(); shared by all handler objects on the
@@ -477,13 +492,13 @@ enum tdb_lock_mode_t
 */
 struct tidesdb_trx_t
 {
-    tidesdb_txn_t *txn;
-    bool dirty;                 /* true once any DML uses txn */
-    bool stmt_savepoint_active; /* true while a "stmt" savepoint exists */
-    bool stmt_was_dirty;        /* true if current stmt had writes */
-    bool needs_reset;           /* true after commit/rollback; cleared after txn_reset */
-    tidesdb_isolation_level_t isolation_level; /* from first table opened */
-    uint64_t txn_generation; /* monotonic counter; incremented each time a new txn is created */
+    tidesdb_txn_t *txn{nullptr};
+    bool dirty{false};                 /* true once any DML uses txn */
+    bool stmt_savepoint_active{false}; /* true while a "stmt" savepoint exists */
+    bool stmt_was_dirty{false};        /* true if current stmt had writes */
+    bool needs_reset{false};           /* true after commit/rollback; cleared after txn_reset */
+    tidesdb_isolation_level_t isolation_level{TDB_ISOLATION_REPEATABLE_READ};
+    uint64_t txn_generation{0};
 
     /* Plugin-level row lock state for this txn.  The lock manager supports
        shared (read-intent) and exclusive (write-intent) modes; multiple S
@@ -493,7 +508,7 @@ struct tidesdb_trx_t
        and iter_read_current depending on session isolation and write intent,
        and released en masse at commit or rollback. */
 
-    struct tdb_lock_request_t *held_locks_head;
+    struct tdb_lock_request_t *held_locks_head{nullptr};
 
     /* What this txn is currently waiting for, published as two fields the
        deadlock walker can read lock-free from other partitions without ever
@@ -504,8 +519,14 @@ struct tidesdb_trx_t
        ordering, and walkers load waiting_on_lock with acquire then read the
        mode, so a walker that sees a non-null lock pointer also sees the
        matching mode. */
-    std::atomic<struct tdb_row_lock_t *> waiting_on_lock;
-    tdb_lock_mode_t waiting_on_mode;
+    std::atomic<struct tdb_row_lock_t *> waiting_on_lock{nullptr};
+    tdb_lock_mode_t waiting_on_mode{TDB_LOCK_MODE_S};
+
+    /* Per-statement FTS meta deltas, applied before tidesdb_commit hands
+       the txn to the library so the meta update lands in the same commit
+       as the row writes that produced it. */
+    std::vector<fts_meta_delta_t> fts_meta_pending;
+    bool fts_meta_dirty{false};
 };
 
 /*

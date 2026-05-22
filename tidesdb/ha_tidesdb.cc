@@ -377,7 +377,9 @@ struct tdb_row_lock_t
     uchar *pk;                        /* heap-allocated key bytes */
     uint pk_len;                      /* length of key bytes */
     tdb_lock_request_t *granted_head; /* mutex-guarded */
-    tdb_lock_request_t *waiting_head; /* mutex-guarded; FIFO */
+    tdb_lock_request_t *waiting_head; /* mutex-guarded FIFO head */
+    tdb_lock_request_t *waiting_tail; /* mutex-guarded FIFO tail; lets append
+                                         skip the O(n) walk to find it */
     mysql_cond_t cond;                /* waiters sleep on this */
     tdb_row_lock_t *hash_next;        /* mutex-guarded */
     uint partition;                   /* which partition (cached for release) */
@@ -485,18 +487,20 @@ static tdb_lock_request_t *tdb_lock_find_self_granted(tdb_row_lock_t *lock, tide
     return NULL;
 }
 
-/* Append req to the lock's waiting FIFO.  Caller must hold partition mutex. */
+/* Append req to the lock's waiting FIFO.  Caller must hold partition mutex.
+   The lock keeps a tail pointer so the append is O(1) instead of walking
+   the queue, which under contention could turn appending into O(n^2). */
 static void tdb_lock_waiting_append(tdb_row_lock_t *lock, tdb_lock_request_t *req)
 {
     req->list_next = NULL;
     if (!lock->waiting_head)
     {
         lock->waiting_head = req;
+        lock->waiting_tail = req;
         return;
     }
-    tdb_lock_request_t *tail = lock->waiting_head;
-    while (tail->list_next) tail = tail->list_next;
-    tail->list_next = req;
+    lock->waiting_tail->list_next = req;
+    lock->waiting_tail = req;
 }
 
 /* Remove req from the lock's waiting list (if present).  Caller must hold
@@ -504,10 +508,16 @@ static void tdb_lock_waiting_append(tdb_row_lock_t *lock, tdb_lock_request_t *re
 static void tdb_lock_waiting_remove(tdb_row_lock_t *lock, tdb_lock_request_t *req)
 {
     tdb_lock_request_t **pp = &lock->waiting_head;
-    while (*pp && *pp != req) pp = &(*pp)->list_next;
+    tdb_lock_request_t *prev = NULL;
+    while (*pp && *pp != req)
+    {
+        prev = *pp;
+        pp = &(*pp)->list_next;
+    }
     if (*pp == req)
     {
         *pp = req->list_next;
+        if (lock->waiting_tail == req) lock->waiting_tail = prev;
         req->list_next = NULL;
     }
 }
@@ -544,6 +554,7 @@ static void tdb_lock_promote_waiters(tdb_row_lock_t *lock)
         tdb_lock_request_t *head = lock->waiting_head;
         if (!tdb_lock_can_grant(lock, head->mode, head->trx)) break;
         lock->waiting_head = head->list_next;
+        if (!lock->waiting_head) lock->waiting_tail = NULL;
         head->list_next = lock->granted_head;
         lock->granted_head = head;
         head->granted = true;
@@ -1065,6 +1076,55 @@ static int fts_update_meta(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t
     int8store(mv + FTS_META_VALUE_WORDS_OFFSET, total_words);
     return tdb_txn_put_blocking(thd, txn, data_cf, mk, FTS_META_KEY_LEN, mv, FTS_META_VALUE_LEN,
                                 TIDESDB_TTL_NONE);
+}
+
+/* Fold a per-row FTS meta delta into the txn-level accumulator.  Find the
+   matching (data_cf, keynr) entry and combine, or append a new one.  The
+   list is typically tiny (one or two FTS indexes per touched table), so
+   linear scan beats a hash. */
+static inline void trx_fts_meta_accumulate(tidesdb_trx_t *trx, tidesdb_column_family_t *cf,
+                                           uint keynr, int64_t doc_delta, int64_t word_delta)
+{
+    if (!trx) return;
+    for (auto &e : trx->fts_meta_pending)
+    {
+        if (e.data_cf == cf && e.keynr == keynr)
+        {
+            e.doc_delta += doc_delta;
+            e.word_delta += word_delta;
+            trx->fts_meta_dirty = true;
+            return;
+        }
+    }
+    trx->fts_meta_pending.push_back({cf, keynr, doc_delta, word_delta});
+    trx->fts_meta_dirty = true;
+}
+
+/* Apply every accumulated FTS meta delta to its index's meta key inside
+   the current txn.  Called before tidesdb_commit hands the txn to the
+   library and before maybe_bulk_commit's mid-statement commit so the meta
+   update is part of the same commit as the row puts that produced it.
+   Returns a TDB_* error code on the first failure; the accumulator is
+   cleared in every case since the txn it tracks is about to commit or be
+   rolled back. */
+static int flush_trx_fts_meta_pending(THD *thd, tidesdb_trx_t *trx)
+{
+    if (!trx) return TDB_SUCCESS;
+    if (!trx->fts_meta_dirty || trx->fts_meta_pending.empty() || !trx->txn)
+    {
+        trx->fts_meta_pending.clear();
+        trx->fts_meta_dirty = false;
+        return TDB_SUCCESS;
+    }
+    int rc = TDB_SUCCESS;
+    for (const auto &e : trx->fts_meta_pending)
+    {
+        rc = fts_update_meta(thd, trx->txn, e.data_cf, e.keynr, e.doc_delta, e.word_delta);
+        if (rc != TDB_SUCCESS) break;
+    }
+    trx->fts_meta_pending.clear();
+    trx->fts_meta_dirty = false;
+    return rc;
 }
 
 /* Tokenize a text string using MariaDB's default FT parser.
@@ -1763,12 +1823,20 @@ static inline bool wkb_read_point_sequence(const uchar *&pp, const uchar *ee, do
     return true;
 }
 
+/* Maximum nesting depth for a GEOMETRYCOLLECTION (or any of the MULTI
+   types).  Stops a pathologically nested geometry from blowing the stack
+   through wkb_parse_geometry's recursion; far above any real geometry
+   the server would actually accept. */
+static constexpr int WKB_MAX_RECURSION_DEPTH = 32;
+
 /* Recursive WKB geometry parser.  Reads one geometry object from pp,
    expanding the MBR to include all coordinate pairs.  Advances pp past
-   the consumed bytes.  Supports all 7 OGC geometry types. */
+   the consumed bytes.  Supports all 7 OGC geometry types.  The depth
+   argument bounds recursive descent into GEOMETRYCOLLECTION children. */
 static bool wkb_parse_geometry(const uchar *&pp, const uchar *ee, double &mn_x, double &mn_y,
-                               double &mx_x, double &mx_y)
+                               double &mx_x, double &mx_y, int depth)
 {
+    if (depth > WKB_MAX_RECURSION_DEPTH) return false;
     if (pp + SPATIAL_WKB_HEADER_SIZE > ee) return false;
         /* MariaDB stores WKB in native byte order, so the leading byte is the
            native endianness marker (0 = big, 1 = little).  We rely on native
@@ -1822,7 +1890,7 @@ static bool wkb_parse_geometry(const uchar *&pp, const uchar *ee, double &mn_x, 
             if (n_geoms > WKB_MAX_GEOMS) return false;
             for (uint32_t i = 0; i < n_geoms; i++)
             {
-                if (!wkb_parse_geometry(pp, ee, mn_x, mn_y, mx_x, mx_y)) return false;
+                if (!wkb_parse_geometry(pp, ee, mn_x, mn_y, mx_x, mx_y, depth + 1)) return false;
             }
             return true;
         }
@@ -1847,7 +1915,7 @@ static bool spatial_compute_mbr(const uchar *data, size_t len, double *xmin, dou
     *xmin = *ymin = DBL_MAX;
     *xmax = *ymax = -DBL_MAX;
 
-    if (!wkb_parse_geometry(p, end, *xmin, *ymin, *xmax, *ymax)) return false;
+    if (!wkb_parse_geometry(p, end, *xmin, *ymin, *xmax, *ymax, 0)) return false;
 
     return *xmin <= *xmax && *ymin <= *ymax;
 }
@@ -1875,13 +1943,18 @@ static void spatial_build_value(double xmin, double ymin, double xmax, double ym
 }
 
 /* Parse MBR from MariaDB's spatial key buffer.
-   MariaDB format( [xmin 8B][xmax 8B][ymin 8B][ymax 8B] )*/
+   MariaDB format( [xmin 8B][xmax 8B][ymin 8B][ymax 8B] ).  A malformed
+   key whose stored min exceeds its max would underflow the grid-cell
+   subtraction in spatial_decompose_ranges and ask reserve for a billion
+   slots, so the corners are normalised here at the parse boundary. */
 static void spatial_parse_query_mbr(const uchar *key, tdb_mbr_t *mbr)
 {
     float8get(mbr->xmin, key);
     float8get(mbr->xmax, key + MBR_OFFSET_SECOND);
     float8get(mbr->ymin, key + MBR_OFFSET_THIRD);
     float8get(mbr->ymax, key + MBR_OFFSET_FOURTH);
+    if (mbr->xmin > mbr->xmax) std::swap(mbr->xmin, mbr->xmax);
+    if (mbr->ymin > mbr->ymax) std::swap(mbr->ymin, mbr->ymax);
 }
 
 /* MBR spatial predicates -- match MariaDB MBR class semantics exactly */
@@ -2569,6 +2642,8 @@ static void tidesdb_backup_dir_update(THD *thd, struct st_mysql_sys_var *, void 
             trx->txn = NULL;
             trx->dirty = false;
             trx->txn_generation++;
+            trx->fts_meta_pending.clear();
+            trx->fts_meta_dirty = false;
         }
     }
 
@@ -3044,22 +3119,22 @@ static tidesdb_trx_t *get_or_create_trx(THD *thd, handlerton *hton, tidesdb_isol
         return trx;
     }
 
-    trx = (tidesdb_trx_t *)my_malloc(PSI_NOT_INSTRUMENTED, sizeof(tidesdb_trx_t), MYF(MY_ZEROFILL));
+    /* The trx struct owns a std::vector (fts_meta_pending), so it must be
+       constructed and destroyed properly.  Switching from MY_ZEROFILL/my_free
+       to new/delete runs the std::vector's ctor/dtor and gives every field
+       its default value via the header's member initialisers. */
+    trx = new tidesdb_trx_t{};
     if (!trx) return NULL;
 
     int rc = tidesdb_txn_begin_with_isolation(tdb_global, iso, &trx->txn);
     if (rc != TDB_SUCCESS)
     {
-        my_free(trx);
+        delete trx;
         (void)tdb_rc_to_ha(rc, "get_or_create_trx txn_begin(new)");
         return NULL;
     }
-    trx->dirty = false;
     trx->isolation_level = iso;
     trx->txn_generation = 1;
-    trx->held_locks_head = NULL;
-    trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
-    trx->waiting_on_mode = TDB_LOCK_MODE_S;
     thd_set_ha_data(thd, hton, trx);
     return trx;
 }
@@ -3208,6 +3283,25 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
        If commit fails, fall back to rollback+free. */
     if (trx->dirty)
     {
+        /* Fold the per-txn FTS meta deltas into this same txn before it
+           commits so the meta update is atomic with the row writes that
+           produced it. */
+        int frc = flush_trx_fts_meta_pending(thd, trx);
+        if (frc != TDB_SUCCESS)
+        {
+            sql_print_error(
+                "[TIDESDB] hton_commit: flush_trx_fts_meta_pending returned %d (gen=%lu)", frc,
+                (unsigned long)trx->txn_generation);
+            tidesdb_txn_rollback(trx->txn);
+            tidesdb_txn_free(trx->txn);
+            trx->txn = NULL;
+            trx->txn_generation++;
+            trx->dirty = false;
+            trx->stmt_savepoint_active = false;
+            row_locks_release_all(trx);
+            return tdb_rc_to_ha(frc, "hton_commit fts_meta_flush");
+        }
+
         int rc = tdb_txn_commit_blocking(thd, trx->txn);
         if (rc != TDB_SUCCESS)
         {
@@ -3233,6 +3327,8 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
     else
     {
         /* Read-only transaction -- we rollback, keep alive for reuse. */
+        trx->fts_meta_pending.clear();
+        trx->fts_meta_dirty = false;
         tidesdb_txn_rollback(trx->txn);
         trx->txn_generation++;
         trx->needs_reset = true;
@@ -3269,6 +3365,11 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
         trx->stmt_savepoint_active = false;
     }
 
+    /* The accumulated FTS meta deltas track the rows being rolled back,
+       so discard them along with the txn's other write state. */
+    trx->fts_meta_pending.clear();
+    trx->fts_meta_dirty = false;
+
     /* Full rollback -- we keep txn alive for reuse via reset on next use. */
     tidesdb_txn_rollback(trx->txn);
     trx->txn_generation++;
@@ -3294,7 +3395,7 @@ static int tidesdb_close_connection(handlerton *, THD *thd)
             tidesdb_txn_rollback(trx->txn);
             tidesdb_txn_free(trx->txn);
         }
-        my_free(trx);
+        delete trx;
         thd_set_ha_data(thd, tidesdb_hton, NULL);
     }
     return 0;
@@ -4296,6 +4397,7 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
       scan_cf_(NULL),
       scan_iter_cf_(NULL),
       scan_iter_txn_(NULL),
+      scan_iter_txn_gen_(0),
       idx_pk_exact_done_(false),
       scan_dir_(DIR_NONE),
       current_pk_len_(0),
@@ -4897,7 +4999,23 @@ void ha_tidesdb::recover_counters()
                     share->next_row_id.store(max_id + 1, std::memory_order_relaxed);
                 }
 
+                /* Seeding auto_inc_val from the last row in primary-key order
+                   is only correct when the AUTO_INCREMENT column is the
+                   leftmost part of the primary key, since only then does the
+                   PK-order maximum coincide with the auto-inc maximum.  When
+                   the auto-inc column lives elsewhere (a different unique
+                   key) the seed would underestimate the next value and let
+                   get_auto_increment hand out colliding ids, so leave the
+                   counter at zero and let MariaDB seed it on demand. */
+                bool auto_inc_is_pk_leftmost = false;
                 if (share->has_user_pk && table->found_next_number_field)
+                {
+                    const KEY *pk = &table->key_info[share->pk_index];
+                    if (pk->user_defined_key_parts > 0 &&
+                        pk->key_part[0].field == table->found_next_number_field)
+                        auto_inc_is_pk_leftmost = true;
+                }
+                if (auto_inc_is_pk_leftmost)
                 {
                     /* User PK with AUTO_INCREMENT -- we read the last row to seed
                        the in-memory counter from the max PK value. */
@@ -6046,8 +6164,7 @@ int ha_tidesdb::write_row(const uchar *buf)
                     if (rc != TDB_SUCCESS) goto err;
                 }
 
-                fts_update_meta(cached_thd_, txn, share->cf, i, FTS_DOC_DELTA_ADD,
-                                (int64_t)word_count);
+                trx_fts_meta_accumulate(trx, share->cf, i, FTS_DOC_DELTA_ADD, (int64_t)word_count);
             }
             else if (ki->algorithm == HA_KEY_ALG_RTREE)
             {
@@ -7255,11 +7372,12 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                     }
                 }
 
-                /* Meta same doc stays, so delta_docs=0.  Word count shifts by
-                   new_wc - old_wc; only write the meta row when it actually
-                   moved to avoid a pointless read-modify-write. */
+                /* The doc count stays the same, only the word count moves.
+                   Fold into the txn-level accumulator which flushes before
+                   commit so the meta update lands in the same txn as the
+                   row updates that produced it. */
                 int64_t wc_delta = (int64_t)new_wc - (int64_t)old_wc;
-                if (wc_delta != 0) fts_update_meta(cached_thd_, txn, share->cf, i, 0, wc_delta);
+                if (wc_delta != 0) trx_fts_meta_accumulate(trx, share->cf, i, 0, wc_delta);
             }
             else if (share->idx_is_spatial[i])
             {
@@ -7500,8 +7618,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
                                                true);
                 }
 
-                fts_update_meta(cached_thd_, txn, share->cf, i, FTS_DOC_DELTA_DEL,
-                                -(int64_t)word_count);
+                trx_fts_meta_accumulate(trx, share->cf, i, FTS_DOC_DELTA_DEL, -(int64_t)word_count);
             }
             else if (share->idx_is_spatial[i])
             {
@@ -7590,6 +7707,8 @@ int ha_tidesdb::delete_all_rows(void)
             tidesdb_txn_free(trx->txn);
             trx->txn = NULL;
             trx->dirty = false;
+            trx->fts_meta_pending.clear();
+            trx->fts_meta_dirty = false;
         }
         stmt_txn = NULL;
         stmt_txn_dirty = false;
@@ -7680,6 +7799,11 @@ int ha_tidesdb::delete_all_rows(void)
 int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
 {
     if (!trx || !trx->txn) return 0;
+
+    /* Folded FTS meta deltas have to land in the same txn as the row puts
+       they account for, so flush them before the mid-statement commit. */
+    int frc = flush_trx_fts_meta_pending(cached_thd_, trx);
+    if (frc != TDB_SUCCESS) return tdb_rc_to_ha(frc, "bulk_commit fts_meta_flush");
 
     int crc = tdb_txn_commit_blocking(cached_thd_, trx->txn);
     if (crc != TDB_SUCCESS)
@@ -8077,7 +8201,6 @@ int ha_tidesdb::info(uint flag)
 
                 tidesdb_free_stats(st);
             }
-            share->stats_refresh_us.store(now, std::memory_order_relaxed);
 
             /* Also refresh SHOW GLOBAL STATUS variables while we're updating stats */
             tidesdb_refresh_status_vars();
