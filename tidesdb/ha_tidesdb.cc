@@ -5236,10 +5236,10 @@ static bool tidesdb_encrypt_row_into(const std::string &plain, uint key_id, uint
     memcpy(&out[TIDESDB_ENC_VERSION_LEN], iv, TIDESDB_ENC_IV_LEN);
 
     unsigned int dlen = enc_len;
-    int rc = encryption_crypt(
-        (const unsigned char *)plain.data(), slen,
-        (unsigned char *)&out[TIDESDB_ENC_VERSION_LEN + TIDESDB_ENC_IV_LEN], &dlen, key, klen, iv,
-        TIDESDB_ENC_IV_LEN, ENCRYPTION_FLAG_ENCRYPT, key_id, key_version);
+    int rc = encryption_crypt((const unsigned char *)plain.data(), slen,
+                              (unsigned char *)&out[TIDESDB_ENC_VERSION_LEN + TIDESDB_ENC_IV_LEN],
+                              &dlen, key, klen, iv, TIDESDB_ENC_IV_LEN, ENCRYPTION_FLAG_ENCRYPT,
+                              key_id, key_version);
     if (rc != 0)
     {
         sql_print_error("[TIDESDB] encryption_crypt(encrypt) failed rc=%d", rc);
