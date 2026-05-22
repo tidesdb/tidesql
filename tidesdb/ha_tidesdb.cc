@@ -9678,9 +9678,21 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
                 int crc = tidesdb_txn_commit(txn);
                 if (crc != TDB_SUCCESS)
                 {
-                    sql_print_warning("[TIDESDB] inplace ADD INDEX: batch commit failed rc=%d",
-                                      crc);
+                    /* A failed batch commit drops this batch of index entries.
+                       Carrying on would finish the build and report success
+                       with an index that is silently missing rows, so abort
+                       the ALTER instead. */
+                    sql_print_error(
+                        "[TIDESDB] inplace ADD INDEX: batch commit failed rc=%d, "
+                        "aborting to avoid a partial index",
+                        crc);
+                    tidesdb_iter_free(iter);
                     tidesdb_txn_rollback(txn);
+                    tidesdb_txn_free(txn);
+                    tmp_restore_column_map(&altered_table->read_set, old_map);
+                    my_error(ER_INTERNAL_ERROR, MYF(0),
+                             "[TIDESDB] batch commit failed during index build");
+                    DBUG_RETURN(true);
                 }
             }
             tidesdb_iter_free(iter);
