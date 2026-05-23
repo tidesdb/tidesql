@@ -53,9 +53,23 @@ REPLACE INTO t_ai_replace (name) VALUES ('y');
 SELECT * FROM t_ai_replace ORDER BY name;
 id	name
 1	x
-2	y
 4	y
 3	z
+#
+# TEST 5b: an auto-increment PK must not bypass the UNIQUE secondary check
+#
+INSERT INTO t_ai_replace (name) VALUES ('z');
+ERROR 23000: Duplicate entry 'z' for key 'name'
+INSERT INTO t_ai_replace (name) VALUES ('x')
+ON DUPLICATE KEY UPDATE name = 'x2';
+SELECT * FROM t_ai_replace ORDER BY name;
+id	name
+1	x2
+4	y
+3	z
+# no value may appear twice in the UNIQUE column
+SELECT name, COUNT(*) AS c FROM t_ai_replace GROUP BY name HAVING c > 1;
+name	c
 #
 # TEST 6: BIGINT auto-increment
 #

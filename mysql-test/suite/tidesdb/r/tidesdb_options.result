@@ -122,6 +122,8 @@ DROP TABLE t_bigbuf;
 # ============================================
 #
 CREATE TABLE t_syncnone (id INT) ENGINE=TIDESDB SYNC_MODE='NONE';
+Warnings:
+Warning	1105	[TIDESDB] Table SYNC_MODE=NONE governs SSTable file sync only.  Under tidesdb_unified_memtable=ON the shared WAL is fsynced according to tidesdb_unified_memtable_sync_mode=FULL, so the table option does not change WAL durability for this table
 SHOW CREATE TABLE t_syncnone;
 Table	Create Table
 t_syncnone	CREATE TABLE `t_syncnone` (
@@ -133,6 +135,8 @@ id
 1
 DROP TABLE t_syncnone;
 CREATE TABLE t_syncint (id INT) ENGINE=TIDESDB SYNC_MODE='INTERVAL' SYNC_INTERVAL_US=500000;
+Warnings:
+Warning	1105	[TIDESDB] Table SYNC_MODE=INTERVAL governs SSTable file sync only.  Under tidesdb_unified_memtable=ON the shared WAL is fsynced according to tidesdb_unified_memtable_sync_mode=FULL, so the table option does not change WAL durability for this table
 SHOW CREATE TABLE t_syncint;
 Table	Create Table
 t_syncint	CREATE TABLE `t_syncint` (

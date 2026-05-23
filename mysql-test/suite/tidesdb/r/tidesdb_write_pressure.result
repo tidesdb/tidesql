@@ -13,6 +13,8 @@ pad CHAR(60) NOT NULL DEFAULT '',
 PRIMARY KEY (id),
 KEY k_1 (k)
 ) ENGINE=TIDESDB SYNC_MODE='NONE';
+Warnings:
+Warning	1105	[TIDESDB] Table SYNC_MODE=NONE governs SSTable file sync only.  Under tidesdb_unified_memtable=ON the shared WAL is fsynced according to tidesdb_unified_memtable_sync_mode=FULL, so the table option does not change WAL durability for this table
 CREATE TABLE sbtest2 (
 id  INT NOT NULL AUTO_INCREMENT,
 k   INT NOT NULL DEFAULT 0,
@@ -21,6 +23,8 @@ pad CHAR(60) NOT NULL DEFAULT '',
 PRIMARY KEY (id),
 KEY k_1 (k)
 ) ENGINE=TIDESDB SYNC_MODE='NONE';
+Warnings:
+Warning	1105	[TIDESDB] Table SYNC_MODE=NONE governs SSTable file sync only.  Under tidesdb_unified_memtable=ON the shared WAL is fsynced according to tidesdb_unified_memtable_sync_mode=FULL, so the table option does not change WAL durability for this table
 #
 # === Populate: 5000 rows per table ===
 #

@@ -13,6 +13,8 @@ pad CHAR(60) NOT NULL DEFAULT '',
 PRIMARY KEY (id),
 KEY k_1 (k)
 ) ENGINE=TIDESDB SYNC_MODE='NONE';
+Warnings:
+Warning	1105	[TIDESDB] Table SYNC_MODE=NONE governs SSTable file sync only.  Under tidesdb_unified_memtable=ON the shared WAL is fsynced according to tidesdb_unified_memtable_sync_mode=FULL, so the table option does not change WAL durability for this table
 #
 # === Populate: 2000 rows ===
 #
