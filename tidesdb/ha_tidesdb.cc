@@ -2098,7 +2098,7 @@ static ulonglong srv_max_memory_usage = 0; /* 0 = auto (library decides) */
 static my_bool srv_log_to_file = 1;        /* write TidesDB logs to file (default is yes) */
 static ulonglong srv_log_truncation_at = 24ULL * 1024 * 1024; /* log file truncation size (24MB) */
 static my_bool srv_unified_memtable = 1; /* 1 = unified WAL+memtable (default), 0 = per-CF */
-static ulonglong srv_unified_memtable_write_buffer_size = 128ULL * 1024 * 1024; /* 128MB */
+static ulonglong srv_unified_memtable_write_buffer_size = 256ULL * 1024 * 1024; /* 256MB */
 
 /* Per-session TTL override (seconds).  0 = use table default. */
 static MYSQL_THDVAR_ULONGLONG(ttl, PLUGIN_VAR_RQCMDARG,
@@ -2206,7 +2206,7 @@ static MYSQL_THDVAR_ENUM(default_compression, PLUGIN_VAR_RQCMDARG,
 
 static MYSQL_THDVAR_ULONGLONG(default_write_buffer_size, PLUGIN_VAR_RQCMDARG,
                               "Default write buffer size in bytes for new tables", NULL, NULL,
-                              128ULL * 1024 * 1024, 1024, ULONGLONG_MAX, 1024);
+                              64ULL * 1024 * 1024, 1024, ULONGLONG_MAX, 1024);
 
 static MYSQL_THDVAR_BOOL(default_bloom_filter, PLUGIN_VAR_RQCMDARG,
                          "Default bloom filter setting for new tables", NULL, NULL, 1);
@@ -2257,12 +2257,14 @@ static MYSQL_THDVAR_ULONGLONG(default_level_size_ratio, PLUGIN_VAR_RQCMDARG,
                               "Default level size ratio for new tables", NULL, NULL, 10, 2, 100, 1);
 
 static MYSQL_THDVAR_ULONGLONG(default_min_levels, PLUGIN_VAR_RQCMDARG,
-                              "Default minimum LSM-tree levels for new tables", NULL, NULL, 5, 1,
-                              64, 1);
+                              "Default minimum LSM-tree levels for new tables.  Matches "
+                              "TDB_DEFAULT_MIN_LEVELS in the TidesDB library",
+                              NULL, NULL, 1, 1, 64, 1);
 
 static MYSQL_THDVAR_ULONGLONG(default_dividing_level_offset, PLUGIN_VAR_RQCMDARG,
-                              "Default dividing level offset for new tables", NULL, NULL, 2, 0, 64,
-                              1);
+                              "Default dividing level offset for new tables.  Matches "
+                              "TDB_DEFAULT_DIVIDING_LEVEL_OFFSET in the TidesDB library",
+                              NULL, NULL, 1, 0, 64, 1);
 
 static MYSQL_THDVAR_ULONGLONG(default_skip_list_max_level, PLUGIN_VAR_RQCMDARG,
                               "Default skip list max level for new tables", NULL, NULL, 12, 1, 64,
