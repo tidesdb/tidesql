@@ -367,7 +367,7 @@ Read-only (set at startup):
   log_to_file               Write logs to file vs stderr (default: ON)
   log_truncation_at         Log file truncation size (default: 24MB; 0 = off)
   unified_memtable          Single shared WAL+memtable across all CFs (default: ON)
-  unified_memtable_write_buffer_size  Write buffer for unified memtable (default: 128MB)
+  unified_memtable_write_buffer_size  Write buffer for unified memtable (default: 256MB)
   unified_memtable_sync_mode         NONE/INTERVAL/FULL for unified WAL (default: FULL)
   unified_memtable_sync_interval     Sync interval in µs for INTERVAL mode (default: 128000)
   object_store_backend      LOCAL or S3 (default: LOCAL)
@@ -453,7 +453,7 @@ Session (SET SESSION tidesdb_...):
                             Useful for sliding-window expiry, tenant
                             eviction, or any DELETE-by-PK-range op.
   default_compression       Default compression for new tables
-  default_write_buffer_size Default write buffer for new tables (128MB)
+  default_write_buffer_size Default write buffer for new tables (64MB)
   default_sync_mode         Default sync mode for new tables (FULL)
   default_tombstone_density_trigger
                             Default tombstone-density compaction
@@ -544,10 +544,10 @@ DEFAULTS ALIGNMENT WITH THE LIBRARY
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
 The column-family option defaults track tidesdb_default_column_family_config
-in the underlying TidesDB library 1:1 except for three deliberate
-deviations chosen to fit SQL semantics and a typical OLTP server
-profile.  tidesdb_defaults_alignment in the MTR suite pins every
-default so a future change has to be made deliberately.
+in the underlying TidesDB library 1:1 except for two deliberate
+deviations chosen to fit SQL semantics.  tidesdb_defaults_alignment in
+the MTR suite pins every default so a future change has to be made
+deliberately.
 
   SYNC_MODE          plugin FULL, library NONE.  SQL clients expect
                      committed writes to be durable.  Only the per CF
@@ -557,18 +557,19 @@ default so a future change has to be made deliberately.
                      Matches MariaDB's default session isolation so a
                      plain CREATE TABLE mirrors what an InnoDB table
                      would do.
-  WRITE_BUFFER_SIZE  plugin 64MB PER CF, 256MB UNIFIED, library 64MB.  Sized for the typical
-                     SQL server memory budget rather than the library's
-                     general purpose default.
 
-Every other CF default (level_size_ratio, min_levels,
-dividing_level_offset, klog_value_threshold, compression LZ4, bloom
-filter on with fpr 0.01, block indexes, index sample ratio,
+Every other CF default (write_buffer_size 64MB, level_size_ratio,
+min_levels, dividing_level_offset, klog_value_threshold, compression
+LZ4, bloom filter on with fpr 0.01, block indexes, index sample ratio,
 block_index_prefix_len, skip list shape, l1 trigger, l0 stall
 threshold, tombstone density triggers, min_disk_space, use_btree,
 object_lazy_compaction, object_prefetch_compaction) matches the
 library exactly so a table created in the plugin and one created with
 a bare libtidesdb application share the same on disk shape.
+
+tidesdb_unified_memtable_write_buffer_size defaults to 256MB which is a
+DB-level shared WAL+memtable knob and intentionally larger than a per
+CF buffer since one pool serves every table on the instance.
 
 
 FIELD OPTIONS (per-column)

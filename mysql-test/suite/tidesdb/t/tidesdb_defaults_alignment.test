@@ -29,11 +29,11 @@ SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_use_btree';
 SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_object_lazy_compaction';
 SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_object_prefetch_compaction';
 SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_sync_interval_us';
+SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_write_buffer_size';
 
 --echo # deliberate deviations from the library default, see README
 SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_sync_mode';
 SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_isolation_level';
-SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_write_buffer_size';
 
 --source suite/tidesdb/include/cleanup_tidesdb.inc
 --echo # Done.

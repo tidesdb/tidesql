@@ -2206,7 +2206,7 @@ static MYSQL_THDVAR_ENUM(default_compression, PLUGIN_VAR_RQCMDARG,
 
 static MYSQL_THDVAR_ULONGLONG(default_write_buffer_size, PLUGIN_VAR_RQCMDARG,
                               "Default write buffer size in bytes for new tables", NULL, NULL,
-                              128ULL * 1024 * 1024, 1024, ULONGLONG_MAX, 1024);
+                              64ULL * 1024 * 1024, 1024, ULONGLONG_MAX, 1024);
 
 static MYSQL_THDVAR_BOOL(default_bloom_filter, PLUGIN_VAR_RQCMDARG,
                          "Default bloom filter setting for new tables", NULL, NULL, 1);
