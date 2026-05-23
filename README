@@ -484,7 +484,7 @@ family configuration.  ALTER TABLE ... <option>=<value> updates both the .frm
 and the live column family via tidesdb_cf_update_runtime_config().
 
 Storage:
-  WRITE_BUFFER_SIZE         Memtable size before flush (default: 128MB)
+  WRITE_BUFFER_SIZE         Memtable size before flush (default: 64MB PER TABLE/CF)
   MIN_DISK_SPACE            Minimum free disk space (default: 100MB)
   KLOG_VALUE_THRESHOLD      Values larger than this go to vlog (default: 512)
 
@@ -506,8 +506,8 @@ Isolation:
 LSM Tree:
   USE_BTREE                 Use B+tree SSTable format (default: OFF)
   LEVEL_SIZE_RATIO          Level size multiplier (default: 10)
-  MIN_LEVELS                Minimum LSM levels (default: 5)
-  DIVIDING_LEVEL_OFFSET     Compaction dividing level offset (default: 2)
+  MIN_LEVELS                Minimum LSM levels (default: 1, matches library)
+  DIVIDING_LEVEL_OFFSET     Compaction dividing level offset (default: 1, matches library)
   L1_FILE_COUNT_TRIGGER     L1 file count trigger for compaction (default: 4)
   L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 20)
   TOMBSTONE_DENSITY_TRIGGER Ratio in parts per 10000 above which compaction
@@ -540,6 +540,37 @@ Encryption:
   ENCRYPTION_KEY_ID         Encryption key ID (default: 1)
 
 
+DEFAULTS ALIGNMENT WITH THE LIBRARY
+░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+
+The column-family option defaults track tidesdb_default_column_family_config
+in the underlying TidesDB library 1:1 except for three deliberate
+deviations chosen to fit SQL semantics and a typical OLTP server
+profile.  tidesdb_defaults_alignment in the MTR suite pins every
+default so a future change has to be made deliberately.
+
+  SYNC_MODE          plugin FULL, library NONE.  SQL clients expect
+                     committed writes to be durable.  Only the per CF
+                     SSTable sync is affected since the shared WAL is
+                     governed by tidesdb_unified_memtable_sync_mode.
+  ISOLATION_LEVEL    plugin REPEATABLE_READ, library READ_COMMITTED.
+                     Matches MariaDB's default session isolation so a
+                     plain CREATE TABLE mirrors what an InnoDB table
+                     would do.
+  WRITE_BUFFER_SIZE  plugin 64MB PER CF, 256MB UNIFIED, library 64MB.  Sized for the typical
+                     SQL server memory budget rather than the library's
+                     general purpose default.
+
+Every other CF default (level_size_ratio, min_levels,
+dividing_level_offset, klog_value_threshold, compression LZ4, bloom
+filter on with fpr 0.01, block indexes, index sample ratio,
+block_index_prefix_len, skip list shape, l1 trigger, l0 stall
+threshold, tombstone density triggers, min_disk_space, use_btree,
+object_lazy_compaction, object_prefetch_compaction) matches the
+library exactly so a table created in the plugin and one created with
+a bare libtidesdb application share the same on disk shape.
+
+
 FIELD OPTIONS (per-column)
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 
@@ -565,63 +596,71 @@ Run specific test:
 
   perl mtr --suite=tidesdb tidesdb_crud
 
-Available tests (51 total, 300+ cases):
-  tidesdb_alter_crash         Crash safety during ALTER TABLE operations
-  tidesdb_analyze             ANALYZE TABLE with CF statistics output
-  tidesdb_auto_increment      AUTO_INCREMENT edge cases (gaps, rollback, explicit values)
-  tidesdb_backup              Online backup via tidesdb_backup_dir
-  tidesdb_concurrent_conflict Concurrent write-write conflict handling
-  tidesdb_concurrent_errors   Multi-connection error handling and recovery
-  tidesdb_checkpoint          Hard-link checkpoint via tidesdb_checkpoint_dir
-  tidesdb_consistent_snapshot START TRANSACTION WITH CONSISTENT SNAPSHOT
-  tidesdb_crud                Basic CRUD operations
-  tidesdb_data_home_dir       tidesdb_data_home_dir sysvar
-  tidesdb_drop_create         Repeated DROP/CREATE/TRUNCATE cycles
-  tidesdb_encryption          Data-at-rest encryption
-  tidesdb_engine_convert      InnoDB <-> TidesDB engine migration (ALTER TABLE ENGINE)
-  tidesdb_engine_status       SHOW ENGINE TIDESDB STATUS
-  tidesdb_fulltext            Full-text search (FULLTEXT indexes, BM25, boolean mode)
-  tidesdb_fulltext_phrase     FTS phrase queries ("exact phrase") and wildcard edge cases
-  tidesdb_fts_stopwords       FTS stop word filtering (default InnoDB stop words)
-  tidesdb_fts_blend_chars     FTS blend characters (Italian/French elision, O'Malley)
-  tidesdb_hidden_pk           Tables without explicit PK (hidden auto-generated row ID)
-  tidesdb_index_stats         Index statistics and optimizer cost model
-  tidesdb_info_schema         information_schema integration
-  tidesdb_insert_conflict     Duplicate key detection and handling
-  tidesdb_isolation           Isolation level behavior
-  tidesdb_json                JSON querying + generated-column JSON indexing
-  tidesdb_large_blob          Large BLOB/TEXT values (> 64KB, klog_value_threshold)
-  tidesdb_load_data           Bulk insert path (multi-row INSERT, INSERT...SELECT)
-  tidesdb_mixed_engine        Mixed-engine transactions (TidesDB + InnoDB in same txn)
-  tidesdb_mrr                 Multi-Range Read for WHERE col IN (...) on PK and secondary index
-  tidesdb_object_store        Object store integration (CRUD, indexes, txns, bulk, compaction)
-  tidesdb_online_ddl          Online DDL (instant, inplace, copy)
-  tidesdb_options             Table and field options
-  tidesdb_partition           RANGE/LIST/HASH/KEY partitioning
-  tidesdb_per_index_btree     Per-index USE_BTREE option
-  tidesdb_pessimistic_forupdate    SELECT FOR UPDATE serialization (pessimistic locking)
-  tidesdb_pessimistic_insert_lock  Pessimistic locking edge cases (non-existing rows, INSERT)
-  tidesdb_pessimistic_shared       Shared-lock coexistence, X waits for S, writer fairness, RC no-lock
+Available tests (65 total, 400+ cases):
+  tidesdb_alter_large_table       Large-table ALTER under REPEATABLE_READ
+  tidesdb_analyze                 ANALYZE TABLE with CF statistics output
+  tidesdb_auto_increment          AUTO_INCREMENT edge cases (gaps, rollback, explicit values, REPLACE, UNIQUE secondary)
+  tidesdb_backup                  Online backup via tidesdb_backup_dir
+  tidesdb_bulk_commit_durability  Bulk DML mid-txn commit durability, no silent row loss on failure
+  tidesdb_checkpoint              Hard-link checkpoint via tidesdb_checkpoint_dir
+  tidesdb_concurrent_conflict     Concurrent write-write conflict handling
+  tidesdb_concurrent_errors       Multi-connection error handling and recovery
+  tidesdb_consistent_snapshot     START TRANSACTION WITH CONSISTENT SNAPSHOT
+  tidesdb_crud                    Basic CRUD operations
+  tidesdb_data_home_dir           tidesdb_data_home_dir sysvar
+  tidesdb_defaults_alignment      Pins every per-table-option default vs the library defaults
+  tidesdb_drop_create             Repeated DROP/CREATE/TRUNCATE cycles
+  tidesdb_encryption              Data-at-rest encryption
+  tidesdb_encryption_rotation     Encrypted rows decrypt across two debug_key_management rotations
+  tidesdb_engine_convert          InnoDB <-> TidesDB engine migration (ALTER TABLE ENGINE)
+  tidesdb_engine_status           SHOW ENGINE TIDESDB STATUS
+  tidesdb_fts_blend_chars         FTS blend characters (Italian/French elision, O'Malley)
+  tidesdb_fts_stopwords           FTS stop word filtering (default InnoDB stop words)
+  tidesdb_fts_stopword_table      Custom stop word table loaded from a TidesDB CF
+  tidesdb_fulltext                Full-text search (FULLTEXT indexes, BM25, boolean mode)
+  tidesdb_fulltext_phrase         FTS phrase queries ("exact phrase") and wildcard edge cases
+  tidesdb_hidden_pk               Tables without explicit PK (hidden auto-generated row ID)
+  tidesdb_index_stats             Index statistics and optimizer cost model
+  tidesdb_info_schema             information_schema integration
+  tidesdb_insert_conflict         Duplicate key detection and handling
+  tidesdb_isolation               Session-level isolation level mapping (RC, RR, SNAPSHOT)
+  tidesdb_isolation_table_option  Table-level ISOLATION_LEVEL honored when session is at the SQL default
+  tidesdb_json                    JSON querying + generated-column JSON indexing
+  tidesdb_large_blob              Large BLOB/TEXT values (> 64KB, klog_value_threshold)
+  tidesdb_load_data               Bulk insert path (multi-row INSERT, INSERT...SELECT)
+  tidesdb_max_concurrent_flushes  tidesdb_max_concurrent_flushes sysvar plus misalignment warning
+  tidesdb_mixed_engine            Mixed-engine transactions (TidesDB + InnoDB in same txn)
+  tidesdb_mrr                     Multi-Range Read for WHERE col IN (...) on PK and secondary index
+  tidesdb_mvcc_concurrent_update  Concurrent same-row UPDATE under optimistic MVCC
+  tidesdb_object_store            Object store integration (CRUD, indexes, txns, bulk, compaction)
+  tidesdb_online_ddl              Online DDL (instant, inplace, copy)
+  tidesdb_options                 Table and field options
+  tidesdb_partition               RANGE/LIST/HASH/KEY partitioning
+  tidesdb_per_index_btree         Per-index USE_BTREE option
   tidesdb_pessimistic_deadlock_cycle  Two-row deadlock cycle, walker returns ER_LOCK_DEADLOCK
-  tidesdb_pessimistic_reentry      Same-trx re-acquire is a no-op (X subsumes S, same-mode skipped)
-  tidesdb_pessimistic_upgrade      Sole-holder S to X upgrade; multi-holder upgrade rejection
-  tidesdb_pessimistic_killwait     KILL QUERY wakes a blocked acquire promptly
-  tidesdb_pessimistic_timeout      tidesdb_lock_wait_timeout_ms bounds a blocked acquire
-  tidesdb_pk_index            Primary key and secondary index scans
-  tidesdb_rename              Table rename
-  tidesdb_replace_iodku       REPLACE INTO and INSERT ON DUPLICATE KEY UPDATE
-  tidesdb_savepoint           SQL SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT
-  tidesdb_single_delete       Single-delete semantics on primary and secondary CFs
-  tidesdb_spatial             Spatial indexes (Hilbert curve, MBR predicates)
-  tidesdb_sql                 40 SQL cases (aggregates, JOINs, subqueries, etc.)
-  tidesdb_status_vars         SHOW GLOBAL STATUS LIKE 'tidesdb%' monitoring variables
-  tidesdb_stress              Concurrent transactions, conflicts, truncate cycles
-  tidesdb_tombstone_density   Tombstone-density compaction trigger options + auto compact-after-range-delete
-  tidesdb_tpcc_contention     TPC-C district counter contention (pessimistic locking)
-  tidesdb_ttl                 Time-to-live expiration
-  tidesdb_unified_memtable    Unified memtable mode (shared WAL, cross-CF consistency)
-  tidesdb_vcol                Virtual/generated columns
-  tidesdb_vector              Vector search (MHNSW ANN, INSERT/UPDATE/DELETE)
+  tidesdb_pessimistic_forupdate   SELECT FOR UPDATE serialization (pessimistic locking)
+  tidesdb_pessimistic_insert_lock Pessimistic locking edge cases (non-existing rows, INSERT)
+  tidesdb_pessimistic_killwait    KILL QUERY wakes a blocked acquire promptly
+  tidesdb_pessimistic_reentry     Same-trx re-acquire is a no-op (X subsumes S, same-mode skipped)
+  tidesdb_pessimistic_shared      Shared-lock coexistence, X waits for S, writer fairness, RC no-lock
+  tidesdb_pessimistic_timeout     tidesdb_lock_wait_timeout_ms bounds a blocked acquire
+  tidesdb_pessimistic_upgrade     Sole-holder S to X upgrade; multi-holder upgrade rejection
+  tidesdb_pk_index                Primary key and secondary index scans
+  tidesdb_rename                  Table rename
+  tidesdb_replace_iodku           REPLACE INTO and INSERT ON DUPLICATE KEY UPDATE
+  tidesdb_savepoint               SQL SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT
+  tidesdb_single_delete           Single-delete semantics on primary and secondary CFs
+  tidesdb_spatial                 Spatial indexes (Hilbert curve, MBR predicates)
+  tidesdb_sql                     40 SQL cases (aggregates, JOINs, subqueries, etc.)
+  tidesdb_status_vars             SHOW GLOBAL STATUS LIKE 'tidesdb%' monitoring variables
+  tidesdb_stress                  Concurrent transactions, conflicts, truncate cycles
+  tidesdb_tombstone_density       Tombstone-density compaction trigger + auto compact-after-range-delete
+  tidesdb_tpcc_contention         TPC-C district counter contention (pessimistic locking)
+  tidesdb_ttl                     Time-to-live expiration
+  tidesdb_unified_memtable        Unified memtable mode (shared WAL, cross-CF consistency)
+  tidesdb_update_unique           UPDATE enforces PRIMARY KEY and UNIQUE secondary uniqueness
+  tidesdb_vcol                    Virtual/generated columns
+  tidesdb_vector                  Vector search (MHNSW ANN, INSERT/UPDATE/DELETE)
   tidesdb_write_pressure          oltp_write_only pressure (multi-connection)
 
 Run with verbose output:
