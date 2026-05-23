@@ -2465,7 +2465,7 @@ static MYSQL_SYSVAR_ULONGLONG(unified_memtable_write_buffer_size,
                               "Write buffer size in bytes for the unified memtable. "
                               "0 = automatic (library default). Only meaningful when "
                               "tidesdb_unified_memtable=ON",
-                              NULL, NULL, 128ULL * 1024 * 1024, 0, ULONGLONG_MAX, 0);
+                              NULL, NULL, 256ULL * 1024 * 1024, 0, ULONGLONG_MAX, 0);
 
 static ulong srv_unified_memtable_sync_mode = 2; /* FULL */
 
