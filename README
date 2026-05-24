@@ -509,7 +509,7 @@ LSM Tree:
   MIN_LEVELS                Minimum LSM levels (default: 1, matches library)
   DIVIDING_LEVEL_OFFSET     Compaction dividing level offset (default: 1, matches library)
   L1_FILE_COUNT_TRIGGER     L1 file count trigger for compaction (default: 4)
-  L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 20)
+  L0_QUEUE_STALL_THRESHOLD  L0 queue stall threshold (default: 10, matches library)
   TOMBSTONE_DENSITY_TRIGGER Ratio in parts per 10000 above which compaction
                             is escalated for a single SSTable when the
                             tombstone-density check fires after a flush
