@@ -40,7 +40,7 @@ Variable_name	Value
 tidesdb_default_l1_file_count_trigger	4
 SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_l0_queue_stall_threshold';
 Variable_name	Value
-tidesdb_default_l0_queue_stall_threshold	20
+tidesdb_default_l0_queue_stall_threshold	10
 SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_tombstone_density_trigger';
 Variable_name	Value
 tidesdb_default_tombstone_density_trigger	0

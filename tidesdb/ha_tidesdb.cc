@@ -108,8 +108,16 @@ static int tdb_rc_to_ha(int rc, const char *ctx)
            waiting for capacity, so this fall-through path only fires
            when the configured wait timeout has been exhausted or no
            wrapper is in play -- in either case lock-wait-timeout is the
-           accurate name (not deadlock; nothing is locked). */
+           accurate name (not deadlock; nothing is locked).
+
+           TDB_ERR_BUSY is the same family.  The library now distinguishes
+           a soft cap (TDB_ERR_MEMORY_LIMIT) from the case where it has
+           stalled long enough that its internal no-progress budget was
+           spent without freeing capacity.  Both are transient and the
+           plugin treats them the same once the in-plugin backoff has
+           given up. */
         case TDB_ERR_MEMORY_LIMIT:
+        case TDB_ERR_BUSY:
             return HA_ERR_LOCK_WAIT_TIMEOUT;
 
         /* Hard out-of-memory.  Distinct from TDB_ERR_MEMORY_LIMIT above
@@ -234,7 +242,7 @@ template <typename Op>
 static int tdb_with_backpressure_wait(THD *thd, Op &&op)
 {
     int rc = op();
-    if (likely(rc != TDB_ERR_MEMORY_LIMIT)) return rc;
+    if (likely(rc != TDB_ERR_MEMORY_LIMIT && rc != TDB_ERR_BUSY)) return rc;
 
     const ulong timeout_ms = tdb_backpressure_timeout_ms(thd);
     if (timeout_ms == 0) return rc;
@@ -244,7 +252,7 @@ static int tdb_with_backpressure_wait(THD *thd, Op &&op)
     bool counted = false;
     long long waited_us = 0;
 
-    while (rc == TDB_ERR_MEMORY_LIMIT)
+    while (rc == TDB_ERR_MEMORY_LIMIT || rc == TDB_ERR_BUSY)
     {
         if (thd && thd_killed(thd)) break;
 
@@ -2246,7 +2254,7 @@ static MYSQL_THDVAR_ULONGLONG(default_klog_value_threshold, PLUGIN_VAR_RQCMDARG,
                               NULL, NULL, 512, 0, ULONGLONG_MAX, 1);
 
 static MYSQL_THDVAR_ULONGLONG(default_l0_queue_stall_threshold, PLUGIN_VAR_RQCMDARG,
-                              "Default L0 queue stall threshold for new tables", NULL, NULL, 20, 1,
+                              "Default L0 queue stall threshold for new tables", NULL, NULL, 10, 1,
                               1024, 1);
 
 static MYSQL_THDVAR_ULONGLONG(default_l1_file_count_trigger, PLUGIN_VAR_RQCMDARG,
@@ -3308,7 +3316,8 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
         if (rc != TDB_SUCCESS)
         {
             /* Only log truly unexpected errors (not transient conflicts). */
-            if (rc != TDB_ERR_CONFLICT && rc != TDB_ERR_LOCKED && rc != TDB_ERR_MEMORY_LIMIT)
+            if (rc != TDB_ERR_CONFLICT && rc != TDB_ERR_LOCKED && rc != TDB_ERR_MEMORY_LIMIT &&
+                rc != TDB_ERR_BUSY)
                 sql_print_error(
                     "[TIDESDB] hton_commit: tidesdb_txn_commit returned %d "
                     "(dirty=%d gen=%lu)",
@@ -10371,8 +10380,8 @@ static long long srv_stat_cache_partitions;
    tidesdb_show_status can read them directly.  Their definitions live up
    there. */
 
-#define TIDESQL_VERSION_STR "4.5.2"
-#define TIDESQL_VERSION_HEX 0x40502
+#define TIDESQL_VERSION_STR "4.5.3"
+#define TIDESQL_VERSION_HEX 0x40503
 
 static const char *srv_stat_version = TIDESQL_VERSION_STR;
 static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;
