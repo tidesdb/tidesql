@@ -104,6 +104,18 @@ id	title
 1	Introduction to MySQL
 3	MySQL Performance Tuning
 #
+# TEST 10: Oversize query terms must not overflow the stack key buffer.
+# fts_build_key truncates inserted keys to 512 bytes, but a user can pass
+# a multi-byte search term whose byte length exceeds the on-disk cap.
+# The query must complete without crashing and return no match.
+#
+SELECT id, title FROM articles
+WHERE MATCH(title) AGAINST(REPEAT('a', 1024) IN BOOLEAN MODE);
+id	title
+SELECT id, title FROM articles
+WHERE MATCH(title) AGAINST(CONCAT(REPEAT('a', 1024), '*') IN BOOLEAN MODE);
+id	title
+#
 # Cleanup
 #
 DROP TABLE articles;

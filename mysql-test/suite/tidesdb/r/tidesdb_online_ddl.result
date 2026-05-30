@@ -157,3 +157,32 @@ SELECT COUNT(*) FROM t_dup;
 COUNT(*)
 2
 DROP TABLE t_dup;
+# ---- ADD FULLTEXT must back-fill pre-existing rows ----
+CREATE TABLE t_ft (
+id INT PRIMARY KEY,
+body VARCHAR(200)
+) ENGINE=TidesDB;
+INSERT INTO t_ft VALUES (1, 'tides db rocks'), (2, 'sql plugin lives'), (3, 'tides again');
+ALTER TABLE t_ft ADD FULLTEXT (body), ALGORITHM=INPLACE;
+ERROR 0A000: ALGORITHM=INPLACE is not supported. Reason: TidesDB cannot add FULLTEXT index inplace. Try ALGORITHM=COPY
+ALTER TABLE t_ft ADD FULLTEXT (body);
+SELECT id FROM t_ft WHERE MATCH(body) AGAINST('tides') ORDER BY id;
+id
+1
+3
+DROP TABLE t_ft;
+# ---- ADD SPATIAL must back-fill pre-existing rows ----
+CREATE TABLE t_sp (
+id INT PRIMARY KEY,
+g GEOMETRY NOT NULL
+) ENGINE=TidesDB;
+INSERT INTO t_sp VALUES (1, ST_GeomFromText('POINT(0 0)'));
+INSERT INTO t_sp VALUES (2, ST_GeomFromText('POINT(10 10)'));
+ALTER TABLE t_sp ADD SPATIAL INDEX (g), ALGORITHM=INPLACE;
+ERROR 0A000: ALGORITHM=INPLACE is not supported. Reason: TidesDB cannot add SPATIAL index inplace. Try ALGORITHM=COPY
+ALTER TABLE t_sp ADD SPATIAL INDEX (g);
+SELECT id FROM t_sp WHERE MBRWithin(g, ST_GeomFromText('POLYGON((-1 -1, -1 5, 5 5, 5 -1, -1 -1))'))
+ORDER BY id;
+id
+1
+DROP TABLE t_sp;
