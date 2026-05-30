@@ -330,13 +330,26 @@ static inline int tdb_txn_delete_cf_blocking(THD *thd, tidesdb_txn_t *txn,
 }
 
 /* Iterator construction can return TDB_ERR_BUSY when the library's reader fd
-   budget is exhausted; the reaper drains in tens of milliseconds.  Routing
-   iter_new through the same backpressure helper lets the plugin wait it out
-   instead of immediately surfacing HA_ERR_LOCK_WAIT_TIMEOUT. */
+   soft cap is exhausted, and TDB_ERR_IO when an SSTable open fails after the
+   budget check passed (EMFILE between the check and the open).  The library
+   documents both as retryable -- the in-line comment at the IO site reads
+   "let the caller retry once descriptors free."  Routing iter_new through
+   the backpressure helper waits it out instead of immediately surfacing
+   HA_ERR_LOCK_WAIT_TIMEOUT (BUSY) or HA_ERR_CRASHED (IO).  The IO -> BUSY
+   translation is scoped to this wrapper so other call sites still treat a
+   real TDB_ERR_IO as a hard fault via tdb_rc_to_ha; the wrapper's existing
+   tidesdb_backpressure_wait_timeout_ms bound stops a genuine disk failure
+   from hanging forever. */
 static inline int tdb_iter_new_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
                                         tidesdb_iter_t **out)
 {
-    return tdb_with_backpressure_wait(thd, [&]() { return tidesdb_iter_new(txn, cf, out); });
+    return tdb_with_backpressure_wait(thd,
+                                      [&]()
+                                      {
+                                          int rc = tidesdb_iter_new(txn, cf, out);
+                                          if (rc == TDB_ERR_IO) rc = TDB_ERR_BUSY;
+                                          return rc;
+                                      });
 }
 
 /* MariaDB data directory */
