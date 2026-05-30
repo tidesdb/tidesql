@@ -2740,6 +2740,22 @@ static my_bool srv_replica_mode = 0;
 static MYSQL_SYSVAR_BOOL(replica_mode, srv_replica_mode, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                          "Enable read-only replica mode (default OFF)", NULL, NULL, 0);
 
+/* When ON, deinit calls tidesdb_cancel_background_work before tidesdb_close
+   so in-flight compactions bail at their next checkpoint (uncommitted output
+   discarded, inputs intact) and shutdown returns quickly even with a multi-GB
+   compaction backlog.  Default OFF restores pre-4.5.4 behaviour where
+   tidesdb_close drains background work naturally; this is the safer setting
+   for object-store / replica setups where a mid-compaction cancel can leave
+   S3 in an inconsistent state that confuses a syncing replica. */
+static my_bool srv_fast_shutdown = 0;
+static MYSQL_SYSVAR_BOOL(fast_shutdown, srv_fast_shutdown,
+                         PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+                         "Call tidesdb_cancel_background_work at deinit so shutdown does not "
+                         "wait for in-flight compactions to drain.  Default OFF; turn ON only "
+                         "when shutdown latency on a large compaction backlog matters more "
+                         "than clean handoff to replicas reading the object store",
+                         NULL, NULL, 0);
+
 static my_bool srv_objstore_cache_on_read = 1;
 static MYSQL_SYSVAR_BOOL(objstore_cache_on_read, srv_objstore_cache_on_read,
                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -3039,6 +3055,7 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(objstore_replicate_wal),
     MYSQL_SYSVAR(objstore_replica_replay_wal),
     MYSQL_SYSVAR(replica_mode),
+    MYSQL_SYSVAR(fast_shutdown),
     MYSQL_SYSVAR(replica_sync_interval),
     MYSQL_SYSVAR(promote_primary),
     MYSQL_SYSVAR(default_object_lazy_compaction),
@@ -4637,17 +4654,22 @@ static int tidesdb_deinit_func(void *p)
 
     if (tdb_global)
     {
-        /* Cancel in-flight compactions and refuse new background work so
-           tidesdb_close does not block for minutes waiting on a multi-GB
-           compaction backlog (per design tidesdb_cancel_background_work +
-           tidesdb_close is the modern fast-shutdown sequence).  Failing
-           the cancel is non-fatal -- close still runs, it just waits. */
-        int crc = tidesdb_cancel_background_work(tdb_global);
-        if (crc != TDB_SUCCESS)
-            sql_print_warning(
-                "[TIDESDB] tidesdb_cancel_background_work returned rc=%d at "
-                "shutdown; tidesdb_close may block waiting for in-flight work",
-                crc);
+        /* Opt-in fast-shutdown: cancel in-flight compactions and refuse new
+           background work so tidesdb_close does not block for minutes on a
+           multi-GB compaction backlog.  Uncommitted compaction output is
+           discarded (inputs intact -- recovery is safe), but a mid-compaction
+           cancel can leave the object-store side with referenced-but-orphan
+           SSTables that confuse a syncing replica, so this is OFF by default
+           and tidesdb_close drains naturally. */
+        if (srv_fast_shutdown)
+        {
+            int crc = tidesdb_cancel_background_work(tdb_global);
+            if (crc != TDB_SUCCESS)
+                sql_print_warning(
+                    "[TIDESDB] tidesdb_cancel_background_work returned rc=%d at "
+                    "shutdown; tidesdb_close may block waiting for in-flight work",
+                    crc);
+        }
         tidesdb_close(tdb_global);
         tdb_global = NULL;
     }
