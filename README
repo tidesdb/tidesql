@@ -321,8 +321,12 @@ Core:
                      checked inside rnd_next / index_next / spatial /
                      ft_read so long scans return HA_ERR_ABORTED_BY_USER
 - Partitioning (RANGE, LIST, HASH, KEY)
-- Data-at-rest encryption (MariaDB encryption plugin integration)
-- Online DDL (instant metadata, inplace add/drop index, copy for columns)
+- Data-at-rest encryption (MariaDB encryption plugin integration; fail-closed
+  on missing key so a rotated-out version cannot silently mis-encrypt or
+  return zeroed plaintext)
+- Online DDL (instant metadata, inplace add/drop secondary index, force-copy
+  for FULLTEXT/SPATIAL adds so row back-fill goes through write_row, copy
+  for column-type changes and PK rewrites)
 - TRUNCATE TABLE as O(1) drop+recreate (instant regardless of table size)
 - ANALYZE TABLE with detailed CF statistics (levels, keys, sizes, cache hit rate)
 - Cached optimizer statistics (refreshed every 2 seconds from TidesDB)
@@ -423,6 +427,14 @@ Read-only (set at startup):
                             visibility (default: ON)
   replica_mode              Read-only replica (default: OFF)
   replica_sync_interval     MANIFEST poll interval in us (default: 5000000)
+  fast_shutdown             When ON, deinit calls tidesdb_cancel_background_work
+                            before tidesdb_close so in-flight compactions bail
+                            at their next checkpoint and shutdown returns
+                            quickly (default: OFF).  Default OFF lets close
+                            drain naturally, which is safer for object-store
+                            and replica setups where a mid-compaction cancel
+                            can leave S3 with referenced-but-not-yet-uploaded
+                            SSTables that confuse a syncing replica.
 
 Dynamic (SET GLOBAL at runtime):
 

@@ -577,20 +577,103 @@ jobs:
             FLUSH PRIVILEGES;
           "
 
-        # Write fresh data to existing items table and flush
+        # Shared diagnostic block.  Snapshots the world at a labelled
+        # checkpoint so failures can be localised to a specific moment
+        # rather than a "post-mortem after everything tore down" capture.
+        snapshot_state() {
+          local label="$1"
+          echo ""
+          echo "=== SNAPSHOT [$label] @ $(date -u '+%H:%M:%S') ==="
+          echo "--- MinIO top-level ---"
+          kubectl exec -n tidesql minio -- \
+            ls -la /data/tidesql-test/ 2>&1 | head -20 || true
+          echo "--- MinIO k8s_test__items ---"
+          kubectl exec -n tidesql minio -- \
+            ls -la /data/tidesql-test/k8s_test__items/ 2>&1 | head -40 || true
+          echo "--- MinIO uwal_*.log presence ---"
+          kubectl exec -n tidesql minio -- \
+            ls -la /data/tidesql-test/ 2>&1 | grep -E 'uwal_' || echo "(no uwal segments)"
+          echo "--- Primary TidesDB LOG (last 12 lines) ---"
+          kubectl exec -n tidesql tidesql-primary -- \
+            sh -c 'tail -12 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' \
+            2>&1 || echo "(primary unreachable)"
+          echo "--- Replica TidesDB LOG (last 12 lines) ---"
+          kubectl exec -n tidesql tidesql-replica -- \
+            sh -c 'tail -12 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' \
+            2>&1 || echo "(replica unreachable)"
+          echo "--- Counts ---"
+          local pc=$(timeout 5 kubectl exec -n tidesql tidesql-primary -- \
+            mariadb --connect-timeout=3 -N -e "SELECT COUNT(*) FROM k8s_test.items" 2>/dev/null || echo "?")
+          local rc=$(timeout 5 kubectl exec -n tidesql tidesql-replica -- \
+            mariadb --connect-timeout=3 -N -e "SELECT COUNT(*) FROM k8s_test.items" 2>/dev/null || echo "?")
+          echo "primary COUNT(*) = $pc"
+          echo "replica COUNT(*) = $rc"
+          echo "=== END SNAPSHOT [$label] ==="
+          echo ""
+        }
+        # Expose helper to subsequent steps via /tmp
+        declare -f snapshot_state > /tmp/snapshot_state.sh
+
+        snapshot_state "before-new-write"
+
+        # Write fresh data to existing items table.  No OPTIMIZE here --
+        # OPTIMIZE forces a synchronous compaction whose new SSTables
+        # race with replica MANIFEST sync.  Real failover never has an
+        # OPTIMIZE wedged between INSERT and failover; the natural flush
+        # path (or a FLUSH LOGS) is enough for the replica to pick up.
         kubectl exec -n tidesql tidesql-primary -- \
           mariadb -e "
             INSERT INTO k8s_test.items VALUES (10002, 'auto_failover_marker', REPEAT('F', 500));
-            OPTIMIZE TABLE k8s_test.items;
+            FLUSH LOGS;
           " 2>&1 || true
 
-        # Wait for S3 upload + replica sync
-        sleep 15
+        snapshot_state "after-insert-flush-logs"
 
-        # Verify replica can see the new row before we test failover
-        RESULT=$(timeout 10 kubectl exec -n tidesql tidesql-replica -- \
-          mariadb --connect-timeout=5 -N -e "SELECT COUNT(*) FROM k8s_test.items" 2>/dev/null || echo "0")
-        echo "Pre-failover replica row count: $RESULT"
+        # Polled converge-or-fail.  Drops the blind sleep 15 in favour of
+        # explicit visibility checks so the log shows the replica's
+        # trajectory rather than just the end-state.  Each iteration
+        # snapshots a fingerprint (replica count + bucket file count)
+        # so we can see whether the system is making progress or stuck.
+        echo "=== Waiting for replica to converge on row 10002 ==="
+        REPLICA_OK=0
+        for i in $(seq 1 60); do
+          RC=$(timeout 5 kubectl exec -n tidesql tidesql-replica -- \
+                mariadb --connect-timeout=3 -N -e "SELECT COUNT(*) FROM k8s_test.items" \
+                2>/dev/null || echo "0")
+          BUCKET_FILES=$(kubectl exec -n tidesql minio -- \
+                          sh -c 'ls /data/tidesql-test/k8s_test__items/ 2>/dev/null | wc -l' \
+                          2>/dev/null || echo "?")
+          UWAL_COUNT=$(kubectl exec -n tidesql minio -- \
+                        sh -c 'ls /data/tidesql-test/ 2>/dev/null | grep -c "^uwal_"' \
+                        2>/dev/null || echo "?")
+          REPLICA_LASTLOG=$(kubectl exec -n tidesql tidesql-replica -- \
+                            sh -c 'tail -1 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' \
+                            2>&1 | tr -d '\n' | cut -c1-160 || true)
+          echo "  iter=${i} replica_count=$RC bucket_items=$BUCKET_FILES uwal_segments=$UWAL_COUNT replica_lastlog=\"$REPLICA_LASTLOG\""
+          if [ "$RC" -ge 202 ] 2>/dev/null; then
+            echo "  converged at iter=${i} (count=$RC)"
+            REPLICA_OK=1
+            break
+          fi
+          sleep 1
+        done
+
+        snapshot_state "pre-failover-check"
+
+        if [ "$REPLICA_OK" -ne 1 ]; then
+          echo "FAIL: replica never converged to row 10002 within 60s"
+          echo "=== Replica TidesDB LOG (last 80 lines) ==="
+          kubectl exec -n tidesql tidesql-replica -- \
+            sh -c 'tail -80 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' || true
+          echo "=== Primary TidesDB LOG (last 80 lines) ==="
+          kubectl exec -n tidesql tidesql-primary -- \
+            sh -c 'tail -80 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' || true
+          echo "=== Full MinIO listing ==="
+          kubectl exec -n tidesql minio -- ls -lR /data/tidesql-test/ 2>&1 || true
+          exit 1
+        fi
+
+        echo "Pre-failover replica row count: $RC"
         echo "Primary restored with test data"
 
     - name: Deploy automated failover controller
@@ -713,7 +796,31 @@ jobs:
 
     - name: Test automated failover - kill primary
       run: |
+        # Pull in the snapshot helper from the prior step (saved by the
+        # restore step).  Defines snapshot_state again in this shell.
+        if [ -r /tmp/snapshot_state.sh ]; then
+          source /tmp/snapshot_state.sh 2>/dev/null || true
+        fi
+        snapshot_state() {
+          local label="$1"
+          echo ""
+          echo "=== SNAPSHOT [$label] @ $(date -u '+%H:%M:%S') ==="
+          kubectl exec -n tidesql minio -- \
+            ls -la /data/tidesql-test/ 2>&1 | head -20 || true
+          kubectl exec -n tidesql minio -- \
+            sh -c 'ls -la /data/tidesql-test/k8s_test__items/ 2>/dev/null' | head -40 || true
+          local rc=$(timeout 5 kubectl exec -n tidesql tidesql-replica -- \
+            mariadb --connect-timeout=3 -N -e "SELECT COUNT(*) FROM k8s_test.items" 2>/dev/null || echo "?")
+          echo "replica COUNT(*) = $rc"
+          kubectl exec -n tidesql tidesql-replica -- \
+            sh -c 'tail -12 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' \
+            2>&1 || true
+          echo "=== END SNAPSHOT [$label] ==="
+        }
+
         echo "=== Automated failover test ==="
+        snapshot_state "before-kill"
+
         echo "Killing primary to trigger automatic failover..."
         kubectl delete pod -n tidesql tidesql-primary --grace-period=0 --force
 
@@ -721,7 +828,10 @@ jobs:
         # So it should detect and promote within ~10s
         echo "Waiting for failover controller to detect and promote..."
 
-        # Wait for the controller to finish (it exits after promotion)
+        # Wait for the controller to finish (it exits after promotion).
+        # While waiting, snapshot the replica + MinIO every few iterations
+        # so we can see whether the replica is making catch-up progress
+        # during the dead-primary window.
         for i in $(seq 1 20); do
           STATUS=$(kubectl get pod -n tidesql tidesql-failover -o jsonpath='{.status.phase}' 2>/dev/null || echo "unknown")
           echo "  check $i: controller status=$STATUS"
@@ -729,8 +839,20 @@ jobs:
             echo "Failover controller completed promotion"
             break
           fi
+          # Sample replica state on a few iterations so we can correlate
+          # what the replica saw against when the controller decided.
+          if [ $((i % 3)) -eq 1 ]; then
+            RC=$(timeout 3 kubectl exec -n tidesql tidesql-replica -- \
+              mariadb --connect-timeout=3 -N -e "SELECT COUNT(*) FROM k8s_test.items" 2>/dev/null || echo "?")
+            REPL_LAST=$(kubectl exec -n tidesql tidesql-replica -- \
+              sh -c 'tail -1 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' 2>&1 \
+              | tr -d '\n' | cut -c1-160 || true)
+            echo "    [wait-iter=${i}] replica_count=$RC replica_lastlog=\"$REPL_LAST\""
+          fi
           sleep 3
         done
+
+        snapshot_state "after-controller-completes"
 
         # Show controller logs
         echo "=== Failover controller logs ==="
@@ -739,14 +861,44 @@ jobs:
     - name: Verify automated failover succeeded
       timeout-minutes: 2
       run: |
-        # The replica should now be promoted and accept writes
-        sleep 5
+        # The replica should now be promoted and accept writes.  Instead
+        # of a blind sleep 5, poll for the count to land for up to 30s so
+        # the log shows whether the data was visible immediately after
+        # promotion or only after the engine finished its post-promotion
+        # MANIFEST replay + WAL replay pass.
+        echo "=== Post-promotion convergence trajectory ==="
+        POST_OK=0
+        for i in $(seq 1 30); do
+          RESULT=$(timeout 5 kubectl exec -n tidesql tidesql-replica -- \
+            mariadb --connect-timeout=3 -N -e "SELECT COUNT(*) FROM k8s_test.items" 2>/dev/null || echo "0")
+          PROMOTED_LASTLOG=$(kubectl exec -n tidesql tidesql-replica -- \
+            sh -c 'tail -1 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' 2>&1 \
+            | tr -d '\n' | cut -c1-160 || true)
+          echo "  iter=${i} count=$RESULT lastlog=\"$PROMOTED_LASTLOG\""
+          if [ "$RESULT" -ge 202 ] 2>/dev/null; then
+            POST_OK=1
+            break
+          fi
+          sleep 1
+        done
 
-        # Verify data survived promotion (items table already cached - no discovery needed)
-        RESULT=$(timeout 10 kubectl exec -n tidesql tidesql-replica -- \
-          mariadb --connect-timeout=5 -N -e "SELECT COUNT(*) FROM k8s_test.items" 2>/dev/null || echo "0")
+        echo ""
+        echo "=== Final MinIO state after auto-failover ==="
+        kubectl exec -n tidesql minio -- \
+          ls -la /data/tidesql-test/ 2>&1 || true
+        kubectl exec -n tidesql minio -- \
+          sh -c 'ls -la /data/tidesql-test/k8s_test__items/ 2>/dev/null' || true
+
+        echo ""
+        echo "=== Promoted-replica TidesDB LOG (last 100 lines) ==="
+        kubectl exec -n tidesql tidesql-replica -- \
+          sh -c 'tail -100 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' || true
+
         echo "Post-auto-failover row count: $RESULT"
-        [ "$RESULT" -ge 3 ] || (echo "FAIL: data lost after automated failover (got $RESULT)"; exit 1)
+        if [ "$POST_OK" -ne 1 ]; then
+          echo "FAIL: data lost after automated failover (got $RESULT)"
+          exit 1
+        fi
 
         # Verify promoted replica accepts writes
         timeout 15 kubectl exec -n tidesql tidesql-replica -- \

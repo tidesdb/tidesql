@@ -235,6 +235,7 @@ static std::atomic<long long> srv_stat_lock_timeouts{0};
 static std::atomic<long long> srv_stat_lock_held{0};
 static std::atomic<long long> srv_stat_lock_entries{0};
 static std::atomic<long long> srv_stat_lock_entry_recycles{0};
+static std::atomic<long long> srv_stat_lock_chain_max{0};
 
 static ulong tdb_backpressure_timeout_ms(THD *thd);
 static ulong tdb_lock_wait_timeout_ms(THD *thd);
@@ -370,8 +371,10 @@ static handlerton *tidesdb_hton;
   for fairness, and best-effort deadlock detection.
 
   Design:
-  - 65536 hash partitions over XXH3 of the row key; each partition has its
-    own mutex and a linked-list hash chain of lock entries.
+  - Hash partitions over XXH3 of the row key, sized at init from hardware
+    concurrency.  Each partition has its own mutex, an active hash chain
+    of lock entries, and a per-partition freelist of slots whose granted
+    and waiting lists are both empty.
   - Each lock entry has two intrusive lists, both mutex-guarded:
       granted_head -- currently-granted requests on this row
       waiting_head -- FIFO of requests still waiting
@@ -386,13 +389,17 @@ static handlerton *tidesdb_hton;
     AND no waiters exist; otherwise we reject as HA_ERR_LOCK_DEADLOCK
     rather than introduce a self-deadlock with our own S-grant.
   - For deadlock detection, when we wait on a lock, walk every granted holder's
-    wait-for chain.  Loads are atomic, lock+trx structs are never freed,
-    so a stale read can only produce a false-positive (caller retries) or
-    a false-negative (caller times out via lock-wait-timeout) -- never
-    memory corruption.
+    wait-for chain.  Loads are atomic, lock entry memory is never my_free'd
+    during runtime, so a stale read can only produce a false-positive
+    (caller retries) or a false-negative (caller times out via
+    lock-wait-timeout) -- never memory corruption.
   - Release walks the trx's held_locks_head, unlinks each request from its
     lock's granted list, promotes any waiting requests now compatible with
-    the remaining granted set, and broadcasts the lock's cond.
+    the remaining granted set, broadcasts the lock's cond, and moves the
+    lock entry onto the partition's freelist if no granted or waiting
+    requests remain.  Slot memory is retained for the deadlock walker but
+    the entry leaves the hash chain so lookups stay O(active locks per
+    partition) rather than O(lifetime keys).
 */
 
 /* Number of hash partitions for the row lock table.  Sized at init from
@@ -429,9 +436,11 @@ struct tdb_lock_request_t
 };
 
 /* Lock-table entry.  Granted and waiting lists are mutex-guarded by the
-   owning partition's mutex.  Lock entries are never freed during runtime
-   (only at plugin deinit), so deadlock walkers can read these pointers
-   from other partitions without worrying about freed memory. */
+   owning partition's mutex.  Lock entry memory is never my_free'd during
+   runtime (only at plugin deinit), so deadlock walkers can read these
+   pointers from other partitions without worrying about freed memory.
+   An entry is either threaded into part->chain (active) or part->freelist
+   (idle); the hash_next field doubles as the freelist link when idle. */
 struct tdb_row_lock_t
 {
     uchar *pk;                        /* heap-allocated key bytes */
@@ -441,7 +450,8 @@ struct tdb_row_lock_t
     tdb_lock_request_t *waiting_tail; /* mutex-guarded FIFO tail; lets append
                                          skip the O(n) walk to find it */
     mysql_cond_t cond;                /* waiters sleep on this */
-    tdb_row_lock_t *hash_next;        /* mutex-guarded */
+    tdb_row_lock_t *hash_next;        /* mutex-guarded; chain when active,
+                                         freelist when idle */
     uint partition;                   /* which partition (cached for release) */
 };
 
@@ -452,7 +462,8 @@ struct tdb_row_lock_t
 struct alignas(64) tdb_lock_partition_t
 {
     mysql_mutex_t mutex;
-    tdb_row_lock_t *chain; /* head of hash chain */
+    tdb_row_lock_t *chain;    /* head of active hash chain */
+    tdb_row_lock_t *freelist; /* head of idle-slot list, reuse before malloc */
 };
 
 static tdb_lock_partition_t *lock_partitions = NULL;
@@ -469,39 +480,87 @@ static inline bool tdb_lock_modes_compatible(tdb_lock_mode_t held, tdb_lock_mode
     return held == TDB_LOCK_MODE_S && want == TDB_LOCK_MODE_S;
 }
 
+/* If the slot has no granted or waiting requests, unlink it from the
+   partition's active chain and push it onto the freelist.  Caller must
+   hold the partition mutex.  Slot memory survives so the deadlock
+   walker can still safely dereference any cross-partition pointer it
+   captured before we dropped the cross-partition mutex. */
+static inline void tdb_lock_freelist_if_empty(tdb_lock_partition_t *part, tdb_row_lock_t *lock)
+{
+    if (lock->granted_head != NULL || lock->waiting_head != NULL) return;
+    tdb_row_lock_t **cp = &part->chain;
+    while (*cp && *cp != lock) cp = &(*cp)->hash_next;
+    if (*cp == lock)
+    {
+        *cp = lock->hash_next;
+        lock->hash_next = part->freelist;
+        part->freelist = lock;
+    }
+}
+
 /* Find or create a lock entry in the partition's hash chain.
    Caller must hold partition mutex.
 
-   For memory hygiene, we lock entry structs are never my_free'd during runtime
-   because lock-free deadlock walkers from other partitions can hold
-   pointers into them (transiently, via cur->waiting_on->lock).  Instead,
-   an entry whose granted_head and waiting_head are both empty is recycled
-   here -- on the next lookup for a different key on this partition, we
-   overwrite the empty entry's pk bytes and reuse its mutex/cond.  Walkers
-   never dereference an entry's pk, so a key rewrite is invisible to them.
-   The result is per-partition memory is bounded by peak-concurrent-locks, not
-   running-total. */
+   The chain holds only entries with at least one granted or waiting
+   request, so its length tracks concurrent active locks for this
+   partition, not lifetime keys.  Released slots are unlinked from the
+   chain and pushed onto part->freelist by row_locks_release_all; we pop
+   from the freelist before mallocing.  Slot memory is retained across
+   reuse so lock-free deadlock walkers from other partitions can still
+   safely dereference any tdb_row_lock_t pointer they captured before we
+   dropped the cross-partition mutex.  Walkers never dereference an
+   entry's pk, so a key rewrite during freelist reuse is invisible to
+   them, and the partition field stays stable because slots are only
+   ever reused within their original partition. */
 static tdb_row_lock_t *tdb_lock_find_or_create(tdb_lock_partition_t *part, uint part_idx,
                                                const uchar *pk, uint pk_len)
 {
-    tdb_row_lock_t *reusable = NULL;
+    ulong chain_len = 0;
     for (tdb_row_lock_t *e = part->chain; e; e = e->hash_next)
     {
-        if (e->pk_len == pk_len && memcmp(e->pk, pk, pk_len) == 0) return e;
-        if (!reusable && e->granted_head == NULL && e->waiting_head == NULL) reusable = e;
+        chain_len++;
+        if (e->pk_len == pk_len && memcmp(e->pk, pk, pk_len) == 0)
+        {
+            long long prev = srv_stat_lock_chain_max.load(std::memory_order_relaxed);
+            while ((long long)chain_len > prev &&
+                   !srv_stat_lock_chain_max.compare_exchange_weak(prev, (long long)chain_len,
+                                                                  std::memory_order_relaxed))
+                ;
+            return e;
+        }
+    }
+    /* Sample chain depth after a miss as well, so a single-row hotspot
+       behind a long chain still surfaces in status. */
+    {
+        long long prev = srv_stat_lock_chain_max.load(std::memory_order_relaxed);
+        while ((long long)chain_len > prev &&
+               !srv_stat_lock_chain_max.compare_exchange_weak(prev, (long long)chain_len,
+                                                              std::memory_order_relaxed))
+            ;
     }
 
-    if (reusable)
+    if (part->freelist)
     {
+        tdb_row_lock_t *e = part->freelist;
+        part->freelist = e->hash_next;
         uchar *new_pk = (uchar *)my_malloc(PSI_NOT_INSTRUMENTED, pk_len, MYF(0));
-        if (!new_pk) return NULL;
+        if (!new_pk)
+        {
+            /* Put the slot back so the next caller can try again. */
+            e->hash_next = part->freelist;
+            part->freelist = e;
+            return NULL;
+        }
         memcpy(new_pk, pk, pk_len);
-        my_free(reusable->pk);
-        reusable->pk = new_pk;
-        reusable->pk_len = pk_len;
-        /* granted_head, waiting_head, cond, hash_next, partition stay. */
+        my_free(e->pk);
+        e->pk = new_pk;
+        e->pk_len = pk_len;
+        /* granted_head and waiting_head were NULL when the slot was
+           freelisted; cond/partition stay across reuse. */
+        e->hash_next = part->chain;
+        part->chain = e;
         srv_stat_lock_entry_recycles.fetch_add(1, std::memory_order_relaxed);
-        return reusable;
+        return e;
     }
 
     tdb_row_lock_t *e =
@@ -811,6 +870,7 @@ static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len, THD 
         }
         tdb_lock_waiting_remove(lock, req);
         trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
+        tdb_lock_freelist_if_empty(part, lock);
         mysql_mutex_unlock(&part->mutex);
         my_free(req);
         srv_stat_lock_deadlocks.fetch_add(1, std::memory_order_relaxed);
@@ -871,6 +931,7 @@ static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len, THD 
            waiter wakes up. */
         tdb_lock_promote_waiters(lock);
         bool wake = (lock->waiting_head != NULL) || (lock->granted_head != NULL);
+        tdb_lock_freelist_if_empty(part, lock);
         mysql_mutex_unlock(&part->mutex);
         if (wake) mysql_cond_broadcast(&lock->cond);
         my_free(req);
@@ -919,6 +980,12 @@ static void row_locks_release_all(tidesdb_trx_t *trx)
         bool had_waiters = (lock->waiting_head != NULL);
         tdb_lock_promote_waiters(lock);
         bool promoted_any = had_waiters && (lock->granted_head != NULL);
+
+        /* If nothing references this slot any more, unlink it from the
+           hash chain and stash it on the partition freelist so the next
+           acquire can reuse it without growing the chain.  Slot memory
+           is retained across reuse for the deadlock walker. */
+        tdb_lock_freelist_if_empty(part, lock);
 
         mysql_mutex_unlock(&part->mutex);
 
@@ -4339,17 +4406,30 @@ static int tidesdb_init_func(void *p)
         row_lock_partitions = desired;
     }
 
-    /* aligned_alloc requires size to be a multiple of alignment; alignas(64)
-       on the struct already guarantees that.  Plain my_malloc does not honour
-       the alignas, so we use the C++ aligned new-expression pattern. */
-    lock_partitions = (tdb_lock_partition_t *)my_malloc(
-        PSI_NOT_INSTRUMENTED, row_lock_partitions * sizeof(tdb_lock_partition_t), MYF(MY_ZEROFILL));
+    /* my_malloc returns only malloc-default alignment (8 or 16 bytes), so
+       a struct declared alignas(64) can land misaligned in the array and
+       any 16-byte SSE store the compiler emits against it segfaults.
+       posix_memalign gives us the alignment the struct actually requires. */
+    {
+        size_t sz = (size_t)row_lock_partitions * sizeof(tdb_lock_partition_t);
+        void *p = NULL;
+        if (posix_memalign(&p, alignof(tdb_lock_partition_t), sz) == 0)
+        {
+            memset(p, 0, sz);
+            lock_partitions = (tdb_lock_partition_t *)p;
+        }
+        else
+        {
+            lock_partitions = NULL;
+        }
+    }
     if (lock_partitions)
     {
         for (ulong i = 0; i < row_lock_partitions; i++)
         {
             mysql_mutex_init(0, &lock_partitions[i].mutex, MY_MUTEX_INIT_FAST);
             lock_partitions[i].chain = NULL;
+            lock_partitions[i].freelist = NULL;
         }
     }
 
@@ -4683,9 +4763,18 @@ static int tidesdb_deinit_func(void *p)
     {
         for (ulong i = 0; i < row_lock_partitions; i++)
         {
-            /*We free all lock entries in the hash chain */
-            tdb_row_lock_t *e = lock_partitions[i].chain;
-            while (e)
+            /* Free everything on the active chain and the freelist; both
+               lists thread through hash_next and the freelist holds slots
+               that were unlinked from the chain at release time. */
+            for (tdb_row_lock_t *e = lock_partitions[i].chain; e;)
+            {
+                tdb_row_lock_t *next = e->hash_next;
+                mysql_cond_destroy(&e->cond);
+                my_free(e->pk);
+                my_free(e);
+                e = next;
+            }
+            for (tdb_row_lock_t *e = lock_partitions[i].freelist; e;)
             {
                 tdb_row_lock_t *next = e->hash_next;
                 mysql_cond_destroy(&e->cond);
@@ -4695,7 +4784,8 @@ static int tidesdb_deinit_func(void *p)
             }
             mysql_mutex_destroy(&lock_partitions[i].mutex);
         }
-        my_free(lock_partitions);
+        /* Allocated via posix_memalign in tidesdb_init_func; pair with free. */
+        free(lock_partitions);
         lock_partitions = NULL;
     }
 
@@ -10984,6 +11074,7 @@ static struct st_mysql_show_var tidesdb_status_variables[] = {
     {"tidesdb_lock_held", (char *)&srv_stat_lock_held, SHOW_LONGLONG},
     {"tidesdb_lock_entries", (char *)&srv_stat_lock_entries, SHOW_LONGLONG},
     {"tidesdb_lock_entry_recycles", (char *)&srv_stat_lock_entry_recycles, SHOW_LONGLONG},
+    {"tidesdb_lock_chain_max", (char *)&srv_stat_lock_chain_max, SHOW_LONGLONG},
     {NullS, NullS, SHOW_ULONG}};
 
 /* Refresh the static status variables from live tidesdb stats.  Cost is
