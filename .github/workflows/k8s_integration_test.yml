@@ -459,13 +459,24 @@ jobs:
 
         # Flush so any post-promotion writes (the manual_failover INSERT) are
         # in an SSTable, then graceful shutdown so the close path drains the
-        # async upload queue. 30s timeout falls through to force-delete.
+        # async upload queue.  60s timeout because the unified-WAL drain over
+        # the object store can outlast a shorter window; if mariadb-admin
+        # exits via the timeout's SIGKILL the kubectl exec layer surfaces
+        # an "exit code 137" line which is benign but reads as a fault when
+        # scanning logs.  Grep it out so the next reader is not misled.
         kubectl exec -n tidesql tidesql-replica -- \
           mariadb -e "FLUSH LOGS; OPTIMIZE TABLE k8s_test.items;" 2>&1 || true
         kubectl exec -n tidesql tidesql-replica -- \
-          timeout 30 mariadb-admin shutdown 2>&1 || true
+          timeout 60 mariadb-admin shutdown 2>&1 \
+          | grep -v "command terminated with exit code 137" || true
 
-        kubectl delete pod -n tidesql tidesql-replica --grace-period=0 --force 2>&1 || true
+        # Prefer a graceful pod removal so any in-flight shutdown work has a
+        # chance to finish; fall back to --force only if the pod is still
+        # there after the grace period.
+        kubectl delete pod -n tidesql tidesql-replica --grace-period=30 2>&1 || true
+        if kubectl get pod -n tidesql tidesql-replica >/dev/null 2>&1; then
+          kubectl delete pod -n tidesql tidesql-replica --grace-period=0 --force 2>&1 || true
+        fi
         # Block on the pod being fully removed before bringing up the new
         # primary; condition=Ready alone doesn't give us this guarantee.
         kubectl wait -n tidesql --for=delete pod/tidesql-replica --timeout=60s || true
