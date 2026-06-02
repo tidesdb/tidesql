@@ -1842,9 +1842,17 @@ static bool fts_phrase_in_tokens(const std::vector<fts_token_t> &doc_tokens,
 
 /* ******************** Spatial Index helpers ******************** */
 
+/* MariaDB renamed HA_SPATIAL -> HA_SPATIAL_legacy after the 11.x series; the
+   key-flag bit (1024) is unchanged. Spatial keys reliably carry this flag on
+   every version, whereas KEY::algorithm is only set to HA_KEY_ALG_RTREE on
+   newer servers (it is HA_KEY_ALG_UNDEF on 11.4), so detect via the flag. */
+#ifndef HA_SPATIAL
+#define HA_SPATIAL HA_SPATIAL_legacy
+#endif
+
 static inline bool is_spatial_index(const KEY *ki)
 {
-    return ki->algorithm == HA_KEY_ALG_RTREE;
+    return (ki->flags & HA_SPATIAL) || ki->algorithm == HA_KEY_ALG_RTREE;
 }
 
 /* MBR (Minimum Bounding Rectangle) for spatial predicates */
@@ -5101,7 +5109,7 @@ uint ha_tidesdb::pk_from_record(const uchar *record, uchar *out)
 static uint comparable_key_length(const KEY *ki)
 {
     /* Spatial indexes use a fixed 8-byte Hilbert value as the comparable key.. */
-    if (ki->algorithm == HA_KEY_ALG_RTREE) return SPATIAL_HILBERT_KEY_LEN;
+    if (is_spatial_index(ki)) return SPATIAL_HILBERT_KEY_LEN;
 
     uint len = 0;
     for (uint p = 0; p < ki->user_defined_key_parts; p++)
@@ -6688,7 +6696,7 @@ int ha_tidesdb::write_row(const uchar *buf)
 
                 trx_fts_meta_accumulate(trx, share->cf, i, FTS_DOC_DELTA_ADD, (int64_t)word_count);
             }
-            else if (ki->algorithm == HA_KEY_ALG_RTREE)
+            else if (is_spatial_index(ki))
             {
                 /* Spatial index maintenance */
                 Field *geom_field = ki->key_part[0].field;
