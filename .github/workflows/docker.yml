@@ -33,19 +33,13 @@ jobs:
       - name: Resolve TidesDB version
         id: versions
         run: |
-          # Temporarily pinned to the 933patch branch (tidesdb PR 631)
-          # so the candidate library fix is exercised by Docker build CI
-          # alongside the k8s failover flow.  Revert to latest-release
-          # below once 933patch ships as a tagged release.
-          VERSION=933patch
+          VERSION=$(curl -fsSL https://api.github.com/repos/tidesdb/tidesdb/releases/latest \
+            | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "Failed to fetch latest TidesDB version" >&2
+            exit 1
+          fi
           echo "tidesdb=${VERSION}" >> "$GITHUB_OUTPUT"
-          # VERSION=$(curl -fsSL https://api.github.com/repos/tidesdb/tidesdb/releases/latest \
-          #   | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
-          # if [ -z "$VERSION" ]; then
-          #   echo "Failed to fetch latest TidesDB version" >&2
-          #   exit 1
-          # fi
-          # echo "tidesdb=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

@@ -33,21 +33,14 @@ jobs:
     - name: Resolve TidesDB version
       id: tidesdb-version
       run: |
-        # Temporarily pinned to the 933patch branch (tidesdb PR 631) so
-        # the replica failover flow can be exercised against the
-        # candidate library fix before it lands on a release tag.
-        # Revert to the latest-release lookup below once 933patch ships.
-        TAG=933patch
+        # Resolve latest TidesDB release tag from GitHub
+        TAG=$(curl -sf https://api.github.com/repos/tidesdb/tidesdb/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+        if [ -z "$TAG" ]; then
+          echo "Failed to resolve latest TidesDB release"
+          exit 1
+        fi
         echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-        echo "TidesDB version: $TAG (branch pin from tidesdb PR 631)"
-        # # Resolve latest TidesDB release tag from GitHub
-        # TAG=$(curl -sf https://api.github.com/repos/tidesdb/tidesdb/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-        # if [ -z "$TAG" ]; then
-        #   echo "Failed to resolve latest TidesDB release"
-        #   exit 1
-        # fi
-        # echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-        # echo "TidesDB version: $TAG"
+        echo "TidesDB version: $TAG"
 
     - name: Build TideSQL Docker image
       run: |
