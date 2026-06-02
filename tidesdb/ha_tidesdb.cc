@@ -1039,9 +1039,17 @@ static const char *ha_tidesdb_exts[] = {NullS};
 
 /* ******************** Full-Text Search helpers ******************** */
 
+/* MariaDB renamed HA_FULLTEXT -> HA_FULLTEXT_legacy after the 11.x series
+   (flag bit 128 unchanged).  Detect via the flag: KEY::algorithm is only set
+   to HA_KEY_ALG_FULLTEXT on newer servers, and notably not in the ALTER
+   key_info_buffer on 11.4, so the algorithm-only check missed FULLTEXT adds. */
+#ifndef HA_FULLTEXT
+#define HA_FULLTEXT HA_FULLTEXT_legacy
+#endif
+
 static inline bool is_fts_index(const KEY *ki)
 {
-    return ki->algorithm == HA_KEY_ALG_FULLTEXT;
+    return (ki->flags & HA_FULLTEXT) || ki->algorithm == HA_KEY_ALG_FULLTEXT;
 }
 
 /* FTS result entry -- one per matching document */
