@@ -748,18 +748,41 @@ register_mariadb_client_lib() {
             if [[ -f "$ldconf" ]] && grep -qxF "$mariadb_libdir" "$ldconf" 2>/dev/null; then
                 need_write=0
             fi
+            # /etc/ld.so.conf.d always needs root regardless of where
+            # MARIADB_PREFIX lives, so reach for sudo directly rather than
+            # run_privileged (which gates on the install prefix being
+            # root-owned).  If we cannot escalate or the write fails, fall
+            # back to per-shell guidance instead of aborting the install.
+            local ld_registered=0
             if (( need_write )); then
                 info "Registering ${mariadb_libdir} with ldconfig (writing ${ldconf})..."
-                echo "$mariadb_libdir" | run_privileged tee "$ldconf" >/dev/null
-            fi
-            run_privileged ldconfig
-
-            if ldconfig -p 2>/dev/null | grep -q 'libmariadb\.so\.3'; then
-                ok "libmariadb.so.3 is now resolvable via ldconfig"
+                if [[ -w "$(dirname "$ldconf")" ]] && echo "$mariadb_libdir" > "$ldconf" 2>/dev/null; then
+                    ld_registered=1
+                elif command -v sudo >/dev/null 2>&1 \
+                     && echo "$mariadb_libdir" | sudo tee "$ldconf" >/dev/null 2>&1; then
+                    ld_registered=1
+                else
+                    warn "Could not write ${ldconf} (no permission and no sudo)."
+                    warn "  Tools that dlopen libmariadb.so.3 will need:"
+                    warn "    export LD_LIBRARY_PATH=${mariadb_libdir}:\$LD_LIBRARY_PATH"
+                fi
             else
-                warn "ldconfig ran but libmariadb.so.3 still not resolvable."
-                warn "  Inspect:  ldconfig -p | grep libmariadb"
-                warn "  Inspect:  cat ${ldconf}"
+                ld_registered=1
+            fi
+
+            if (( ld_registered )); then
+                if command -v sudo >/dev/null 2>&1; then
+                    sudo ldconfig 2>/dev/null || ldconfig 2>/dev/null || true
+                else
+                    ldconfig 2>/dev/null || true
+                fi
+                if ldconfig -p 2>/dev/null | grep -q 'libmariadb\.so\.3'; then
+                    ok "libmariadb.so.3 is now resolvable via ldconfig"
+                else
+                    warn "ldconfig ran but libmariadb.so.3 still not resolvable."
+                    warn "  Inspect:  ldconfig -p | grep libmariadb"
+                    warn "  Inspect:  cat ${ldconf}"
+                fi
             fi
             ;;
         macos)

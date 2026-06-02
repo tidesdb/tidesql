@@ -5,3 +5,15 @@ AllowShortFunctionsOnASingleLine: None
 KeepEmptyLinesAtTheStartOfBlocks: false
 AlignConsecutiveMacros: true
 BreakBeforeBraces: Allman
+SortIncludes: true
+IncludeCategories:
+  - Regex:    '^"my_global\.h"'
+    Priority: -1
+  - Regex:    '^<ext/.*\.h>'
+    Priority:  2
+  - Regex:    '^<.*\.h>'
+    Priority:  1
+  - Regex:    '^<.*>'
+    Priority:  2
+  - Regex:    '.*'
+    Priority:  3

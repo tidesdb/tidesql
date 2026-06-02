@@ -94,7 +94,7 @@ LINUX (Ubuntu/Debian)
 
 3. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch mariadb-12.2.2 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch mariadb-11.8.6 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
@@ -133,7 +133,7 @@ MACOS
 
 3. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch mariadb-12.2.2 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch mariadb-11.8.6 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
@@ -199,7 +199,7 @@ WINDOWS
 
 4. Clone MariaDB and copy TidesDB storage engine:
 
-   git clone --depth 1 --branch mariadb-12.2.2 https://github.com/MariaDB/server.git mariadb-server
+   git clone --depth 1 --branch mariadb-11.8.6 https://github.com/MariaDB/server.git mariadb-server
    cd mariadb-server
    git submodule update --init --recursive
    xcopy /E /I path\to\tidesql\tidesdb storage\tidesdb
@@ -242,21 +242,25 @@ Core:
 - Lock-free concurrency (no THR_LOCK, TidesDB handles isolation internally)
 - Pessimistic row locking (tidesdb_pessimistic_locking, ON by default).
   Two-mode lock manager with shared (S) and exclusive (X) locks over a
-  65536-way hash-partitioned table.  Multiple S holders coexist on the
-  same row, X conflicts with any other holder, and new S requests block
-  while an X is queued so writers are never starved.  Writes acquire X
-  (write_row, fetch_row_by_pk in write-intent paths, write_row UNIQUE
-  secondary).  Plain reads acquire S under REPEATABLE-READ or
-  SERIALIZABLE, no lock under READ-COMMITTED or SNAPSHOT (MVCC snapshot
-  suffices).  Wait-for-graph deadlock detection bounded by
-  DEADLOCK_MAX_DEPTH, lock-wait timeout configurable via
-  tidesdb_lock_wait_timeout_ms (default 50 s, mirrors
-  innodb_lock_wait_timeout).  Lock entries recycle in place once empty
-  so per-partition memory is bounded by peak concurrent locks.  Status
-  counters tidesdb_lock_waits, tidesdb_lock_wait_us,
-  tidesdb_lock_deadlocks, tidesdb_lock_timeouts, tidesdb_lock_held,
-  tidesdb_lock_entries, tidesdb_lock_entry_recycles surface contention
-  for observability
+  cache-line aligned hash-partitioned table sized at init from CPU
+  count (8 * hardware_concurrency, clamped to 128..65536 partitions).
+  Multiple S holders coexist on the same row, X conflicts with any
+  other holder, and new S requests block while an X is queued so
+  writers are never starved.  Writes acquire X on the actual mutation
+  target inside write_row, update_row and delete_row; range scans
+  under UPDATE/DELETE do not lock rows that ICP filters away. SELECT
+  FOR UPDATE keeps the per-row lock on every cursor-visible row per
+  the SQL contract.  Plain reads acquire S under REPEATABLE-READ or
+  SERIALIZABLE, no lock under READ-COMMITTED or SNAPSHOT (MVCC
+  snapshot suffices).  DFS wait-for-graph deadlock detection bounded
+  by DEADLOCK_MAX_DEPTH walks every conflicting holder per hop;
+  lock-wait timeout configurable via tidesdb_lock_wait_timeout_ms
+  (default 50 s, mirrors innodb_lock_wait_timeout).  Lock entries
+  recycle in place once empty so per-partition memory is bounded by
+  peak concurrent locks.  Status counters tidesdb_lock_waits,
+  tidesdb_lock_wait_us, tidesdb_lock_deadlocks, tidesdb_lock_timeouts,
+  tidesdb_lock_held, tidesdb_lock_entries, tidesdb_lock_entry_recycles
+  surface contention for observability
 - LSM-tree storage with optional B+tree SSTable format
 - Compression (NONE, LZ4, LZ4_FAST, ZSTD, Snappy)
 - Bloom filters for fast key lookups
@@ -300,7 +304,6 @@ Core:
 - CHECK TABLE (verifies SSTable metadata and block integrity)
 - REPAIR TABLE (full purge + compaction, rebuilds LSM tree)
 - FLUSH TABLES FOR EXPORT (HA_CAN_EXPORT, consistent file copy)
-- Semi-consistent read (optimistic reads for UPDATE/DELETE at READ_COMMITTED)
 - SHOW ENGINE TIDESDB STATUS (DB stats, memory, cache, conflict info)
 - SHOW GLOBAL STATUS LIKE 'tidesdb%' monitoring variables for tools like
   Prometheus, PMM, Datadog -- column-family and memtable bytes, cache hit
@@ -318,8 +321,12 @@ Core:
                      checked inside rnd_next / index_next / spatial /
                      ft_read so long scans return HA_ERR_ABORTED_BY_USER
 - Partitioning (RANGE, LIST, HASH, KEY)
-- Data-at-rest encryption (MariaDB encryption plugin integration)
-- Online DDL (instant metadata, inplace add/drop index, copy for columns)
+- Data-at-rest encryption (MariaDB encryption plugin integration; fail-closed
+  on missing key so a rotated-out version cannot silently mis-encrypt or
+  return zeroed plaintext)
+- Online DDL (instant metadata, inplace add/drop secondary index, force-copy
+  for FULLTEXT/SPATIAL adds so row back-fill goes through write_row, copy
+  for column-type changes and PK rewrites)
 - TRUNCATE TABLE as O(1) drop+recreate (instant regardless of table size)
 - ANALYZE TABLE with detailed CF statistics (levels, keys, sizes, cache hit rate)
 - Cached optimizer statistics (refreshed every 2 seconds from TidesDB)
@@ -370,6 +377,11 @@ Read-only (set at startup):
   unified_memtable_write_buffer_size  Write buffer for unified memtable (default: 256MB)
   unified_memtable_sync_mode         NONE/INTERVAL/FULL for unified WAL (default: FULL)
   unified_memtable_sync_interval     Sync interval in µs for INTERVAL mode (default: 128000)
+  unified_memtable_skip_list_max_level   Skip-list max level for the unified
+                                         memtable; 0 keeps the library default
+  unified_memtable_skip_list_probability Skip-list level promotion probability
+                                         for the unified memtable; 0.0 keeps
+                                         the library default
   object_store_backend      LOCAL or S3 (default: LOCAL)
   s3_endpoint               S3 endpoint (e.g. s3.amazonaws.com)
   s3_bucket                 S3 bucket name
@@ -379,11 +391,50 @@ Read-only (set at startup):
   s3_region                 S3 region (NULL for MinIO)
   s3_use_ssl                Use HTTPS (default: ON)
   s3_path_style             Path-style URLs for MinIO (default: OFF)
+  s3_tls_ca_path            Custom CA bundle path for the S3 TLS handshake;
+                            NULL uses the system bundle
+  s3_tls_insecure_skip_verify  Disable TLS peer/host verification (INSECURE,
+                            test endpoints only; default: OFF)
+  s3_multipart_threshold    Object size in bytes that triggers S3 multipart
+                            upload; 0 keeps the library default
+  s3_multipart_part_size    S3 multipart chunk size in bytes; 0 keeps the
+                            library default
   objstore_local_cache_max  Local cache size limit (default: 0 = unlimited)
   objstore_wal_sync_threshold  WAL sync byte threshold (default: 1MB)
   objstore_wal_sync_on_commit  Upload WAL on every commit (default: OFF)
+  objstore_cache_on_read    Cache downloaded objects locally (default: ON)
+  objstore_cache_on_write   Cache uploaded objects locally (default: ON)
+  objstore_max_concurrent_uploads
+                            Concurrent upload threads; 0 keeps the library
+                            default
+  objstore_max_concurrent_downloads
+                            Concurrent download threads; 0 keeps the library
+                            default
+  objstore_multipart_threshold
+                            Object size in bytes that triggers multipart
+                            upload at the objstore layer; 0 keeps the library
+                            default
+  objstore_multipart_part_size
+                            Multipart chunk size in bytes at the objstore
+                            layer; 0 keeps the library default
+  objstore_sync_manifest_to_object
+                            Upload MANIFEST after each compaction (default: ON)
+  objstore_wal_upload_sync  Block memtable flush on WAL upload
+                            (default: OFF for background WAL upload)
+  objstore_replicate_wal    Upload WAL segments for replica recovery
+                            (default: ON)
+  objstore_replica_replay_wal  Replay WAL on replicas for near-real-time
+                            visibility (default: ON)
   replica_mode              Read-only replica (default: OFF)
   replica_sync_interval     MANIFEST poll interval in us (default: 5000000)
+  fast_shutdown             When ON, deinit calls tidesdb_cancel_background_work
+                            before tidesdb_close so in-flight compactions bail
+                            at their next checkpoint and shutdown returns
+                            quickly (default: OFF).  Default OFF lets close
+                            drain naturally, which is safer for object-store
+                            and replica setups where a mid-compaction cancel
+                            can leave S3 with referenced-but-not-yet-uploaded
+                            SSTables that confuse a syncing replica.
 
 Dynamic (SET GLOBAL at runtime):
 
@@ -392,13 +443,19 @@ Dynamic (SET GLOBAL at runtime):
   print_all_conflicts       Log all TDB_ERR_CONFLICT events (default: OFF)
   pessimistic_locking       Enable plugin-level row locks for SELECT...FOR UPDATE,
                             UPDATE, DELETE, and INSERT (default: ON).  Two-mode
-                            S/X lock manager over a 65536-way hash-partitioned
-                            table.  Writes acquire X; plain reads under
-                            REPEATABLE-READ or SERIALIZABLE acquire S (multiple
-                            S holders coexist), while READ-COMMITTED and
-                            SNAPSHOT reads take no lock and rely on MVCC.
-                            A new S blocks while an X is queued so writers
-                            cannot be starved.  Wait-for-graph deadlock
+                            S/X lock manager over a cache-line aligned
+                            hash-partitioned table sized at init from CPU
+                            count (8 * hardware_concurrency, clamped to
+                            128..65536 partitions).  Writes acquire X on the
+                            actual mutation target inside write_row,
+                            update_row and delete_row; range scans under
+                            UPDATE/DELETE do not lock rows that ICP filters
+                            away.  Plain reads under REPEATABLE-READ or
+                            SERIALIZABLE acquire S (multiple S holders
+                            coexist), while READ-COMMITTED and SNAPSHOT
+                            reads take no lock and rely on MVCC.  A new S
+                            blocks while an X is queued so writers cannot
+                            be starved.  DFS wait-for-graph deadlock
                             detection with bounded depth, lock-wait timeout
                             controlled by tidesdb_lock_wait_timeout_ms.  Locks
                             can cover non-existing keys (SFU on a missing row
@@ -430,8 +487,13 @@ Session (SET SESSION tidesdb_...):
                             or L0 backlog at soft cap) before surfacing
                             the condition to the SQL layer as
                             HA_ERR_LOCK_WAIT_TIMEOUT (default: 60000).
-                            0 disables blocking and the back-pressure
-                            signal returns immediately.
+                            The budget is anchored once per statement at
+                            external_lock(F_WRLCK) and shared across every
+                            backpressure call inside that statement, so a
+                            multi-row INSERT respects the configured ms
+                            end-to-end instead of multiplying it by row
+                            count.  0 disables blocking and the
+                            back-pressure signal returns immediately.
   single_delete_primary     Route primary-CF DELETEs through
                             tidesdb_txn_single_delete (default: OFF).
                             Caller promises the session does no UPDATE
@@ -596,73 +658,6 @@ Run all TidesDB tests (from the build directory):
 Run specific test:
 
   perl mtr --suite=tidesdb tidesdb_crud
-
-Available tests (65 total, 400+ cases):
-  tidesdb_alter_large_table       Large-table ALTER under REPEATABLE_READ
-  tidesdb_analyze                 ANALYZE TABLE with CF statistics output
-  tidesdb_auto_increment          AUTO_INCREMENT edge cases (gaps, rollback, explicit values, REPLACE, UNIQUE secondary)
-  tidesdb_backup                  Online backup via tidesdb_backup_dir
-  tidesdb_bulk_commit_durability  Bulk DML mid-txn commit durability, no silent row loss on failure
-  tidesdb_checkpoint              Hard-link checkpoint via tidesdb_checkpoint_dir
-  tidesdb_concurrent_conflict     Concurrent write-write conflict handling
-  tidesdb_concurrent_errors       Multi-connection error handling and recovery
-  tidesdb_consistent_snapshot     START TRANSACTION WITH CONSISTENT SNAPSHOT
-  tidesdb_crud                    Basic CRUD operations
-  tidesdb_data_home_dir           tidesdb_data_home_dir sysvar
-  tidesdb_defaults_alignment      Pins every per-table-option default vs the library defaults
-  tidesdb_drop_create             Repeated DROP/CREATE/TRUNCATE cycles
-  tidesdb_encryption              Data-at-rest encryption
-  tidesdb_encryption_rotation     Encrypted rows decrypt across two debug_key_management rotations
-  tidesdb_engine_convert          InnoDB <-> TidesDB engine migration (ALTER TABLE ENGINE)
-  tidesdb_engine_status           SHOW ENGINE TIDESDB STATUS
-  tidesdb_fts_blend_chars         FTS blend characters (Italian/French elision, O'Malley)
-  tidesdb_fts_stopwords           FTS stop word filtering (default InnoDB stop words)
-  tidesdb_fts_stopword_table      Custom stop word table loaded from a TidesDB CF
-  tidesdb_fulltext                Full-text search (FULLTEXT indexes, BM25, boolean mode)
-  tidesdb_fulltext_phrase         FTS phrase queries ("exact phrase") and wildcard edge cases
-  tidesdb_hidden_pk               Tables without explicit PK (hidden auto-generated row ID)
-  tidesdb_index_stats             Index statistics and optimizer cost model
-  tidesdb_info_schema             information_schema integration
-  tidesdb_insert_conflict         Duplicate key detection and handling
-  tidesdb_isolation               Session-level isolation level mapping (RC, RR, SNAPSHOT)
-  tidesdb_isolation_table_option  Table-level ISOLATION_LEVEL honored when session is at the SQL default
-  tidesdb_json                    JSON querying + generated-column JSON indexing
-  tidesdb_large_blob              Large BLOB/TEXT values (> 64KB, klog_value_threshold)
-  tidesdb_load_data               Bulk insert path (multi-row INSERT, INSERT...SELECT)
-  tidesdb_max_concurrent_flushes  tidesdb_max_concurrent_flushes sysvar plus misalignment warning
-  tidesdb_mixed_engine            Mixed-engine transactions (TidesDB + InnoDB in same txn)
-  tidesdb_mrr                     Multi-Range Read for WHERE col IN (...) on PK and secondary index
-  tidesdb_mvcc_concurrent_update  Concurrent same-row UPDATE under optimistic MVCC
-  tidesdb_object_store            Object store integration (CRUD, indexes, txns, bulk, compaction)
-  tidesdb_online_ddl              Online DDL (instant, inplace, copy)
-  tidesdb_options                 Table and field options
-  tidesdb_partition               RANGE/LIST/HASH/KEY partitioning
-  tidesdb_per_index_btree         Per-index USE_BTREE option
-  tidesdb_pessimistic_deadlock_cycle  Two-row deadlock cycle, walker returns ER_LOCK_DEADLOCK
-  tidesdb_pessimistic_forupdate   SELECT FOR UPDATE serialization (pessimistic locking)
-  tidesdb_pessimistic_insert_lock Pessimistic locking edge cases (non-existing rows, INSERT)
-  tidesdb_pessimistic_killwait    KILL QUERY wakes a blocked acquire promptly
-  tidesdb_pessimistic_reentry     Same-trx re-acquire is a no-op (X subsumes S, same-mode skipped)
-  tidesdb_pessimistic_shared      Shared-lock coexistence, X waits for S, writer fairness, RC no-lock
-  tidesdb_pessimistic_timeout     tidesdb_lock_wait_timeout_ms bounds a blocked acquire
-  tidesdb_pessimistic_upgrade     Sole-holder S to X upgrade; multi-holder upgrade rejection
-  tidesdb_pk_index                Primary key and secondary index scans
-  tidesdb_rename                  Table rename
-  tidesdb_replace_iodku           REPLACE INTO and INSERT ON DUPLICATE KEY UPDATE
-  tidesdb_savepoint               SQL SAVEPOINT / ROLLBACK TO / RELEASE SAVEPOINT
-  tidesdb_single_delete           Single-delete semantics on primary and secondary CFs
-  tidesdb_spatial                 Spatial indexes (Hilbert curve, MBR predicates)
-  tidesdb_sql                     40 SQL cases (aggregates, JOINs, subqueries, etc.)
-  tidesdb_status_vars             SHOW GLOBAL STATUS LIKE 'tidesdb%' monitoring variables
-  tidesdb_stress                  Concurrent transactions, conflicts, truncate cycles
-  tidesdb_tombstone_density       Tombstone-density compaction trigger + auto compact-after-range-delete
-  tidesdb_tpcc_contention         TPC-C district counter contention (pessimistic locking)
-  tidesdb_ttl                     Time-to-live expiration
-  tidesdb_unified_memtable        Unified memtable mode (shared WAL, cross-CF consistency)
-  tidesdb_update_unique           UPDATE enforces PRIMARY KEY and UNIQUE secondary uniqueness
-  tidesdb_vcol                    Virtual/generated columns
-  tidesdb_vector                  Vector search (MHNSW ANN, INSERT/UPDATE/DELETE)
-  tidesdb_write_pressure          oltp_write_only pressure (multi-connection)
 
 Run with verbose output:
 

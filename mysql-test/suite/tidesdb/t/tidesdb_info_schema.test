@@ -1,4 +1,8 @@
 --source include/have_tidesdb.inc
+# Suppress version-specific diagnostic warnings (e.g. 4202 max_sort_length on
+# newer servers when scanning information_schema) that are not part of what
+# this test verifies, so the result is identical across MariaDB versions.
+--disable_warnings
 #
 # TidesDB information_schema.TABLES size reporting
 # Verify DATA_LENGTH and INDEX_LENGTH are non-zero after inserts
@@ -122,6 +126,7 @@ if ($ut2 < $ut1)
   --echo FAIL: UPDATE_TIME did not advance
 }
 
+--enable_warnings
 --echo # ---- cleanup ----
 DROP TABLE t_info_schema;
 --source suite/tidesdb/include/cleanup_tidesdb.inc

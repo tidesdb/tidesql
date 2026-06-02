@@ -1,4 +1,5 @@
 --source include/have_tidesdb.inc
+--source suite/tidesdb/include/have_tidesdb_vector.inc
 #
 # Test: Vector search (MHNSW approximate nearest neighbor)
 #

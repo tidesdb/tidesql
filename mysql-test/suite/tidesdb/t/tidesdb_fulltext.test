@@ -117,6 +117,21 @@ WHERE MATCH(title) AGAINST('mysql')
 ORDER BY MATCH(title) AGAINST('mysql') DESC;
 
 --echo #
+--echo # TEST 10: Oversize query terms must not overflow the stack key buffer.
+--echo # fts_build_key truncates inserted keys to 512 bytes, but a user can pass
+--echo # a multi-byte search term whose byte length exceeds the on-disk cap.
+--echo # The query must complete without crashing and return no match.
+--echo #
+
+# 1024 ASCII characters -> 1024 bytes, double the FTS_MAX_TERM_BYTES cap.
+SELECT id, title FROM articles
+WHERE MATCH(title) AGAINST(REPEAT('a', 1024) IN BOOLEAN MODE);
+
+# Wildcard variant exercises the per-length seek path.
+SELECT id, title FROM articles
+WHERE MATCH(title) AGAINST(CONCAT(REPEAT('a', 1024), '*') IN BOOLEAN MODE);
+
+--echo #
 --echo # Cleanup
 --echo #
 

@@ -24,15 +24,37 @@
 #include <unordered_set>
 #include <vector>
 
+/* my_global.h MUST be included before handler.h / my_base.h: handler.h pulls
+   in server headers that use typedefs (ulonglong, int64, sql_mode_t, ...)
+   defined by my_global.h.  A wrong order breaks the build on MariaDB 11.4+
+   with missing-declaration errors.  The IncludeCategories rule in .clang-format
+   pins my_global.h to sort first so the formatter preserves this order. */
+#include "my_global.h"
+
 #include "handler.h"
 #include "my_base.h"
-#include "my_global.h"
 #include "thr_lock.h"
 
 extern "C"
 {
 #include <tidesdb/db.h>
 }
+
+/* Mirror constants for the library's TDB_DEFAULT_* values defined in
+   <tidesdb/tidesdb.h>.  We don't include that header directly because it
+   leaks a `realloc` macro that conflicts with MariaDB's String::realloc()
+   method.  Keep these in sync with src/tidesdb.h on every library bump --
+   sysvar defaults reference the TIDESQL_* names so drift is caught here
+   rather than scattered across the sysvar declarations. */
+static constexpr unsigned long long TIDESQL_DEFAULT_WRITE_BUFFER_SIZE = 64ULL * 1024 * 1024;
+static constexpr unsigned long long TIDESQL_DEFAULT_SYNC_INTERVAL_US = 128000;
+static constexpr unsigned long long TIDESQL_DEFAULT_KLOG_VALUE_THRESHOLD = 512;
+static constexpr unsigned long long TIDESQL_DEFAULT_LEVEL_SIZE_RATIO = 10;
+static constexpr unsigned long long TIDESQL_DEFAULT_MIN_LEVELS = 1;
+static constexpr unsigned long long TIDESQL_DEFAULT_DIVIDING_LEVEL_OFFSET = 1;
+static constexpr unsigned long long TIDESQL_DEFAULT_INDEX_SAMPLE_RATIO = 1;
+static constexpr unsigned long long TIDESQL_DEFAULT_BLOCK_INDEX_PREFIX_LEN = 16;
+static constexpr unsigned long long TIDESQL_DEFAULT_MIN_DISK_SPACE = 100ULL * 1024 * 1024;
 
 /* Key namespace prefixes (first byte of every TidesDB key) */
 static constexpr uint8_t KEY_NS_META = 0x00;
@@ -398,6 +420,19 @@ class TidesDB_share : public Handler_share
     std::atomic<double> cached_scan_cost{0.0};
     std::atomic<long long> scan_cost_time{0};
 
+    /* records_in_range needs a full-range cost as the normalizer; without
+       a cache it recomputes that for every probe of every alternative
+       plan.  Stored per CF -- one atomic for the data CF, one array per
+       secondary index -- refreshed with the same TIDESDB_STATS_REFRESH_US
+       window.  std::atomic<double> is not move-constructible so the
+       per-index storage uses a fixed unique_ptr<atomic[]> sized in
+       open().  A stale read just produces a slightly stale estimate. */
+    std::atomic<double> cached_pk_full_cost{0.0};
+    std::atomic<long long> cached_pk_full_cost_time{0};
+    std::unique_ptr<std::atomic<double>[]> cached_idx_full_cost;
+    std::unique_ptr<std::atomic<long long>[]> cached_idx_full_cost_time;
+    uint cached_idx_full_cost_n{0};
+
     /* Table timestamps for information_schema.TABLES */
     time_t create_time{0};              /* from .frm stat at first open */
     std::atomic<time_t> update_time{0}; /* bumped on DML (write/update/delete) */
@@ -495,7 +530,6 @@ struct tidesdb_trx_t
     tidesdb_txn_t *txn{nullptr};
     bool dirty{false};                 /* true once any DML uses txn */
     bool stmt_savepoint_active{false}; /* true while a "stmt" savepoint exists */
-    bool stmt_was_dirty{false};        /* true if current stmt had writes */
     bool needs_reset{false};           /* true after commit/rollback; cleared after txn_reset */
     tidesdb_isolation_level_t isolation_level{TDB_ISOLATION_REPEATABLE_READ};
     uint64_t txn_generation{0};
@@ -587,6 +621,13 @@ class ha_tidesdb : public handler
     uchar idx_search_comp_[MAX_KEY_LENGTH];
     uint idx_search_comp_len_;
 
+    /* True when index_read_map landed on a partial-PK exact prefix scan and
+       defers iteration to index_next.  index_next's PK branch must then
+       re-validate the prefix after each step, the same way the secondary
+       branch and index_next_same already do, or it would walk off the
+       prefix and return unrelated rows. */
+    bool pk_partial_exact_active_{false};
+
     /* Reusable buffers for secondary index key construction in update_row.
        Avoids heap allocation per row and keeps the stack frame small. */
     uchar upd_old_ik_[SEC_IDX_KEY_BUF_LEN];
@@ -630,6 +671,13 @@ class ha_tidesdb : public handler
        Used to decide whether to acquire row locks in index_read_map. */
     bool stmt_has_write_lock_;
 
+    /* True for UPDATE / DELETE statements -- set in external_lock(F_WRLCK)
+       from cached_sql_cmd_.  iter_read_current uses this to skip the
+       per-row X lock during ICP filtering; update_row / delete_row
+       reacquire on the row they actually mutate.  SELECT ... FOR UPDATE
+       leaves this false so the locking-cursor contract is preserved. */
+    bool stmt_is_update_or_delete_{false};
+
     /* Cached "is this scan on the primary key" flag.  Set once in index_init
        so the navigation methods (index_next/prev/first/last/next_same) skip
        the per-row `share->has_user_pk && active_index == share->pk_index`
@@ -671,7 +719,6 @@ class ha_tidesdb : public handler
        InnoDB caches these as m_user_thd / m_prebuilt->trx. */
     THD *cached_thd_;           /* avoids ha_thd() virtual dispatch */
     tidesdb_trx_t *cached_trx_; /* avoids thd_get_ha_data() hash lookup */
-    bool trx_registered_;       /* true once trans_register_ha() called this txn */
 
     /* Bulk DML state.  The ops counter is shared across insert/update/delete
        bulk modes since only one can be active at a time and they all use the
@@ -939,14 +986,7 @@ class ha_tidesdb : public handler
                              page_range *pages) override;
     int extra(enum ha_extra_function operation) override;
 
-    /* Semi-consistent read for UPDATE/DELETE optimization */
-    bool was_semi_consistent_read() override;
-    void try_semi_consistent_read(bool yes) override;
-
    private:
-    bool semi_consistent_read_{false};     /* try optimistic reads on locked rows */
-    bool did_semi_consistent_read_{false}; /* last read was optimistic */
-
    public:
    protected:
     IO_AND_CPU_COST scan_time() override;

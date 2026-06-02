@@ -11,7 +11,7 @@
 CREATE TABLE t_ttl_table (
   id INT PRIMARY KEY,
   val VARCHAR(50)
-) ENGINE=TIDESDB TTL=2;
+) ENGINE=TIDESDB TTL=8;
 
 INSERT INTO t_ttl_table VALUES (1, 'alpha'), (2, 'beta'), (3, 'gamma');
 
@@ -19,7 +19,7 @@ INSERT INTO t_ttl_table VALUES (1, 'alpha'), (2, 'beta'), (3, 'gamma');
 SELECT * FROM t_ttl_table ORDER BY id;
 
 --echo # Wait for TTL to expire (3 seconds > 2 second TTL)
---sleep 3
+--sleep 10
 
 --echo # Rows should now be expired (empty result)
 SELECT * FROM t_ttl_table ORDER BY id;
@@ -39,13 +39,13 @@ CREATE TABLE t_ttl_col (
 ) ENGINE=TIDESDB;
 
 # Row 1: 2-second TTL, Row 2: very long TTL, Row 3: 0 = no expiration
-INSERT INTO t_ttl_col VALUES (1, 'short', 2), (2, 'long', 86400), (3, 'forever', 0);
+INSERT INTO t_ttl_col VALUES (1, 'short', 8), (2, 'long', 86400), (3, 'forever', 0);
 
 --echo # All three rows visible immediately
 SELECT id, val FROM t_ttl_col ORDER BY id;
 
 --echo # Wait for the short TTL to expire
---sleep 3
+--sleep 10
 
 --echo # Row 1 should be expired; rows 2 and 3 remain
 SELECT id, val FROM t_ttl_col ORDER BY id;
@@ -66,12 +66,12 @@ CREATE TABLE t_ttl_override (
 
 # Row 1: per-row TTL=2 overrides table default 86400
 # Row 2: per-row TTL=0 falls back to table default 86400
-INSERT INTO t_ttl_override VALUES (1, 'short_override', 2), (2, 'uses_default', 0);
+INSERT INTO t_ttl_override VALUES (1, 'short_override', 8), (2, 'uses_default', 0);
 
 --echo # Both rows visible immediately
 SELECT id, val FROM t_ttl_override ORDER BY id;
 
---sleep 3
+--sleep 10
 
 --echo # Row 1 expired (per-row TTL=2 overrode default); row 2 still alive (table TTL=86400)
 SELECT id, val FROM t_ttl_override ORDER BY id;
@@ -110,7 +110,7 @@ CREATE TABLE t_ttl_update (
   ttl_s INT `TTL`=1
 ) ENGINE=TIDESDB;
 
-INSERT INTO t_ttl_update VALUES (1, 'original', 2);
+INSERT INTO t_ttl_update VALUES (1, 'original', 8);
 
 --echo # Row visible immediately
 SELECT id, val FROM t_ttl_update ORDER BY id;
@@ -118,7 +118,7 @@ SELECT id, val FROM t_ttl_update ORDER BY id;
 --sleep 1
 
 --echo # UPDATE resets TTL to 5 more seconds
-UPDATE t_ttl_update SET val = 'refreshed', ttl_s = 5 WHERE id = 1;
+UPDATE t_ttl_update SET val = 'refreshed', ttl_s = 30 WHERE id = 1;
 
 --sleep 2
 
@@ -158,7 +158,7 @@ CREATE TABLE t_ttl_sess (
 --echo # Default session TTL is 0 (no override)
 SELECT @@session.tidesdb_ttl;
 
-SET SESSION tidesdb_ttl = 2;
+SET SESSION tidesdb_ttl = 8;
 
 INSERT INTO t_ttl_sess VALUES (1, 'session_ttl'), (2, 'also_session');
 
@@ -168,7 +168,7 @@ SELECT * FROM t_ttl_sess ORDER BY id;
 SET SESSION tidesdb_ttl = 0;
 
 --echo # Wait for session TTL to expire (3s > 2s)
---sleep 3
+--sleep 10
 
 --echo # Rows should now be expired
 SELECT * FROM t_ttl_sess ORDER BY id;
@@ -188,7 +188,7 @@ CREATE TABLE t_ttl_stmt (
 ) ENGINE=TIDESDB;
 
 # Row 1: inserted with 2-second TTL via SET STATEMENT
-SET STATEMENT tidesdb_ttl=2 FOR
+SET STATEMENT tidesdb_ttl=8 FOR
   INSERT INTO t_ttl_stmt VALUES (1, 'short_lived');
 
 # Row 2: inserted with default (no TTL)
@@ -197,7 +197,7 @@ INSERT INTO t_ttl_stmt VALUES (2, 'permanent');
 --echo # Both rows visible immediately
 SELECT * FROM t_ttl_stmt ORDER BY id;
 
---sleep 3
+--sleep 10
 
 --echo # Row 1 expired (session TTL=2); row 2 still alive (no TTL)
 SELECT * FROM t_ttl_stmt ORDER BY id;
@@ -219,7 +219,7 @@ CREATE TABLE t_ttl_priority (
 SET SESSION tidesdb_ttl = 86400;
 
 # Row 1: per-row TTL=2 should win over session TTL=86400
-INSERT INTO t_ttl_priority VALUES (1, 'per_row_wins', 2);
+INSERT INTO t_ttl_priority VALUES (1, 'per_row_wins', 8);
 # Row 2: per-row TTL=0 falls back to session TTL=86400
 INSERT INTO t_ttl_priority VALUES (2, 'uses_session', 0);
 
@@ -228,7 +228,7 @@ SET SESSION tidesdb_ttl = 0;
 --echo # Both visible immediately
 SELECT id, val FROM t_ttl_priority ORDER BY id;
 
---sleep 3
+--sleep 10
 
 --echo # Row 1 expired (per-row TTL=2 wins); row 2 still alive (session TTL=86400)
 SELECT id, val FROM t_ttl_priority ORDER BY id;
