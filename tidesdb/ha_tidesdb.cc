@@ -3956,6 +3956,13 @@ static std::string schema_cf_key_from_path(const char *path)
 */
 static int schema_cf_store_frm(const char *path, const uchar *frm_data = NULL, size_t frm_len = 0)
 {
+    /* Replica mode is read-only against the object store.  Even a single
+       successful insert into the schema CF lands in the unified memtable
+       and gets flushed to a new SSTable when the bootstrap mariadbd
+       drains on shutdown, which then triggers a compaction whose
+       MANIFEST upload overwrites the primary's authoritative state.
+       Refuse all schema writes here so the bucket stays clean. */
+    if (srv_replica_mode) return 0;
     if (!schema_cf) return 0;
 
     uchar *alloc_buf = NULL;
@@ -4013,6 +4020,11 @@ static int schema_cf_store_frm(const char *path, const uchar *frm_data = NULL, s
 */
 static void schema_cf_delete(const char *path)
 {
+    /* See the rationale in schema_cf_store_frm -- replica writes must not
+       reach the unified memtable or the bootstrap mariadbd's shutdown
+       drain will flush + compact + upload a MANIFEST that overwrites the
+       primary's. */
+    if (srv_replica_mode) return;
     if (!schema_cf) return;
 
     std::string key = schema_cf_key_from_path(path);
@@ -4032,6 +4044,9 @@ static void schema_cf_delete(const char *path)
 */
 static void schema_cf_delete_db(const std::string &db_name)
 {
+    /* Same rationale as schema_cf_store_frm -- never let a replica land
+       writes in the unified memtable. */
+    if (srv_replica_mode) return;
     if (!schema_cf || db_name.empty()) return;
 
     /* Match keys beginning with "db_name<SCHEMA_CF_KEY_SEP>". */
@@ -4078,6 +4093,9 @@ static void schema_cf_delete_db(const std::string &db_name)
 */
 static void schema_cf_rename(const char *from, const char *to)
 {
+    /* Same rationale as schema_cf_store_frm -- never let a replica land
+       writes in the unified memtable. */
+    if (srv_replica_mode) return;
     if (!schema_cf) return;
 
     std::string old_key = schema_cf_key_from_path(from);
