@@ -63,7 +63,11 @@ jobs:
 
     - name: Install TidesDB library with S3 support
       run: |
-        git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
+        # Temporarily pinned to the 933patch branch (tidesdb PR 631).
+        # Drop --branch 933patch and uncomment the original below once
+        # the patch ships as a tagged release.
+        git clone --depth 1 --branch 933patch https://github.com/tidesdb/tidesdb.git tidesdb-lib
+        # git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
         cd tidesdb-lib
         echo "TidesDB commit: $(git rev-parse HEAD)"
         mkdir build && cd build
