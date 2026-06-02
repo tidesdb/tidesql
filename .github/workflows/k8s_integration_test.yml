@@ -669,12 +669,51 @@ jobs:
 
         if [ "$REPLICA_OK" -ne 1 ]; then
           echo "FAIL: replica never converged to row 10002 within 60s"
-          echo "=== Replica TidesDB LOG (last 80 lines) ==="
+
+          # Cold-start lines live in the first dozen lines of LOG; the
+          # WAL-replay / UNIMAP-load loop pushes them off any plain tail.
+          # Dump head + tail so we can see both the open-time discovery
+          # and the steady-state poll behavior at once.
+          echo "=== Replica TidesDB LOG (head 120 lines) ==="
+          kubectl exec -n tidesql tidesql-replica -- \
+            sh -c 'head -120 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' || true
+          echo "=== Replica TidesDB LOG (tail 80 lines) ==="
           kubectl exec -n tidesql tidesql-replica -- \
             sh -c 'tail -80 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' || true
-          echo "=== Primary TidesDB LOG (last 80 lines) ==="
+          echo "=== Primary TidesDB LOG (head 120 lines) ==="
+          kubectl exec -n tidesql tidesql-primary -- \
+            sh -c 'head -120 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' || true
+          echo "=== Primary TidesDB LOG (tail 80 lines) ==="
           kubectl exec -n tidesql tidesql-primary -- \
             sh -c 'tail -80 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' || true
+
+          # Engine status tells us how many SSTables the replica actually
+          # registered locally.  If this shows 0 we know cold-start did
+          # not populate the per-CF MANIFEST.  If it shows N>0 the data
+          # is registered and the iterator path is the next suspect.
+          echo "=== Replica SHOW ENGINE TIDESDB STATUS ==="
+          kubectl exec -n tidesql tidesql-replica -- \
+            mariadb --connect-timeout=3 -e "SHOW ENGINE TIDESDB STATUS\G" 2>&1 || true
+          echo "=== Primary SHOW ENGINE TIDESDB STATUS ==="
+          kubectl exec -n tidesql tidesql-primary -- \
+            mariadb --connect-timeout=3 -e "SHOW ENGINE TIDESDB STATUS\G" 2>&1 || true
+
+          # Replica COUNT(*) re-run without 2>/dev/null suppression so we
+          # see the actual error if the query is failing rather than
+          # silently returning empty.
+          echo "=== Replica COUNT(*) with stderr ==="
+          kubectl exec -n tidesql tidesql-replica -- \
+            mariadb --connect-timeout=3 -e "SELECT COUNT(*) FROM k8s_test.items" 2>&1 || true
+          echo "=== Replica SHOW DATABASES / SHOW TABLES ==="
+          kubectl exec -n tidesql tidesql-replica -- \
+            mariadb --connect-timeout=3 -e "SHOW DATABASES; SHOW TABLES FROM k8s_test" 2>&1 || true
+
+          # MariaDB error log catches [ERROR] [TIDESDB] lines from plugin
+          # paths (e.g. drop_table on replica returning TDB_ERR_READONLY).
+          echo "=== Replica MariaDB error log (full) ==="
+          kubectl exec -n tidesql tidesql-replica -- \
+            sh -c 'cat /usr/local/mariadb/log/error.log 2>/dev/null || cat /usr/local/mariadb/data/default/*.err 2>/dev/null' 2>&1 || true
+
           echo "=== Full MinIO listing ==="
           kubectl exec -n tidesql minio -- ls -lR /data/tidesql-test/ 2>&1 || true
           exit 1

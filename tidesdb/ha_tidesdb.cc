@@ -4409,11 +4409,18 @@ static int tidesdb_init_func(void *p)
     /* my_malloc returns only malloc-default alignment (8 or 16 bytes), so
        a struct declared alignas(64) can land misaligned in the array and
        any 16-byte SSE store the compiler emits against it segfaults.
-       posix_memalign gives us the alignment the struct actually requires. */
+       posix_memalign / _aligned_malloc give us the alignment the struct
+       actually requires; the matching free in deinit must use the same
+       allocator family. */
     {
         size_t sz = (size_t)row_lock_partitions * sizeof(tdb_lock_partition_t);
         void *p = NULL;
-        if (posix_memalign(&p, alignof(tdb_lock_partition_t), sz) == 0)
+#ifdef _WIN32
+        p = _aligned_malloc(sz, alignof(tdb_lock_partition_t));
+#else
+        if (posix_memalign(&p, alignof(tdb_lock_partition_t), sz) != 0) p = NULL;
+#endif
+        if (p)
         {
             memset(p, 0, sz);
             lock_partitions = (tdb_lock_partition_t *)p;
@@ -4784,8 +4791,13 @@ static int tidesdb_deinit_func(void *p)
             }
             mysql_mutex_destroy(&lock_partitions[i].mutex);
         }
-        /* Allocated via posix_memalign in tidesdb_init_func; pair with free. */
+        /* Allocated via posix_memalign / _aligned_malloc in tidesdb_init_func;
+           pair with the matching free. */
+#ifdef _WIN32
+        _aligned_free(lock_partitions);
+#else
         free(lock_partitions);
+#endif
         lock_partitions = NULL;
     }
 
@@ -10878,6 +10890,20 @@ static int tidesdb_drop_table_impl(const char *path)
 {
     if (!tdb_global) return 0;
 
+    /* Replica mode is read-only against the object store, so the library
+       rejects tidesdb_drop_column_family with TDB_ERR_READONLY.  MariaDB's
+       own init/upgrade paths invoke drop_table on stale system tables and
+       repeatedly trigger that rejection, which surfaces as scary [ERROR]
+       lines in the server log even though the work is genuinely a no-op
+       for a replica.  Skip the library call entirely on replicas and let
+       the local directory cleanup (if any) be driven by the next sync. */
+    if (srv_replica_mode)
+    {
+        sql_print_information(
+            "[TIDESDB] drop_table skipped on replica for '%s' (replica is read-only)", path);
+        return 0;
+    }
+
     std::string cf_name = ha_tidesdb::path_to_cf_name(path);
 
     /* We collect secondary index CF names before dropping so we can
@@ -10956,6 +10982,16 @@ static std::string tidesdb_path_to_db_name(const char *path)
 static void tidesdb_hton_drop_database(handlerton *, char *path)
 {
     if (!tdb_global || !path) return;
+
+    /* Same rationale as tidesdb_drop_table_impl -- replica mode is
+       read-only and the library rejects every drop with TDB_ERR_READONLY,
+       so skip the call rather than spamming the log. */
+    if (srv_replica_mode)
+    {
+        sql_print_information(
+            "[TIDESDB] drop_database skipped on replica for '%s' (replica is read-only)", path);
+        return;
+    }
 
     std::string db = tidesdb_path_to_db_name(path);
     if (db.empty()) return;
