@@ -3390,6 +3390,9 @@ TidesDB_share::TidesDB_share()
       isolation_level(TDB_ISOLATION_REPEATABLE_READ),
       default_ttl(0),
       ttl_field_idx(TIDESDB_TTL_FIELD_NONE),
+      encrypted(false),
+      encryption_key_id(TIDESDB_DEFAULT_ENCRYPTION_KEY_ID),
+      encryption_key_version(0),
       has_blobs(false),
       has_ttl(false),
       num_secondary_indexes(0)
