@@ -304,14 +304,31 @@ Core:
 - CHECK TABLE (verifies SSTable metadata and block integrity)
 - REPAIR TABLE (full purge + compaction, rebuilds LSM tree)
 - FLUSH TABLES FOR EXPORT (HA_CAN_EXPORT, consistent file copy)
-- SHOW ENGINE TIDESDB STATUS (DB stats, memory, cache, conflict info)
+- SHOW ENGINE TIDESDB STATUS (DB stats, memory, cache, conflict info,
+  unified-memtable block with active bytes / immutable count / WAL
+  generation / next-CF index, and a write-amplification block with
+  cumulative user/WAL/flush/compaction bytes plus a derived total WA
+  ratio.  Object-store builds also report the last successfully
+  uploaded unified-WAL generation.)
 - SHOW GLOBAL STATUS LIKE 'tidesdb%' monitoring variables for tools like
   Prometheus, PMM, Datadog -- column-family and memtable bytes, cache hit
-  rate, tombstone density aggregates, plus lock-manager observability
+  rate, tombstone density aggregates, lock-manager observability
   (tidesdb_lock_waits, tidesdb_lock_wait_us, tidesdb_lock_deadlocks,
   tidesdb_lock_timeouts, tidesdb_lock_held, tidesdb_lock_entries,
-  tidesdb_lock_entry_recycles) and back-pressure wait counters
-  (tidesdb_backpressure_waits, tidesdb_backpressure_wait_us)
+  tidesdb_lock_entry_recycles), back-pressure wait counters
+  (tidesdb_backpressure_waits, tidesdb_backpressure_wait_us), unified
+  memtable state (tidesdb_unified_memtable_enabled,
+  tidesdb_unified_memtable_bytes, tidesdb_unified_immutable_count,
+  tidesdb_unified_is_flushing, tidesdb_unified_wal_generation),
+  object-store progress (tidesdb_object_store_enabled,
+  tidesdb_replica_mode_active, tidesdb_local_cache_bytes,
+  tidesdb_local_cache_files, tidesdb_upload_queue_depth,
+  tidesdb_total_uploads, tidesdb_upload_failures,
+  tidesdb_last_uploaded_generation), and write-amplification counters
+  (tidesdb_uwal_bytes_written, tidesdb_wal_bytes_written,
+  tidesdb_flush_bytes_written, tidesdb_compaction_bytes_written,
+  tidesdb_compaction_bytes_read, tidesdb_user_bytes_written,
+  tidesdb_flush_count, tidesdb_compaction_count)
 - Handlerton lifecycle + administrative hooks wired:
     drop_database    DROP DATABASE removes all TidesDB CFs for the db
     flush_logs       FLUSH LOGS syncs the TidesDB WAL (safe before backup)
@@ -328,7 +345,11 @@ Core:
   for FULLTEXT/SPATIAL adds so row back-fill goes through write_row, copy
   for column-type changes and PK rewrites)
 - TRUNCATE TABLE as O(1) drop+recreate (instant regardless of table size)
-- ANALYZE TABLE with detailed CF statistics (levels, keys, sizes, cache hit rate)
+- ANALYZE TABLE with detailed CF statistics (levels, keys, sizes, cache
+  hit rate, plus a per-CF write-amplification note that reports user
+  bytes ingested versus WAL / flush / compaction bytes and the derived
+  ratio, so a single ANALYZE makes the WA of an individual table
+  legible without having to compute it from global counters)
 - Cached optimizer statistics (refreshed every 2 seconds from TidesDB)
 - Full-text search (FULLTEXT indexes with BM25 ranking, natural language
   and boolean mode, charset-aware tokenizer, configurable BM25 parameters,
