@@ -172,12 +172,30 @@ IF(TIDESDB_WITH_S3)
   ENDIF()
 ENDIF()
 
-# We apply sanitizer flags to the plugin target only 
+# We apply sanitizer flags to the plugin target only
 IF(TIDESDB_SANITIZER_COMPILE_FLAGS)
   IF(TARGET tidesdb)
     TARGET_COMPILE_OPTIONS(tidesdb PRIVATE ${TIDESDB_SANITIZER_COMPILE_FLAGS})
     TARGET_LINK_OPTIONS(tidesdb PRIVATE ${TIDESDB_SANITIZER_LINK_FLAGS})
     MESSAGE(STATUS "TidesDB: Sanitizer compile flags: ${TIDESDB_SANITIZER_COMPILE_FLAGS}")
     MESSAGE(STATUS "TidesDB: Sanitizer link flags: ${TIDESDB_SANITIZER_LINK_FLAGS}")
+  ENDIF()
+ENDIF()
+
+# Plugin-only -Wmaybe-uninitialized.  GCC reports may-uninit reads with
+# considerably less noise than clang's -Wsometimes-uninitialized and is
+# the canonical signal we lean on to catch uninitialized SHOW_FUNC
+# fillers and missed branch initialization.  We always enable the
+# warning on GCC; CI also flips TIDESDB_WERROR_UNINIT=ON so the warning
+# is a hard error rather than something easy to overlook in a long
+# build log.
+OPTION(TIDESDB_WERROR_UNINIT "Promote -Wmaybe-uninitialized to a hard error in the plugin" OFF)
+IF(TARGET tidesdb AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  TARGET_COMPILE_OPTIONS(tidesdb PRIVATE -Wmaybe-uninitialized)
+  IF(TIDESDB_WERROR_UNINIT)
+    TARGET_COMPILE_OPTIONS(tidesdb PRIVATE -Werror=maybe-uninitialized)
+    MESSAGE(STATUS "TidesDB: -Werror=maybe-uninitialized enabled for plugin")
+  ELSE()
+    MESSAGE(STATUS "TidesDB: -Wmaybe-uninitialized enabled for plugin (warning only)")
   ENDIF()
 ENDIF()
