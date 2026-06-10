@@ -73,3 +73,5 @@ DELETE FROM docs WHERE id = 2;
 SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('dog');
 
 DROP TABLE docs;
+
+--source suite/tidesdb/include/cleanup_tidesdb.inc

@@ -98,7 +98,8 @@ LINUX (Ubuntu/Debian)
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
-   cp -r /path/to/tidesql/mysql-test/suite/tidesdb mysql-test/suite/
+   mkdir -p storage/tidesdb/mysql-test
+   cp -r /path/to/tidesql/mysql-test/suite/tidesdb storage/tidesdb/mysql-test/
 
 4. Build MariaDB:
 
@@ -137,7 +138,8 @@ MACOS
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
-   cp -r /path/to/tidesql/mysql-test/suite/tidesdb mysql-test/suite/
+   mkdir -p storage/tidesdb/mysql-test
+   cp -r /path/to/tidesql/mysql-test/suite/tidesdb storage/tidesdb/mysql-test/
 
 4. Build MariaDB:
 
@@ -203,7 +205,7 @@ WINDOWS
    cd mariadb-server
    git submodule update --init --recursive
    xcopy /E /I path\to\tidesql\tidesdb storage\tidesdb
-   xcopy /E /I path\to\tidesql\mysql-test\suite\tidesdb mysql-test\suite\tidesdb
+   xcopy /E /I path\to\tidesql\mysql-test\suite\tidesdb storage\tidesdb\mysql-test\tidesdb
 
 5. Build MariaDB:
 
@@ -386,6 +388,8 @@ SYSTEM VARIABLES (SET GLOBAL tidesdb_...)
 Read-only (set at startup):
 
   flush_threads             Background flush threads (default: 4)
+  max_concurrent_flushes    Global cap on in-flight memtable flushes; 0 aligns
+                            the cap with flush_threads (default: 0)
   compaction_threads        Background compaction threads (default: 4)
   log_level                 DEBUG/INFO/WARN/ERROR/FATAL/NONE (default: DEBUG)
   block_cache_size          Global block cache in bytes (default: 256MB)
@@ -448,14 +452,19 @@ Read-only (set at startup):
                             visibility (default: ON)
   replica_mode              Read-only replica (default: OFF)
   replica_sync_interval     MANIFEST poll interval in us (default: 5000000)
-  fast_shutdown             When ON, deinit calls tidesdb_cancel_background_work
-                            before tidesdb_close so in-flight compactions bail
-                            at their next checkpoint and shutdown returns
-                            quickly (default: OFF).  Default OFF lets close
-                            drain naturally, which is safer for object-store
-                            and replica setups where a mid-compaction cancel
-                            can leave S3 with referenced-but-not-yet-uploaded
-                            SSTables that confuse a syncing replica.
+  finish_compactions_on_close
+                            Maps to tidesdb_config_t.finish_compactions_on_close,
+                            applied at open (default: OFF).  Default OFF makes
+                            tidesdb_close cancel in-flight compactions at their
+                            next checkpoint for a fast shutdown -- the cancelled
+                            merge discards uncommitted output and leaves inputs
+                            intact, so no data is lost either way and recovery
+                            handles a mid-merge state the same.  Set ON to let
+                            in-flight compactions run to completion before close
+                            returns, which is safer for object-store and replica
+                            setups where a mid-compaction cancel can leave S3
+                            with referenced-but-not-yet-uploaded SSTables that
+                            confuse a syncing replica.
 
 Dynamic (SET GLOBAL at runtime):
 
