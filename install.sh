@@ -20,7 +20,7 @@
 #        - Checkout the requested branch/tag
 #        - Init submodules
 #        - Copy tidesdb/ storage engine plugin into storage/
-#        - Copy tidesdb test suite into mysql-test/suite/
+#        - Copy tidesdb test suite into storage/tidesdb/mysql-test/
 #   5. Build MariaDB (full server)
 #        - All default storage engines (InnoDB, Aria, CONNECT, etc.)
 #        - All standard tools (mariadb, mysqldump, mariadb-admin, etc.)
@@ -605,8 +605,9 @@ prepare_mariadb() {
     info "Copying TidesDB storage engine plugin into MariaDB source..."
     cp -r "${SCRIPT_DIR}/tidesdb" "${mariadb_src}/storage/"
 
-    info "Copying TidesDB test suite into MariaDB source..."
-    cp -r "${SCRIPT_DIR}/mysql-test/suite/tidesdb" "${mariadb_src}/mysql-test/suite/"
+    info "Copying TidesDB test suite into the plugin's mysql-test directory..."
+    mkdir -p "${mariadb_src}/storage/tidesdb/mysql-test"
+    cp -r "${SCRIPT_DIR}/mysql-test/suite/tidesdb" "${mariadb_src}/storage/tidesdb/mysql-test/"
 
     ok "MariaDB source prepared"
 }
@@ -1179,7 +1180,11 @@ rebuild_plugin() {
     # Re-copy plugin source & test suite into the existing source tree
     info "Copying TidesDB plugin source into MariaDB source tree..."
     cp -r "${SCRIPT_DIR}/tidesdb" "${mariadb_src}/storage/"
-    cp -r "${SCRIPT_DIR}/mysql-test/suite/tidesdb" "${mariadb_src}/mysql-test/suite/"
+    mkdir -p "${mariadb_src}/storage/tidesdb/mysql-test"
+    cp -r "${SCRIPT_DIR}/mysql-test/suite/tidesdb" "${mariadb_src}/storage/tidesdb/mysql-test/"
+    # Remove any stale top-level copy from an older install so MTR does not
+    # discover two suites named tidesdb.
+    rm -rf "${mariadb_src}/mysql-test/suite/tidesdb"
 
     # Point cmake at the TidesDB library
     export TIDESDB_ROOT="${TIDESDB_PREFIX}"

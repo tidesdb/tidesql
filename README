@@ -98,7 +98,8 @@ LINUX (Ubuntu/Debian)
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
-   cp -r /path/to/tidesql/mysql-test/suite/tidesdb mysql-test/suite/
+   mkdir -p storage/tidesdb/mysql-test
+   cp -r /path/to/tidesql/mysql-test/suite/tidesdb storage/tidesdb/mysql-test/
 
 4. Build MariaDB:
 
@@ -137,7 +138,8 @@ MACOS
    cd mariadb-server
    git submodule update --init --recursive
    cp -r /path/to/tidesql/tidesdb storage/
-   cp -r /path/to/tidesql/mysql-test/suite/tidesdb mysql-test/suite/
+   mkdir -p storage/tidesdb/mysql-test
+   cp -r /path/to/tidesql/mysql-test/suite/tidesdb storage/tidesdb/mysql-test/
 
 4. Build MariaDB:
 
@@ -203,7 +205,7 @@ WINDOWS
    cd mariadb-server
    git submodule update --init --recursive
    xcopy /E /I path\to\tidesql\tidesdb storage\tidesdb
-   xcopy /E /I path\to\tidesql\mysql-test\suite\tidesdb mysql-test\suite\tidesdb
+   xcopy /E /I path\to\tidesql\mysql-test\suite\tidesdb storage\tidesdb\mysql-test\tidesdb
 
 5. Build MariaDB:
 
