@@ -1,8 +1,14 @@
 --source include/have_tidesdb.inc
 #
-# TidesDB stress test -- concurrent operations, transaction paths, iterator
-# reuse, rollback, TRUNCATE races, secondary index maintenance, and large
-# batch pressure.  Exercises the deferred-commit and txn_reset code paths.
+# TidesDB concurrency and transaction correctness test.
+#
+# Deterministic coverage of the transaction and multi-connection code paths
+# (interleaving is driven explicitly with connect/send/reap, so the expected
+# output is reproducible -- this is a correctness test, not a load/soak test):
+# deferred-commit and autocommit paths, explicit rollback, read-only txns,
+# iterator reuse across statements, secondary-index maintenance, hidden-PK
+# row-id generation, TRUNCATE drop/recreate, INSERT...SELECT, PK uniqueness,
+# and concurrent transactions that commit vs roll back.
 #
 
 --echo #
