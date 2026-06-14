@@ -365,6 +365,16 @@ extern MYSQL_PLUGIN_IMPORT char mysql_real_data_home[];
 static tidesdb_t *tdb_global = NULL;
 static std::string tdb_path;
 
+/* Background refresher for the tidesdb_* SHOW STATUS counters.  SHOW [GLOBAL]
+   STATUS reads the srv_stat_* holders directly, and they are otherwise only
+   repopulated from ha_tidesdb::info() during query planning and from SHOW ENGINE
+   TIDESDB STATUS.  A pure-write workload such as sysbench oltp_insert never plans
+   a read, so without this the counters sat frozen at their initial zero and made
+   a busy engine flushing and compacting look completely idle.  A single
+   low-frequency thread keeps them current regardless of the workload mix. */
+static std::thread srv_stat_refresh_thread;
+static std::atomic<bool> srv_stat_refresh_stop{false};
+
 /* Schema discovery CF for object store mode (NULL when local-only) */
 static tidesdb_column_family_t *schema_cf = NULL;
 
@@ -1031,6 +1041,19 @@ static inline bool tdb_lock_mode_for_read(THD *thd, bool write_intent, tdb_lock_
 
 static handler *tidesdb_create_handler(handlerton *hton, TABLE_SHARE *table, MEM_ROOT *mem_root);
 static void tidesdb_refresh_status_vars();
+
+/* Refreshes the SHOW STATUS counters about once a second so they track flushes
+   and compactions even when no query is planning a read.  Wakes promptly on
+   shutdown rather than sleeping out the full interval. */
+static void tidesdb_stat_refresh_loop()
+{
+    while (!srv_stat_refresh_stop.load(std::memory_order_relaxed))
+    {
+        tidesdb_refresh_status_vars();
+        for (int i = 0; i < 10 && !srv_stat_refresh_stop.load(std::memory_order_relaxed); i++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
 
 /* Forward declarations for the tombstone aggregates so tidesdb_show_status
    (defined earlier than the storage block) can read them. */
@@ -4723,6 +4746,10 @@ static int tidesdb_init_func(void *p)
         }
     }
 
+    /* Start the background status refresher now that tdb_global is open. */
+    srv_stat_refresh_stop.store(false, std::memory_order_relaxed);
+    srv_stat_refresh_thread = std::thread(tidesdb_stat_refresh_loop);
+
     DBUG_RETURN(0);
 }
 
@@ -4831,6 +4858,14 @@ static int tidesdb_deinit_func(void *p)
     DBUG_ENTER("tidesdb_deinit_func");
 
     schema_cf = NULL;
+
+    /* Stop the background status refresher before closing the db so it can never
+       touch tdb_global after it is freed. */
+    if (srv_stat_refresh_thread.joinable())
+    {
+        srv_stat_refresh_stop.store(true, std::memory_order_relaxed);
+        srv_stat_refresh_thread.join();
+    }
 
     if (tdb_global)
     {
