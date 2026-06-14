@@ -1055,6 +1055,22 @@ static void tidesdb_stat_refresh_loop()
     }
 }
 
+/* Stop and join the background status refresher.  Idempotent, so every teardown
+   path can call it.  This must run before any path frees tdb_global, because
+   tidesdb_refresh_status_vars walks the column-family skip lists and a concurrent
+   teardown would leave it reading freed memory.  MariaDB drives shutdown through
+   ha_finalize_handlerton, which calls the handlerton panic callback (where
+   tidesdb_close frees those skip lists) before the plugin deinit runs, so joining
+   only in deinit is too late and leaves a window the refresher can crash in. */
+static void tidesdb_stop_stat_refresher()
+{
+    if (srv_stat_refresh_thread.joinable())
+    {
+        srv_stat_refresh_stop.store(true, std::memory_order_relaxed);
+        srv_stat_refresh_thread.join();
+    }
+}
+
 /* Forward declarations for the tombstone aggregates so tidesdb_show_status
    (defined earlier than the storage block) can read them. */
 static long long srv_stat_total_tombstones;
@@ -4797,6 +4813,12 @@ static bool tidesdb_hton_flush_logs(handlerton *)
 static int tidesdb_hton_panic(handlerton *, enum ha_panic_function flag)
 {
     if (flag != HA_PANIC_CLOSE) return 0;
+
+    /* ha_finalize_handlerton calls this before the plugin deinit, and the close
+       below frees the column-family skip lists, so the refresher has to be fully
+       stopped here rather than in deinit. */
+    tidesdb_stop_stat_refresher();
+
     if (tdb_global)
     {
         tidesdb_close(tdb_global);
@@ -4814,6 +4836,10 @@ static int tidesdb_hton_panic(handlerton *, enum ha_panic_function flag)
 */
 static void tidesdb_hton_pre_shutdown(void)
 {
+    /* Quiesce the status refresher at the earliest shutdown signal so it is no
+       longer walking the skip lists once teardown starts freeing them. */
+    tidesdb_stop_stat_refresher();
+
     if (!tdb_global) return;
 
     /* Sync the unified WAL so durability is preserved if deinit is racing
@@ -4859,13 +4885,9 @@ static int tidesdb_deinit_func(void *p)
 
     schema_cf = NULL;
 
-    /* Stop the background status refresher before closing the db so it can never
-       touch tdb_global after it is freed. */
-    if (srv_stat_refresh_thread.joinable())
-    {
-        srv_stat_refresh_stop.store(true, std::memory_order_relaxed);
-        srv_stat_refresh_thread.join();
-    }
+    /* Backstop -- the pre_shutdown and panic hooks normally stop the refresher
+       earlier, but join here too in case neither ran on this teardown path. */
+    tidesdb_stop_stat_refresher();
 
     if (tdb_global)
     {
