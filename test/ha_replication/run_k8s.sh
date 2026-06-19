@@ -40,9 +40,12 @@ wait_converge(){ for _ in $(seq 1 90); do [ "$(krows "$1" "$3")" -ge "$4" ] 2>/d
 deploy(){
     kubectl apply -f "$HERE/k8s/minio.yaml" >/dev/null
     kubectl rollout status deploy/minio --timeout=120s >/dev/null
-    # create the bucket with mc
+    # wipe and recreate the bucket so each scenario boots fresh nodes against an
+    # empty store -- otherwise a later scenario inherits the previous one's table,
+    # schema cf and lease epoch and never converges
     kubectl run mc --image=minio/mc:latest --restart=Never --rm -i --quiet --command -- \
         sh -c "mc alias set m http://minio:9000 minioadmin minioadmin >/dev/null && \
+               mc rb --force m/tidesql-failover >/dev/null 2>&1; \
                mc mb -p m/tidesql-failover >/dev/null && echo made" >/dev/null 2>&1
     kubectl apply -f "$HERE/k8s/nodes.yaml" >/dev/null
     for n in "${NODES[@]}"; do kubectl wait --for=condition=ready "pod/$n" --timeout=180s >/dev/null || {

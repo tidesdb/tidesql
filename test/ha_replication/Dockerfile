@@ -19,7 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY . /src/tidesql
 WORKDIR /src/tidesql
 # --s3 builds libtidesdb with the S3 connector (conditional writes / fencing over S3).
+# The failover nodes only ever use TidesDB and InnoDB, so skip the heavy optional
+# engines (RocksDB / ColumnStore / Mroonga and friends) that otherwise dominate the
+# build time, matching the engine set the other CI workflows already exclude.
 RUN ./install.sh --s3 --mariadb-prefix /opt/mariadb --build-dir /tmp/tidesql-build \
+        --skip-engines rocksdb,mroonga,columnstore,spider,oqgraph,connect \
         --jobs "$(nproc)"
 
 FROM ubuntu:24.04
