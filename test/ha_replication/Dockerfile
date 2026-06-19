@@ -11,7 +11,7 @@
 FROM ubuntu:24.04 AS build
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates git cmake ninja-build build-essential bison \
+        sudo curl ca-certificates git cmake ninja-build build-essential bison \
         libssl-dev libncurses-dev pkg-config \
         liblz4-dev libzstd-dev libsnappy-dev libcurl4-openssl-dev \
         libjemalloc-dev \
