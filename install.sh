@@ -9,7 +9,7 @@
 #   1. Detect OS (Debian, RHEL, Arch, macOS, Windows)
 #   2. Install system dependencies
 #        - Linux      apt/dnf/pacman (cmake, compilers, zstd, lz4, snappy, ssl, etc.)
-#        - macOS      Homebrew (cmake, ninja, zstd, lz4, snappy, openssl, etc.)
+#        - macOS      Homebrew (cmake, ninja, zstd, lz4, snappy, etc.)
 #        - Windows    vcpkg (zstd, lz4, snappy, pthreads)
 #   3. Build & install TidesDB library
 #        - Clone tidesdb at the requested version tag
@@ -52,7 +52,7 @@
 #   --list-engines              List storage engines that can be skipped and exit
 #   --rebuild-plugin             Rebuild only the TidesDB plugin (fast dev cycle)
 #   --pgo                       Enable Profile-Guided Optimization (3-phase build)
-#   --s3                        Build TidesDB with S3 object store connector (requires libcurl + OpenSSL)
+#   --s3                        Build TidesDB with S3 object store connector (requires libcurl)
 #   --allocator  NAME           Memory allocator for libtidesdb.so: system (default), jemalloc, mimalloc, or tcmalloc.
 #                               Only affects TidesDB's internal allocations; mariadbd's allocator is unchanged.
 #                               For a process-wide swap also LD_PRELOAD the allocator at mariadbd startup.
@@ -443,7 +443,7 @@ install_deps() {
                 die "Homebrew is required on macOS. Install from https://brew.sh"
             fi
             brew install cmake ninja bison flex \
-                snappy lz4 zstd openssl@3 gnutls \
+                snappy lz4 zstd gnutls \
                 ${allocator_pkg}
             ;;
         windows)

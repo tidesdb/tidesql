@@ -443,7 +443,7 @@ jobs:
     - name: Restore primary for automated failover test
       run: |
         # The promoted replica is currently acting as primary against the
-        # shared MinIO bucket. We must fully drain and remove it BEFORE
+        # shared MinIO bucket. We must fully drain and remove it before
         # creating the new tidesql-primary -- otherwise both nodes upload
         # concurrently to the same bucket and race on the schema CF MANIFEST.
         # That race is what caused k8s_test.items to vanish on the new
@@ -827,7 +827,7 @@ jobs:
         # The auto-failover step force-deletes tidesql-primary, after which
         # `kubectl logs/exec` on that pod returns NotFound and the post-
         # mortem dump cannot tell us what the primary was doing. Capture
-        # everything we'd want from it BEFORE the kill.
+        # everything we'd want from it before the kill.
         mkdir -p /tmp/k8s-logs/pre-autofail
         kubectl logs -n tidesql tidesql-primary \
           > /tmp/k8s-logs/pre-autofail/primary-stdout.log 2>&1 || true

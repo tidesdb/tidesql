@@ -84,7 +84,7 @@ Some of them currently cannot be changed by using the scripts.
   MARIADB_PREFIX    MariaDB install prefix            Default: /usr/local/mariadb
   WITH_TESTS        Include MTR in the image. 1=yes, 0=no. Default: 0
   WITH_S3           Build with S3 object store support. 1=yes, 0=no. Default: 0
-                    Requires libcurl and OpenSSL (already in the base image).
+                    Requires libcurl (already in the base image).
   ALLOCATOR         Memory allocator to link libtidesdb.so against.
                     One of: system (default), jemalloc, mimalloc, tcmalloc.
                     Only affects TidesDB's internal allocations; mariadbd's

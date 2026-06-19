@@ -31,6 +31,9 @@ extern "C"
                                                    const char *secret_key, const char *region,
                                                    int use_ssl, int use_path_style);
 #endif
+    /* filesystem object-store connector -- always available (no S3 deps), used to
+       exercise single-writer failover and replication without an S3 endpoint. */
+    tidesdb_objstore_t *tidesdb_objstore_fs_create(const char *root_dir);
 }
 
 #include <ft_global.h>
@@ -139,6 +142,13 @@ static int tdb_rc_to_ha(int rc, const char *ctx)
             return HA_ERR_FOUND_DUPP_KEY;
 
         case TDB_ERR_READONLY:
+            return HA_ERR_READ_ONLY_TRANSACTION;
+
+        /* A conditional object-store write lost its precondition -- this primary was
+           fenced by a newer one under single-writer fencing, and the engine has
+           self-demoted to a replica.  Surface it as read-only so the write fails
+           cleanly rather than as a generic error. */
+        case TDB_ERR_PRECONDITION:
             return HA_ERR_READ_ONLY_TRANSACTION;
 
         /* I/O and corruption errors -- table needs repair/recovery.
@@ -374,6 +384,22 @@ static std::string tdb_path;
    low-frequency thread keeps them current regardless of the workload mix. */
 static std::thread srv_stat_refresh_thread;
 static std::atomic<bool> srv_stat_refresh_stop{false};
+
+/* Dedicated replica schema-discovery worker (object store mode only).  Kept off
+   the stats refresher because resolving the schema CF reads it through a txn and
+   iterator, and on a replica the library's sync thread is concurrently
+   materialising and replaying into that same CF.  That read has to run on a fully
+   registered server thread with a THD, the same context the discover_table hooks
+   use, so the library pins the read snapshot against the sync.  The THD-less stats
+   refresher raced it and faulted over the object store. */
+static std::thread srv_schema_discovery_thread;
+static std::atomic<bool> srv_schema_discovery_stop{false};
+
+/* Background workers wake once per poll slice to check their stop flag, a fixed
+   number of slices making up roughly a one second work interval, so a worker
+   reacts to shutdown promptly instead of sleeping out the whole interval. */
+static constexpr int TDB_BG_POLL_SLICE_MS = 100;
+static constexpr int TDB_BG_POLL_SLICES = 10;
 
 /* Schema discovery CF for object store mode (NULL when local-only) */
 static tidesdb_column_family_t *schema_cf = NULL;
@@ -1041,18 +1067,51 @@ static inline bool tdb_lock_mode_for_read(THD *thd, bool write_intent, tdb_lock_
 
 static handler *tidesdb_create_handler(handlerton *hton, TABLE_SHARE *table, MEM_ROOT *mem_root);
 static void tidesdb_refresh_status_vars();
+static void tidesdb_setup_schema_cf(bool may_create);
 
 /* Refreshes the SHOW STATUS counters about once a second so they track flushes
-   and compactions even when no query is planning a read.  Wakes promptly on
-   shutdown rather than sleeping out the full interval. */
+   and compactions even when no query is planning a read.  Reads only the atomic
+   stat holders, so it is safe to run on this lightweight thread.  Schema discovery
+   lives on its own worker (tidesdb_schema_discovery_loop) because that reads CF
+   data and must run with a THD.  Wakes promptly on shutdown rather than sleeping
+   out the full interval. */
 static void tidesdb_stat_refresh_loop()
 {
     while (!srv_stat_refresh_stop.load(std::memory_order_relaxed))
     {
         tidesdb_refresh_status_vars();
-        for (int i = 0; i < 10 && !srv_stat_refresh_stop.load(std::memory_order_relaxed); i++)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        for (int i = 0;
+             i < TDB_BG_POLL_SLICES && !srv_stat_refresh_stop.load(std::memory_order_relaxed); i++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(TDB_BG_POLL_SLICE_MS));
     }
+}
+
+/* Dedicated replica schema-discovery worker.  Resolves the schema CF once a
+   primary publishes it and materialises the database directories it references so
+   a replica can serve tables created upstream after it started.  Runs the same
+   schema CF read the discover_table hooks run, but on its own mysys-registered
+   thread instead of the stats refresher.  Only started in object store mode
+   (tidesdb_setup_schema_cf is a no-op otherwise). */
+static void tidesdb_schema_discovery_loop()
+{
+    /* my_thread_init registers the worker with mysys so the my_stat / my_mkdir
+       calls in schema_cf_ensure_databases have a valid thread context.  We do not
+       build a THD-- this is a MODULE_ONLY plugin, so the full THD class is opaque
+       here, and the engine helpers the schema read goes through already treat a
+       NULL THD as "no per statement context" (default timeouts, no kill check).
+       current_thd is simply NULL on this thread. */
+    my_thread_init();
+
+    while (!srv_schema_discovery_stop.load(std::memory_order_relaxed))
+    {
+        tidesdb_setup_schema_cf(false);
+        for (int i = 0;
+             i < TDB_BG_POLL_SLICES && !srv_schema_discovery_stop.load(std::memory_order_relaxed);
+             i++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(TDB_BG_POLL_SLICE_MS));
+    }
+
+    my_thread_end();
 }
 
 /* Stop and join the background status refresher.  Idempotent, so every teardown
@@ -1068,6 +1127,18 @@ static void tidesdb_stop_stat_refresher()
     {
         srv_stat_refresh_stop.store(true, std::memory_order_relaxed);
         srv_stat_refresh_thread.join();
+    }
+}
+
+/* Stop and join the schema-discovery worker.  Idempotent, and like the stat
+   refresher it must run before any path frees tdb_global so the worker is not
+   left iterating a freed schema CF. */
+static void tidesdb_stop_schema_discovery()
+{
+    if (srv_schema_discovery_thread.joinable())
+    {
+        srv_schema_discovery_stop.store(true, std::memory_order_relaxed);
+        srv_schema_discovery_thread.join();
     }
 }
 
@@ -2776,16 +2847,27 @@ static MYSQL_SYSVAR_STR(data_home_dir, srv_data_home_dir, PLUGIN_VAR_RQCMDARG | 
 
 /* ******************** Object Store Configuration ******************** */
 
-/* Object store backend (0=LOCAL (no object store), 1=S3) */
+/* Object store backend (0=LOCAL (no object store), 1=S3, 2=FS) */
 static ulong srv_object_store_backend = 0;
-static const char *object_store_backend_names[] = {"LOCAL", "S3", NullS};
+static const char *object_store_backend_names[] = {"LOCAL", "S3", "FS", NullS};
 static TYPELIB object_store_backend_typelib = {array_elements(object_store_backend_names) - 1,
                                                "object_store_backend_typelib",
                                                object_store_backend_names, NULL, NULL};
 static MYSQL_SYSVAR_ENUM(object_store_backend, srv_object_store_backend,
                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                         "Object store backend (LOCAL=disabled, S3=S3-compatible)", NULL, NULL, 0,
-                         &object_store_backend_typelib);
+                         "Object store backend (LOCAL=disabled, S3=S3-compatible, FS=local "
+                         "filesystem directory shared by all nodes, for failover testing)",
+                         NULL, NULL, 0, &object_store_backend_typelib);
+
+/* Root directory for the FS object store backend.  All nodes sharing one TidesDB
+   cluster point at the same directory (a stand-in for the bucket); the connector
+   serializes conditional writes with flock so the single-writer fence works
+   across processes.  Required when tidesdb_object_store_backend=FS. */
+static char *srv_objstore_fs_path = NULL;
+static MYSQL_SYSVAR_STR(objstore_fs_path, srv_objstore_fs_path,
+                        PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY | PLUGIN_VAR_MEMALLOC,
+                        "Shared directory for the FS object store backend (the bucket stand-in)",
+                        NULL, NULL, NULL);
 
 static char *srv_s3_endpoint = NULL;
 static MYSQL_SYSVAR_STR(s3_endpoint, srv_s3_endpoint, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -2869,6 +2951,21 @@ static MYSQL_SYSVAR_BOOL(objstore_wal_sync_on_commit, srv_objstore_wal_sync_on_c
 static my_bool srv_replica_mode = 0;
 static MYSQL_SYSVAR_BOOL(replica_mode, srv_replica_mode, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                          "Enable read-only replica mode (default OFF)", NULL, NULL, 0);
+
+/* Runtime role, distinct from the read-only startup sysvar srv_replica_mode.
+   The engine changes role at runtime -- promotion clears it, the object-store
+   fence flips a superseded primary back to replica -- so role-gated plugin paths
+   (schema-CF writes, DROP) must follow this rather than the static startup value.
+   Otherwise a node promoted from a replica (the normal case in object-store HA,
+   where every node boots replica_mode=ON and the elected leader promotes itself)
+   would keep refusing to persist schema and would skip drops.  Seeded from
+   srv_replica_mode at open, set to primary in the promote callback, and resynced
+   from the engine's runtime role on every stats refresh (so a fence demotes it). */
+static std::atomic<int> srv_runtime_is_replica{0};
+static inline bool tdb_is_replica()
+{
+    return srv_runtime_is_replica.load(std::memory_order_relaxed) != 0;
+}
 
 /* Maps to tidesdb_config_t.finish_compactions_on_close.  OFF (default, matching
    the library default) cancels in-flight compactions at their next checkpoint
@@ -2965,10 +3062,26 @@ static void tidesdb_promote_primary_update(THD *thd, struct st_mysql_sys_var *, 
     if (rc == TDB_SUCCESS)
     {
         sql_print_information("[TIDESDB] Replica promoted to primary successfully");
+        /* Flip the runtime role immediately so schema writes / DROP work on this
+           new primary without waiting for the next stats refresh. */
+        srv_runtime_is_replica.store(0, std::memory_order_relaxed);
+        /* A node promoted from a replica never created the schema CF at open;
+           establish it now so this primary's CREATE TABLEs publish FRMs that
+           downstream replicas can discover.  The promote already stopped the
+           replica sync thread, so this create cannot race the sync. */
+        tidesdb_setup_schema_cf(true);
     }
     else
     {
         sql_print_error("[TIDESDB] Failed to promote replica (err=%d)", rc);
+        /* Surface to the client so a failover controller running SET GLOBAL
+           tidesdb_promote_primary=ON sees the failure -- with single-writer
+           fencing a promotion can legitimately lose the lease race to another
+           node, and the caller must not assume it became primary. */
+        my_printf_error(ER_UNKNOWN_ERROR,
+                        "TidesDB: promotion to primary failed (err=%d); this node "
+                        "remains a replica",
+                        MYF(0), rc);
     }
 
     /* reset to OFF so it can be triggered again */
@@ -3157,6 +3270,7 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
     MYSQL_SYSVAR(unified_memtable_skip_list_max_level),
     MYSQL_SYSVAR(unified_memtable_skip_list_probability),
     MYSQL_SYSVAR(object_store_backend),
+    MYSQL_SYSVAR(objstore_fs_path),
     MYSQL_SYSVAR(s3_endpoint),
     MYSQL_SYSVAR(s3_bucket),
     MYSQL_SYSVAR(s3_prefix),
@@ -4075,7 +4189,7 @@ static int schema_cf_store_frm(const char *path, const uchar *frm_data = NULL, s
        drains on shutdown, which then triggers a compaction whose
        MANIFEST upload overwrites the primary's authoritative state.
        Refuse all schema writes here so the bucket stays clean. */
-    if (srv_replica_mode) return 0;
+    if (tdb_is_replica()) return 0;
     if (!schema_cf) return 0;
 
     uchar *alloc_buf = NULL;
@@ -4137,7 +4251,7 @@ static void schema_cf_delete(const char *path)
        reach the unified memtable or the bootstrap mariadbd's shutdown
        drain will flush + compact + upload a MANIFEST that overwrites the
        primary's. */
-    if (srv_replica_mode) return;
+    if (tdb_is_replica()) return;
     if (!schema_cf) return;
 
     std::string key = schema_cf_key_from_path(path);
@@ -4159,7 +4273,7 @@ static void schema_cf_delete_db(const std::string &db_name)
 {
     /* Same rationale as schema_cf_store_frm -- never let a replica land
        writes in the unified memtable. */
-    if (srv_replica_mode) return;
+    if (tdb_is_replica()) return;
     if (!schema_cf || db_name.empty()) return;
 
     /* Match keys beginning with "db_name<SCHEMA_CF_KEY_SEP>". */
@@ -4208,7 +4322,7 @@ static void schema_cf_rename(const char *from, const char *to)
 {
     /* Same rationale as schema_cf_store_frm -- never let a replica land
        writes in the unified memtable. */
-    if (srv_replica_mode) return;
+    if (tdb_is_replica()) return;
     if (!schema_cf) return;
 
     std::string old_key = schema_cf_key_from_path(from);
@@ -4481,6 +4595,41 @@ static void schema_cf_ensure_databases()
     tidesdb_txn_free(txn);
 }
 
+/*
+  Establish the schema-discovery CF and materialise the database directories it
+  references.  Idempotent and safe to call repeatedly, from several contexts:
+   - open: a node that starts as a primary creates the CF (may_create); a node
+     that starts as a replica only resolves whatever a primary has published.
+   - the discovery worker: a replica that started before any primary lazily
+     resolves the CF once it appears in the bucket, and keeps new database dirs
+     materialised as tables are created upstream.  Never creates.
+   - the promote callback: a node promoted from a replica creates the CF so its
+     own CREATE TABLE statements publish FRMs that downstream replicas discover.
+
+  Creation is gated on the explicit may_create rather than the runtime role
+  because a replica's sync thread materialises new column families published by
+  the primary -- including this schema CF -- and to do so it briefly clears the
+  engine's replica_mode flag.  If creation keyed off that flag the discovery
+  worker could race the sync into creating the same CF.  Only the two genuinely
+  primary moments (started primary, just promoted) pass may_create.
+*/
+static void tidesdb_setup_schema_cf(bool may_create)
+{
+    if (!tdb_global || srv_object_store_backend == OBJSTORE_BACKEND_LOCAL) return;
+
+    if (!schema_cf)
+    {
+        if (may_create && !tidesdb_get_column_family(tdb_global, SCHEMA_CF_NAME))
+        {
+            tidesdb_column_family_config_t scfg = tidesdb_default_column_family_config();
+            tidesdb_create_column_family(tdb_global, SCHEMA_CF_NAME, &scfg);
+        }
+        schema_cf = tidesdb_get_column_family(tdb_global, SCHEMA_CF_NAME);
+    }
+
+    if (schema_cf) schema_cf_ensure_databases();
+}
+
 /* ******************** Plugin init / deinit ******************** */
 
 static int tidesdb_hton_drop_table(handlerton *, const char *path);
@@ -4701,6 +4850,26 @@ static int tidesdb_init_func(void *p)
         DBUG_RETURN(1);
 #endif
     }
+    else if (srv_object_store_backend == OBJSTORE_BACKEND_FS)
+    {
+        /* Filesystem object store -- all nodes share one directory as the bucket.
+           No external service; the connector uses flock so the single-writer
+           fence holds across processes.  Intended for failover/replication tests. */
+        if (!srv_objstore_fs_path || !srv_objstore_fs_path[0])
+        {
+            sql_print_error("[TIDESDB] FS object store backend requires tidesdb_objstore_fs_path");
+            DBUG_RETURN(1);
+        }
+        objstore_connector = tidesdb_objstore_fs_create(srv_objstore_fs_path);
+        if (!objstore_connector)
+        {
+            sql_print_error("[TIDESDB] Failed to create filesystem object store connector at %s",
+                            srv_objstore_fs_path);
+            DBUG_RETURN(1);
+        }
+        sql_print_information("[TIDESDB] Filesystem object store connector created (root=%s)",
+                              srv_objstore_fs_path);
+    }
 
     if (objstore_connector)
     {
@@ -4738,29 +4907,32 @@ static int tidesdb_init_func(void *p)
 
     sql_print_information("[TIDESDB] TidesDB opened at %s", tdb_path.c_str());
 
-    /* Schema discovery CF -- created when object store is active so that
-       replicas can discover table definitions from the shared storage. */
+    /* Schema discovery (object store mode).  Register the handlerton discovery
+       hooks unconditionally so a replica that started before any primary created
+       the schema CF can still discover tables once the CF appears -- the CF is
+       resolved lazily by tidesdb_setup_schema_cf (run here, by the discovery
+       worker and by the promote callback).  Only a node that starts as a primary
+       creates the CF here; a node that starts as a replica lets its sync thread
+       materialise it and only resolves it. */
     if (objstore_connector)
     {
-        tidesdb_column_family_config_t schema_cfg = tidesdb_default_column_family_config();
-        if (!tidesdb_get_column_family(tdb_global, SCHEMA_CF_NAME))
-            tidesdb_create_column_family(tdb_global, SCHEMA_CF_NAME, &schema_cfg);
+        tidesdb_hton->discover_table = tidesdb_discover_table;
+        tidesdb_hton->discover_table_names = tidesdb_discover_table_names;
+        tidesdb_hton->discover_table_existence = tidesdb_discover_table_existence;
 
-        schema_cf = tidesdb_get_column_family(tdb_global, SCHEMA_CF_NAME);
+        tidesdb_setup_schema_cf(!srv_replica_mode);
 
-        if (schema_cf)
-        {
-            tidesdb_hton->discover_table = tidesdb_discover_table;
-            tidesdb_hton->discover_table_names = tidesdb_discover_table_names;
-            tidesdb_hton->discover_table_existence = tidesdb_discover_table_existence;
+        /* Drive ongoing replica discovery from a dedicated worker so the schema CF
+           read runs with a THD and does not race the library's sync thread. */
+        srv_schema_discovery_stop.store(false, std::memory_order_relaxed);
+        srv_schema_discovery_thread = std::thread(tidesdb_schema_discovery_loop);
 
-            /* We ensure database directories exist for all tables in the schema
-               CF so MariaDB discovers them (relevant for replicas). */
-            schema_cf_ensure_databases();
-
-            sql_print_information("[TIDESDB] Schema discovery enabled (object store mode)");
-        }
+        sql_print_information("[TIDESDB] Schema discovery enabled (object store mode)");
     }
+
+    /* Seed the runtime role from the startup sysvar; the refresher keeps it in
+       step with the engine's actual role thereafter (promotion / fence). */
+    srv_runtime_is_replica.store(srv_replica_mode ? 1 : 0, std::memory_order_relaxed);
 
     /* Start the background status refresher now that tdb_global is open. */
     srv_stat_refresh_stop.store(false, std::memory_order_relaxed);
@@ -4817,6 +4989,7 @@ static int tidesdb_hton_panic(handlerton *, enum ha_panic_function flag)
     /* ha_finalize_handlerton calls this before the plugin deinit, and the close
        below frees the column-family skip lists, so the refresher has to be fully
        stopped here rather than in deinit. */
+    tidesdb_stop_schema_discovery();
     tidesdb_stop_stat_refresher();
 
     if (tdb_global)
@@ -4838,6 +5011,7 @@ static void tidesdb_hton_pre_shutdown(void)
 {
     /* Quiesce the status refresher at the earliest shutdown signal so it is no
        longer walking the skip lists once teardown starts freeing them. */
+    tidesdb_stop_schema_discovery();
     tidesdb_stop_stat_refresher();
 
     if (!tdb_global) return;
@@ -4887,6 +5061,7 @@ static int tidesdb_deinit_func(void *p)
 
     /* Backstop -- the pre_shutdown and panic hooks normally stop the refresher
        earlier, but join here too in case neither ran on this teardown path. */
+    tidesdb_stop_schema_discovery();
     tidesdb_stop_stat_refresher();
 
     if (tdb_global)
@@ -11071,7 +11246,7 @@ static int tidesdb_drop_table_impl(const char *path)
        lines in the server log even though the work is genuinely a no-op
        for a replica.  Skip the library call entirely on replicas and let
        the local directory cleanup (if any) be driven by the next sync. */
-    if (srv_replica_mode)
+    if (tdb_is_replica())
     {
         sql_print_information(
             "[TIDESDB] drop_table skipped on replica for '%s' (replica is read-only)", path);
@@ -11160,7 +11335,7 @@ static void tidesdb_hton_drop_database(handlerton *, char *path)
     /* Same rationale as tidesdb_drop_table_impl -- replica mode is
        read-only and the library rejects every drop with TDB_ERR_READONLY,
        so skip the call rather than spamming the log. */
-    if (srv_replica_mode)
+    if (tdb_is_replica())
     {
         sql_print_information(
             "[TIDESDB] drop_database skipped on replica for '%s' (replica is read-only)", path);
@@ -11255,6 +11430,8 @@ static long long srv_stat_unified_wal_generation;
    the engine status text. */
 static long long srv_stat_object_store_enabled;
 static long long srv_stat_replica_mode_active;
+static long long srv_stat_primary_epoch;
+static long long srv_stat_seen_epoch;
 static long long srv_stat_local_cache_bytes;
 static long long srv_stat_local_cache_files;
 static long long srv_stat_upload_queue_depth;
@@ -11279,8 +11456,8 @@ static long long srv_stat_compaction_count;
    tidesdb_show_status can read them directly.  Their definitions live up
    there. */
 
-#define TIDESQL_VERSION_STR "4.5.6"
-#define TIDESQL_VERSION_HEX 0x40506
+#define TIDESQL_VERSION_STR "4.5.7"
+#define TIDESQL_VERSION_HEX 0x40507
 
 static const char *srv_stat_version = TIDESQL_VERSION_STR;
 static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;
@@ -11337,6 +11514,8 @@ static struct st_mysql_show_var tidesdb_status_variables[] = {
     /* Object-store / replication progress. */
     {"tidesdb_object_store_enabled", (char *)&srv_stat_object_store_enabled, SHOW_LONGLONG},
     {"tidesdb_replica_mode_active", (char *)&srv_stat_replica_mode_active, SHOW_LONGLONG},
+    {"tidesdb_primary_epoch", (char *)&srv_stat_primary_epoch, SHOW_LONGLONG},
+    {"tidesdb_seen_epoch", (char *)&srv_stat_seen_epoch, SHOW_LONGLONG},
     {"tidesdb_local_cache_bytes", (char *)&srv_stat_local_cache_bytes, SHOW_LONGLONG},
     {"tidesdb_local_cache_files", (char *)&srv_stat_local_cache_files, SHOW_LONGLONG},
     {"tidesdb_upload_queue_depth", (char *)&srv_stat_upload_queue_depth, SHOW_LONGLONG},
@@ -11402,6 +11581,11 @@ static void tidesdb_refresh_status_vars()
     /* Object-store / replica progress. */
     srv_stat_object_store_enabled = db_st.object_store_enabled ? 1 : 0;
     srv_stat_replica_mode_active = db_st.replica_mode ? 1 : 0;
+    /* Track the engine's runtime role so a fence (replica_mode flipping back to 1)
+       re-gates schema writes / DROP on this node. */
+    srv_runtime_is_replica.store(db_st.replica_mode ? 1 : 0, std::memory_order_relaxed);
+    srv_stat_primary_epoch = (long long)db_st.primary_epoch;
+    srv_stat_seen_epoch = (long long)db_st.seen_epoch;
     srv_stat_local_cache_bytes = (long long)db_st.local_cache_bytes_used;
     srv_stat_local_cache_files = (long long)db_st.local_cache_num_files;
     srv_stat_upload_queue_depth = (long long)db_st.upload_queue_depth;

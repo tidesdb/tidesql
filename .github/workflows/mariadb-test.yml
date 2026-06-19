@@ -58,7 +58,6 @@ jobs:
           gnutls \
           libxml2 \
           m4 \
-          openssl@3 \
           pcre \
           pcre2 \
           zlib \
@@ -213,7 +212,7 @@ jobs:
         echo "TidesDB commit: $(git rev-parse HEAD)"
         git log -1 --oneline
         mkdir build && cd build
-        cmake .. -DCMAKE_OSX_SYSROOT=${SDKROOT} -DOPENSSL_ROOT_DIR=${HOMEBREW_BASE_DIR}/opt/openssl@3
+        cmake .. -DCMAKE_OSX_SYSROOT=${SDKROOT}
         make -j$(sysctl -n hw.ncpu)
         sudo make install
 

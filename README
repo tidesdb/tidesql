@@ -118,7 +118,7 @@ MACOS
 
 1. Install dependencies:
 
-   brew install cmake ninja bison snappy lz4 zstd openssl@3
+   brew install cmake ninja bison snappy lz4 zstd
 
 2. Install TidesDB library:
 
@@ -128,7 +128,7 @@ MACOS
 
    git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib
    cd tidesdb-lib && mkdir build && cd build
-   cmake .. -DCMAKE_OSX_SYSROOT=${SDKROOT} -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3)
+   cmake .. -DCMAKE_OSX_SYSROOT=${SDKROOT}
    make -j$(sysctl -n hw.ncpu)
    sudo make install
 
@@ -323,9 +323,9 @@ Core:
   tidesdb_unified_memtable_bytes, tidesdb_unified_immutable_count,
   tidesdb_unified_is_flushing, tidesdb_unified_wal_generation),
   object-store progress (tidesdb_object_store_enabled,
-  tidesdb_replica_mode_active, tidesdb_local_cache_bytes,
-  tidesdb_local_cache_files, tidesdb_upload_queue_depth,
-  tidesdb_total_uploads, tidesdb_upload_failures,
+  tidesdb_replica_mode_active, tidesdb_primary_epoch, tidesdb_seen_epoch,
+  tidesdb_local_cache_bytes, tidesdb_local_cache_files,
+  tidesdb_upload_queue_depth, tidesdb_total_uploads, tidesdb_upload_failures,
   tidesdb_last_uploaded_generation), and write-amplification counters
   (tidesdb_uwal_bytes_written, tidesdb_wal_bytes_written,
   tidesdb_flush_bytes_written, tidesdb_compaction_bytes_written,
@@ -368,11 +368,20 @@ Cloud / Object Store:
 - Block-level range_get for point lookups on frozen SSTables (single HTTP request)
 - Parallel SSTable prefetch for iterators
 - Read-only replica mode with MANIFEST sync and WAL replay
-- Primary promotion via SET GLOBAL tidesdb_promote_primary = ON
+- Primary promotion via SET GLOBAL tidesdb_promote_primary = ON (claims a new
+  lease epoch; can fail under fencing if another node already holds a newer one)
+- Single-writer fencing via object-store lease epochs -- promotion claims the
+  next epoch with a conditional write, a superseded primary fails its next
+  publish and self-demotes to replica, so split-brain writes never become
+  authoritative (observable via tidesdb_primary_epoch / tidesdb_seen_epoch)
+- Filesystem object-store backend (object_store_backend=FS) for failover and
+  replication testing across processes without S3
 - Configurable WAL sync (per-commit for RPO=0, or bytes-threshold)
 - LRU local file cache with paired klog/vlog eviction
 - Upload retry with verification, download retry with backoff
-- Kubernetes deployment with automated failover (see k8s/ directory)
+- Kubernetes HA deployment -- one identical StatefulSet pool with a
+  lease-elected primary and object-store-fenced single-writer safety
+  (see k8s/production/)
 
 
 CONFIGURATION
@@ -407,7 +416,13 @@ Read-only (set at startup):
   unified_memtable_skip_list_probability Skip-list level promotion probability
                                          for the unified memtable; 0.0 keeps
                                          the library default
-  object_store_backend      LOCAL or S3 (default: LOCAL)
+  object_store_backend      LOCAL, S3, or FS (default: LOCAL).  FS uses a
+                            shared local filesystem directory as the bucket
+                            stand-in (flock-based single-writer safety) so
+                            failover and replication can be exercised without S3
+  objstore_fs_path          Shared directory used as the bucket when
+                            object_store_backend=FS; every node points at the
+                            same path (required for FS, ignored otherwise)
   s3_endpoint               S3 endpoint (e.g. s3.amazonaws.com)
   s3_bucket                 S3 bucket name
   s3_prefix                 S3 key prefix (e.g. production/db1/)
@@ -493,8 +508,12 @@ Dynamic (SET GLOBAL at runtime):
                             optimistic MVCC, where conflicts surface as
                             HA_ERR_LOCK_DEADLOCK at COMMIT and the application
                             must retry.
-  promote_primary           Set to ON to promote a replica to primary
-                            (trigger variable, resets to OFF after promotion)
+  promote_primary           Set to ON to promote a replica to primary; claims a
+                            new lease epoch with a conditional write and can fail
+                            (returns a SQL error, node stays a replica) if
+                            another node already holds a newer epoch, so a
+                            failover controller must check the result rather than
+                            assume success (trigger variable, resets to OFF)
   fts_min_word_len          Minimum word length for FTS indexing (default: 3)
   fts_max_word_len          Maximum word length for FTS indexing (default: 84)
   fts_bm25_k1               BM25 k1 term-frequency saturation (default: 1.2)

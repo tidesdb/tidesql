@@ -11,7 +11,7 @@ ARG WITH_TESTS=0
 # Comma-separated list of optional storage engines to disable at compile time.
 # Managed automatically by docker/rebuild.sh via EXCLUDE_ENGINES / INCLUDE_ENGINES.
 ARG DISABLED_ENGINES=""
-# Set WITH_S3=1 to build with S3-compatible object store support (requires libcurl + OpenSSL).
+# Set WITH_S3=1 to build with S3-compatible object store support (requires libcurl).
 ARG WITH_S3=0
 # Memory allocator for libtidesdb.so: system (default), jemalloc, mimalloc, or tcmalloc.
 # Affects only TidesDB's internal allocations; mariadbd's allocator is unchanged.
