@@ -52,7 +52,7 @@
 #   --list-engines              List storage engines that can be skipped and exit
 #   --rebuild-plugin             Rebuild only the TidesDB plugin (fast dev cycle)
 #   --pgo                       Enable Profile-Guided Optimization (3-phase build)
-#   --s3                        Build TidesDB with S3 object store connector (requires libcurl + OpenSSL)
+#   --s3                        Build TidesDB with S3 object store connector (requires libcurl)
 #   --allocator  NAME           Memory allocator for libtidesdb.so: system (default), jemalloc, mimalloc, or tcmalloc.
 #                               Only affects TidesDB's internal allocations; mariadbd's allocator is unchanged.
 #                               For a process-wide swap also LD_PRELOAD the allocator at mariadbd startup.
