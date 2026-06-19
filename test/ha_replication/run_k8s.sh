@@ -49,6 +49,11 @@ deploy(){
         echo "  FAIL $n not ready"; kubectl logs "$n" --tail=40; fail=1; return 1; }; done
 }
 teardown(){ kubectl delete -f "$HERE/k8s/nodes.yaml" --ignore-not-found --grace-period=0 --force >/dev/null 2>&1; }
+# dump the relevant node log lines before teardown removes the pods, so a failure is diagnosable
+dump_logs(){ for n in "${NODES[@]}"; do
+    echo "----- logs $n -----"
+    kubectl logs "$n" --tail=80 2>&1 | grep -iE "tidesdb|schema|discover|replica|primary|epoch|fenc|object store|s3|error|fail|abort" || echo "  (no matching log lines)"
+  done; }
 
 bootstrap_primary(){   # promote node-0, create the table, load baseline rows of prefix $1
     promote tidesql-node-0
@@ -62,7 +67,7 @@ bootstrap_primary(){   # promote node-0, create the table, load baseline rows of
 scenario_failover_refollow(){
     echo "== k8s scenario failover_refollow =="
     deploy || return; bootstrap_primary k
-    wait_converge tidesql-node-1 "" k 1 || { echo "  FAIL replica never converged"; fail=1; teardown; return; }
+    wait_converge tidesql-node-1 "" k 1 || { echo "  FAIL replica never converged"; dump_logs; fail=1; teardown; return; }
     check "promote node-1" "$(kxrc tidesql-node-1 'SET GLOBAL tidesdb_promote_primary=ON')" 0
     wait_primary tidesql-node-1 2 || { echo "  FAIL node-1 not primary"; fail=1; teardown; return; }
     check "promoted node has all rows" "$(krows tidesql-node-1 k)" 200
@@ -77,7 +82,7 @@ scenario_failover_refollow(){
 scenario_zombie_fence(){
     echo "== k8s scenario zombie_fence =="
     deploy || return; bootstrap_primary a
-    wait_converge tidesql-node-1 "" a 1 || { echo "  FAIL replica did not converge"; fail=1; teardown; return; }
+    wait_converge tidesql-node-1 "" a 1 || { echo "  FAIL replica did not converge"; dump_logs; fail=1; teardown; return; }
     check "promote node-1" "$(kxrc tidesql-node-1 'SET GLOBAL tidesdb_promote_primary=ON')" 0
     wait_primary tidesql-node-1 2 || { echo "  FAIL node-1 not primary"; fail=1; teardown; return; }
     insert_rows tidesql-node-0 z 1001 1200; kx tidesql-node-0 "OPTIMIZE TABLE ha.t"   # zombie publishes
@@ -94,7 +99,7 @@ scenario_zombie_fence(){
 scenario_partition_fence(){
     echo "== k8s scenario partition_fence =="
     deploy || return; bootstrap_primary a
-    wait_converge tidesql-node-1 "" a 1 || { echo "  FAIL replica did not converge"; fail=1; teardown; return; }
+    wait_converge tidesql-node-1 "" a 1 || { echo "  FAIL replica did not converge"; dump_logs; fail=1; teardown; return; }
     partition_from_minio tidesql-node-0          # old primary is now cut off from the bucket
     check "promote node-1 while node-0 partitioned" "$(kxrc tidesql-node-1 'SET GLOBAL tidesdb_promote_primary=ON')" 0
     wait_primary tidesql-node-1 2 || { echo "  FAIL node-1 not primary"; fail=1; heal_partition tidesql-node-0; teardown; return; }
