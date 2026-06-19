@@ -385,6 +385,22 @@ static std::string tdb_path;
 static std::thread srv_stat_refresh_thread;
 static std::atomic<bool> srv_stat_refresh_stop{false};
 
+/* Dedicated replica schema-discovery worker (object store mode only).  Kept off
+   the stats refresher because resolving the schema CF reads it through a txn and
+   iterator, and on a replica the library's sync thread is concurrently
+   materialising and replaying into that same CF.  That read has to run on a fully
+   registered server thread with a THD, the same context the discover_table hooks
+   use, so the library pins the read snapshot against the sync.  The THD-less stats
+   refresher raced it and faulted over the object store. */
+static std::thread srv_schema_discovery_thread;
+static std::atomic<bool> srv_schema_discovery_stop{false};
+
+/* Background workers wake once per poll slice to check their stop flag, a fixed
+   number of slices making up roughly a one second work interval, so a worker
+   reacts to shutdown promptly instead of sleeping out the whole interval. */
+static constexpr int TDB_BG_POLL_SLICE_MS = 100;
+static constexpr int TDB_BG_POLL_SLICES = 10;
+
 /* Schema discovery CF for object store mode (NULL when local-only) */
 static tidesdb_column_family_t *schema_cf = NULL;
 
@@ -1051,22 +1067,51 @@ static inline bool tdb_lock_mode_for_read(THD *thd, bool write_intent, tdb_lock_
 
 static handler *tidesdb_create_handler(handlerton *hton, TABLE_SHARE *table, MEM_ROOT *mem_root);
 static void tidesdb_refresh_status_vars();
-static void tidesdb_setup_schema_cf();
+static void tidesdb_setup_schema_cf(bool may_create);
 
 /* Refreshes the SHOW STATUS counters about once a second so they track flushes
-   and compactions even when no query is planning a read.  Also re-runs schema
-   discovery setup so a replica lazily picks up the schema CF (and materialises
-   new database directories) once a primary publishes it.  Wakes promptly on
-   shutdown rather than sleeping out the full interval. */
+   and compactions even when no query is planning a read.  Reads only the atomic
+   stat holders, so it is safe to run on this lightweight thread.  Schema discovery
+   lives on its own worker (tidesdb_schema_discovery_loop) because that reads CF
+   data and must run with a THD.  Wakes promptly on shutdown rather than sleeping
+   out the full interval. */
 static void tidesdb_stat_refresh_loop()
 {
     while (!srv_stat_refresh_stop.load(std::memory_order_relaxed))
     {
         tidesdb_refresh_status_vars();
-        tidesdb_setup_schema_cf();
-        for (int i = 0; i < 10 && !srv_stat_refresh_stop.load(std::memory_order_relaxed); i++)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        for (int i = 0;
+             i < TDB_BG_POLL_SLICES && !srv_stat_refresh_stop.load(std::memory_order_relaxed); i++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(TDB_BG_POLL_SLICE_MS));
     }
+}
+
+/* Dedicated replica schema-discovery worker.  Resolves the schema CF once a
+   primary publishes it and materialises the database directories it references so
+   a replica can serve tables created upstream after it started.  Runs the same
+   schema CF read the discover_table hooks run, but on its own mysys-registered
+   thread instead of the stats refresher.  Only started in object store mode
+   (tidesdb_setup_schema_cf is a no-op otherwise). */
+static void tidesdb_schema_discovery_loop()
+{
+    /* my_thread_init registers the worker with mysys so the my_stat / my_mkdir
+       calls in schema_cf_ensure_databases have a valid thread context.  We do not
+       build a THD-- this is a MODULE_ONLY plugin, so the full THD class is opaque
+       here, and the engine helpers the schema read goes through already treat a
+       NULL THD as "no per statement context" (default timeouts, no kill check).
+       current_thd is simply NULL on this thread. */
+    my_thread_init();
+
+    while (!srv_schema_discovery_stop.load(std::memory_order_relaxed))
+    {
+        tidesdb_setup_schema_cf(false);
+        for (int i = 0;
+             i < TDB_BG_POLL_SLICES && !srv_schema_discovery_stop.load(std::memory_order_relaxed);
+             i++)
+            std::this_thread::sleep_for(std::chrono::milliseconds(TDB_BG_POLL_SLICE_MS));
+    }
+
+    my_thread_end();
 }
 
 /* Stop and join the background status refresher.  Idempotent, so every teardown
@@ -1082,6 +1127,18 @@ static void tidesdb_stop_stat_refresher()
     {
         srv_stat_refresh_stop.store(true, std::memory_order_relaxed);
         srv_stat_refresh_thread.join();
+    }
+}
+
+/* Stop and join the schema-discovery worker.  Idempotent, and like the stat
+   refresher it must run before any path frees tdb_global so the worker is not
+   left iterating a freed schema CF. */
+static void tidesdb_stop_schema_discovery()
+{
+    if (srv_schema_discovery_thread.joinable())
+    {
+        srv_schema_discovery_stop.store(true, std::memory_order_relaxed);
+        srv_schema_discovery_thread.join();
     }
 }
 
@@ -3010,8 +3067,9 @@ static void tidesdb_promote_primary_update(THD *thd, struct st_mysql_sys_var *, 
         srv_runtime_is_replica.store(0, std::memory_order_relaxed);
         /* A node promoted from a replica never created the schema CF at open;
            establish it now so this primary's CREATE TABLEs publish FRMs that
-           downstream replicas can discover. */
-        tidesdb_setup_schema_cf();
+           downstream replicas can discover.  The promote already stopped the
+           replica sync thread, so this create cannot race the sync. */
+        tidesdb_setup_schema_cf(true);
     }
     else
     {
@@ -4540,22 +4598,28 @@ static void schema_cf_ensure_databases()
 /*
   Establish the schema-discovery CF and materialise the database directories it
   references.  Idempotent and safe to call repeatedly, from several contexts:
-   - open: a node that starts as a primary creates the CF; a replica picks it up
-     if a primary already published it.
-   - the stats refresher: a replica that started before any primary lazily
+   - open: a node that starts as a primary creates the CF (may_create); a node
+     that starts as a replica only resolves whatever a primary has published.
+   - the discovery worker: a replica that started before any primary lazily
      resolves the CF once it appears in the bucket, and keeps new database dirs
-     materialised as tables are created upstream.
+     materialised as tables are created upstream.  Never creates.
    - the promote callback: a node promoted from a replica creates the CF so its
      own CREATE TABLE statements publish FRMs that downstream replicas discover.
-  Only a primary (runtime role) creates the CF; replicas just resolve it.
+
+  Creation is gated on the explicit may_create rather than the runtime role
+  because a replica's sync thread materialises new column families published by
+  the primary -- including this schema CF -- and to do so it briefly clears the
+  engine's replica_mode flag.  If creation keyed off that flag the discovery
+  worker could race the sync into creating the same CF.  Only the two genuinely
+  primary moments (started primary, just promoted) pass may_create.
 */
-static void tidesdb_setup_schema_cf()
+static void tidesdb_setup_schema_cf(bool may_create)
 {
     if (!tdb_global || srv_object_store_backend == OBJSTORE_BACKEND_LOCAL) return;
 
     if (!schema_cf)
     {
-        if (!tdb_is_replica() && !tidesdb_get_column_family(tdb_global, SCHEMA_CF_NAME))
+        if (may_create && !tidesdb_get_column_family(tdb_global, SCHEMA_CF_NAME))
         {
             tidesdb_column_family_config_t scfg = tidesdb_default_column_family_config();
             tidesdb_create_column_family(tdb_global, SCHEMA_CF_NAME, &scfg);
@@ -4846,15 +4910,22 @@ static int tidesdb_init_func(void *p)
     /* Schema discovery (object store mode).  Register the handlerton discovery
        hooks unconditionally so a replica that started before any primary created
        the schema CF can still discover tables once the CF appears -- the CF is
-       resolved lazily by tidesdb_setup_schema_cf (run here, by the stats refresher
-       and by the promote callback).  Only a primary creates the CF. */
+       resolved lazily by tidesdb_setup_schema_cf (run here, by the discovery
+       worker and by the promote callback).  Only a node that starts as a primary
+       creates the CF here; a node that starts as a replica lets its sync thread
+       materialise it and only resolves it. */
     if (objstore_connector)
     {
         tidesdb_hton->discover_table = tidesdb_discover_table;
         tidesdb_hton->discover_table_names = tidesdb_discover_table_names;
         tidesdb_hton->discover_table_existence = tidesdb_discover_table_existence;
 
-        tidesdb_setup_schema_cf();
+        tidesdb_setup_schema_cf(!srv_replica_mode);
+
+        /* Drive ongoing replica discovery from a dedicated worker so the schema CF
+           read runs with a THD and does not race the library's sync thread. */
+        srv_schema_discovery_stop.store(false, std::memory_order_relaxed);
+        srv_schema_discovery_thread = std::thread(tidesdb_schema_discovery_loop);
 
         sql_print_information("[TIDESDB] Schema discovery enabled (object store mode)");
     }
@@ -4918,6 +4989,7 @@ static int tidesdb_hton_panic(handlerton *, enum ha_panic_function flag)
     /* ha_finalize_handlerton calls this before the plugin deinit, and the close
        below frees the column-family skip lists, so the refresher has to be fully
        stopped here rather than in deinit. */
+    tidesdb_stop_schema_discovery();
     tidesdb_stop_stat_refresher();
 
     if (tdb_global)
@@ -4939,6 +5011,7 @@ static void tidesdb_hton_pre_shutdown(void)
 {
     /* Quiesce the status refresher at the earliest shutdown signal so it is no
        longer walking the skip lists once teardown starts freeing them. */
+    tidesdb_stop_schema_discovery();
     tidesdb_stop_stat_refresher();
 
     if (!tdb_global) return;
@@ -4988,6 +5061,7 @@ static int tidesdb_deinit_func(void *p)
 
     /* Backstop -- the pre_shutdown and panic hooks normally stop the refresher
        earlier, but join here too in case neither ran on this teardown path. */
+    tidesdb_stop_schema_discovery();
     tidesdb_stop_stat_refresher();
 
     if (tdb_global)
