@@ -39,7 +39,7 @@ tidesdb_replica_sync_interval=${TDB_NODE_REPLICA_SYNC_US:-500000}
 tidesdb_objstore_wal_sync_on_commit=${TDB_NODE_WAL_SYNC_ON_COMMIT:-0}
 
 tidesdb_unified_memtable=ON
-tidesdb_unified_memtable_write_buffer_size=${TDB_NODE_WRITE_BUFFER:-4194304}
+tidesdb_unified_memtable_write_buffer_size=${TDB_NODE_WRITE_BUFFER:-4M}
 tidesdb_log_level=ERROR
 EOF
 

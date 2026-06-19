@@ -80,7 +80,7 @@ connect (c4, localhost, root,,);
 --disable_query_log
 --disable_result_log
 
-# ---- Connection c1: read_write pattern on rows 1-500 ----
+# =+=+= Connection c1: read_write pattern on rows 1-500 =+=+=
 connection c1;
 delimiter |;
 send
@@ -105,7 +105,7 @@ send
 |
 delimiter ;|
 
-# ---- Connection c2: overlapping writes on rows 1-500 ----
+# =+=+= Connection c2: overlapping writes on rows 1-500 =+=+=
 connection c2;
 delimiter |;
 send
@@ -130,7 +130,7 @@ send
 |
 delimiter ;|
 
-# ---- Connection c3: writes on rows 500-1000 ----
+# =+=+= Connection c3: writes on rows 500-1000 =+=+=
 connection c3;
 delimiter |;
 send
@@ -155,7 +155,7 @@ send
 |
 delimiter ;|
 
-# ---- Connection c4: all autocommit UPDATEs (rapid txn churn) ----
+# =+=+= Connection c4: all autocommit UPDATEs (rapid txn churn) =+=+=
 connection c4;
 delimiter |;
 send
@@ -174,7 +174,7 @@ send
 |
 delimiter ;|
 
-# ---- Reap all ----
+# =+=+= Reap all =+=+=
 connection c1;
 reap;
 connection c2;

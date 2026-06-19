@@ -22,7 +22,7 @@ CREATE TABLE t (
 connect (con1, localhost, root,,);
 connect (con2, localhost, root,,);
 
---echo # ---- TEST: Two INSERTs with same PK ----
+--echo # =+=+= TEST: Two INSERTs with same PK =+=+=
 connection con1;
 START TRANSACTION;
 INSERT INTO t VALUES (1, 10);

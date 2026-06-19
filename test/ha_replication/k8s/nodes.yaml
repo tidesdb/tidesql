@@ -1,9 +1,10 @@
-# Cluster nodes for the SQL failover simulation: three mariadbd servers, all
+# Cluster nodes for the SQL failover simulation, three mariadbd servers, all
 # booting as replicas pointed at the shared MinIO bucket. run_k8s.sh promotes one
 # to primary. The image is built from test/ha_replication/Dockerfile and loaded
 # into kind. restartPolicy Never so deleting a pod is a real node loss; three
-# nodes let the matrix cover convergence, re-follow after promotion, and zombie
-# fencing of a live old primary.
+# nodes let the matrix cover re-follow after promotion, zombie fencing of a live
+# old primary, and fencing of an old primary partitioned from the bucket (the pods
+# carry NET_ADMIN so the partition scenario can sever egress to MinIO with iptables).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -11,7 +12,7 @@ metadata:
 data:
   TDB_NODE_PORT: "3306"
   TDB_NODE_WAL_SYNC_ON_COMMIT: "1"
-  TDB_NODE_WRITE_BUFFER: "262144"
+  TDB_NODE_WRITE_BUFFER: "256K"
   TDB_NODE_REPLICA_SYNC_US: "500000"
   TIDESDB_S3_ENDPOINT: "minio:9000"
   TIDESDB_S3_BUCKET: "tidesql-failover"

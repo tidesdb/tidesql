@@ -396,13 +396,15 @@ SYSTEM VARIABLES (SET GLOBAL tidesdb_...)
 
 Read-only (set at startup):
 
-  flush_threads             Background flush threads (default: 4)
+  flush_threads             Background flush threads (default: 4; 0 lets the
+                            library auto-size to min(CPU count, 4))
   max_concurrent_flushes    Global cap on in-flight memtable flushes; 0 aligns
                             the cap with flush_threads (default: 0)
   compaction_threads        Background compaction threads (default: 4)
   log_level                 DEBUG/INFO/WARN/ERROR/FATAL/NONE (default: DEBUG)
   block_cache_size          Global block cache in bytes (default: 256MB)
-  max_open_sstables         Max cached SSTable files (default: 256)
+  max_open_sstables         Max cached SSTable files (default: 256; 0 = unlimited,
+                            bounded only by the process open-file limit)
   max_memory_usage          Global memory limit in bytes; 0 = auto (default: 0)
   data_home_dir             Override TidesDB data directory (default: auto)
   log_to_file               Write logs to file vs stderr (default: ON)

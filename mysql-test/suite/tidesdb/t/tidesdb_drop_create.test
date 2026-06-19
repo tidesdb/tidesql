@@ -3,7 +3,7 @@
 --echo # Issue #57: Data survives DROP + CREATE
 --echo #
 
---echo # ---- TEST 1: DROP TABLE must destroy data ----
+--echo # =+=+= TEST 1: DROP TABLE must destroy data =+=+=
 CREATE TABLE t_drop57 (i INT NOT NULL PRIMARY KEY, v VARCHAR(50)) ENGINE=TidesDB;
 
 INSERT INTO t_drop57 VALUES (1, 'aaa'), (2, 'bbb'), (3, 'ccc');
@@ -19,7 +19,7 @@ SELECT * FROM t_drop57 ORDER BY i;
 
 DROP TABLE t_drop57;
 
---echo # ---- TEST 2: CREATE OR REPLACE must destroy data ----
+--echo # =+=+= TEST 2: CREATE OR REPLACE must destroy data =+=+=
 CREATE TABLE t_cor57 (i INT) ENGINE=TidesDB;
 
 INSERT INTO t_cor57 VALUES (10), (20), (30);
@@ -33,7 +33,7 @@ SELECT * FROM t_cor57 ORDER BY i;
 
 DROP TABLE t_cor57;
 
---echo # ---- TEST 3: Secondary indexes must also be cleaned ----
+--echo # =+=+= TEST 3: Secondary indexes must also be cleaned =+=+=
 CREATE TABLE t_idx57 (
   id INT NOT NULL PRIMARY KEY,
   val INT NOT NULL,
@@ -59,7 +59,7 @@ SELECT val FROM t_idx57 WHERE val = 200;
 
 DROP TABLE t_idx57;
 
---echo # ---- TEST 4: TRUNCATE TABLE still works ----
+--echo # =+=+= TEST 4: TRUNCATE TABLE still works =+=+=
 CREATE TABLE t_trunc57 (i INT NOT NULL PRIMARY KEY) ENGINE=TidesDB;
 
 INSERT INTO t_trunc57 VALUES (1), (2), (3);

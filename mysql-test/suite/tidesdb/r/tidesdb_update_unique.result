@@ -1,4 +1,4 @@
-# --- PRIMARY KEY collision ---
+# =+=+= PRIMARY KEY collision =+=+=
 CREATE TABLE t1 (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
 INSERT INTO t1 VALUES (1,10),(2,20);
 UPDATE t1 SET id=2 WHERE id=1;
@@ -15,7 +15,7 @@ id	v
 2	20
 3	10
 DROP TABLE t1;
-# --- UNIQUE secondary collision ---
+# =+=+= UNIQUE secondary collision =+=+=
 CREATE TABLE t2 (id INT PRIMARY KEY, e VARCHAR(20), v INT, UNIQUE KEY(e)) ENGINE=TidesDB;
 INSERT INTO t2 VALUES (1,'a',10),(2,'b',20);
 UPDATE t2 SET e='b' WHERE id=1;
@@ -38,7 +38,7 @@ id	e	v
 1	c	99
 2	b	20
 DROP TABLE t2;
-# --- changing only the PK keeps a stable unique value valid ---
+# =+=+= changing only the PK keeps a stable unique value valid =+=+=
 CREATE TABLE t3 (id INT PRIMARY KEY, e VARCHAR(20), UNIQUE KEY(e)) ENGINE=TidesDB;
 INSERT INTO t3 VALUES (1,'x'),(2,'y');
 # moving id 1 to 3 keeps e='x' unique to that row, must succeed
@@ -48,7 +48,7 @@ id	e
 2	y
 3	x
 DROP TABLE t3;
-# --- tidesdb_skip_unique_check bypasses enforcement by contract ---
+# =+=+= tidesdb_skip_unique_check bypasses enforcement by contract =+=+=
 CREATE TABLE t4 (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
 INSERT INTO t4 VALUES (1,10),(2,20);
 SET SESSION tidesdb_skip_unique_check=1;

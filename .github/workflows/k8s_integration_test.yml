@@ -138,7 +138,7 @@ jobs:
             tidesdb_unified_memtable=ON
             tidesdb_unified_memtable_sync_mode=FULL
             tidesdb_unified_memtable_write_buffer_size=32000000
-            tidesdb_block_cache_size=67108864
+            tidesdb_block_cache_size=64M
             tidesdb_flush_threads=2
             tidesdb_compaction_threads=2
             tidesdb_log_level=DEBUG
@@ -226,7 +226,7 @@ jobs:
 
     - name: Write test data to primary
       run: |
-        # Write enough data to exceed the 1MB unified memtable write buffer
+        # Write enough data to exceed the 32MB unified memtable write buffer
         # and trigger a flush to SSTables which then get uploaded to S3
         kubectl exec -n tidesql tidesql-primary -- \
           mariadb -e "
@@ -241,7 +241,7 @@ jobs:
             INSERT INTO items VALUES (2, 'beta',  REPEAT('B', 10000));
             INSERT INTO items VALUES (3, 'gamma', REPEAT('C', 10000));
           "
-        # Insert bulk data to exceed the 1MB flush threshold
+        # Insert bulk data to exceed the 32MB flush threshold
         for i in $(seq 4 200); do
           kubectl exec -n tidesql tidesql-primary -- \
             mariadb -e "INSERT INTO k8s_test.items VALUES ($i, 'bulk_$i', REPEAT('X', 10000))" 2>/dev/null
@@ -302,7 +302,7 @@ jobs:
             tidesdb_replica_sync_interval=1000000
 
             tidesdb_unified_memtable=ON
-            tidesdb_block_cache_size=67108864
+            tidesdb_block_cache_size=64M
             tidesdb_flush_threads=2
             tidesdb_compaction_threads=2
             tidesdb_log_level=INFO
@@ -595,24 +595,24 @@ jobs:
           local label="$1"
           echo ""
           echo "=== SNAPSHOT [$label] @ $(date -u '+%H:%M:%S') ==="
-          echo "--- MinIO top-level ---"
+          echo "=+=+= MinIO top-level =+=+="
           kubectl exec -n tidesql minio -- \
             ls -la /data/tidesql-test/ 2>&1 | head -20 || true
-          echo "--- MinIO k8s_test__items ---"
+          echo "=+=+= MinIO k8s_test__items =+=+="
           kubectl exec -n tidesql minio -- \
             ls -la /data/tidesql-test/k8s_test__items/ 2>&1 | head -40 || true
-          echo "--- MinIO uwal_*.log presence ---"
+          echo "=+=+= MinIO uwal_*.log presence =+=+="
           kubectl exec -n tidesql minio -- \
             ls -la /data/tidesql-test/ 2>&1 | grep -E 'uwal_' || echo "(no uwal segments)"
-          echo "--- Primary TidesDB LOG (last 12 lines) ---"
+          echo "=+=+= Primary TidesDB LOG (last 12 lines) =+=+="
           kubectl exec -n tidesql tidesql-primary -- \
             sh -c 'tail -12 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' \
             2>&1 || echo "(primary unreachable)"
-          echo "--- Replica TidesDB LOG (last 12 lines) ---"
+          echo "=+=+= Replica TidesDB LOG (last 12 lines) =+=+="
           kubectl exec -n tidesql tidesql-replica -- \
             sh -c 'tail -12 /usr/local/mariadb/data/tidesdb_data/LOG 2>/dev/null' \
             2>&1 || echo "(replica unreachable)"
-          echo "--- Counts ---"
+          echo "=+=+= Counts =+=+="
           local pc=$(timeout 5 kubectl exec -n tidesql tidesql-primary -- \
             mariadb --connect-timeout=3 -N -e "SELECT COUNT(*) FROM k8s_test.items" 2>/dev/null || echo "?")
           local rc=$(timeout 5 kubectl exec -n tidesql tidesql-replica -- \
@@ -969,7 +969,7 @@ jobs:
         if [ -d /tmp/k8s-logs/pre-autofail ]; then
           echo "=== Pre-auto-failover primary state (captured before pod delete) ==="
           for f in /tmp/k8s-logs/pre-autofail/*; do
-            echo "--- $f ---"
+            echo "=+=+= $f =+=+="
             tail -120 "$f" 2>/dev/null || echo "(empty)"
             echo ""
           done

@@ -24,7 +24,7 @@
 #include <unordered_set>
 #include <vector>
 
-/* my_global.h MUST be included before handler.h / my_base.h: handler.h pulls
+/* my_global.h must be included before handler.h / my_base.h, handler.h pulls
    in server headers that use typedefs (ulonglong, int64, sql_mode_t, ...)
    defined by my_global.h.  A wrong order breaks the build on MariaDB 11.4+
    with missing-declaration errors.  The IncludeCategories rule in .clang-format

@@ -9,7 +9,7 @@ x INT
 INSERT INTO t VALUES (1,10),(2,20),(3,30),(4,40),(5,50);
 connect  con1, localhost, root,,;
 connect  con2, localhost, root,,;
-# ---- TEST 1: Two UPDATEs on same row ----
+# =+=+= TEST 1: Two UPDATEs on same row =+=+=
 connection con1;
 START TRANSACTION;
 UPDATE t SET x = 999 WHERE i = 1;
@@ -25,7 +25,7 @@ connection default;
 SELECT * FROM t WHERE i = 1;
 i	x
 1	888
-# ---- TEST 2: UPDATE vs DELETE on same row ----
+# =+=+= TEST 2: UPDATE vs DELETE on same row =+=+=
 connection con1;
 START TRANSACTION;
 UPDATE t SET x = 777 WHERE i = 2;

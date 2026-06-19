@@ -7,7 +7,7 @@
 # old primary boots as a replica (all pods start replica_mode=ON) and only
 # becomes primary again if it re-wins the lease.
 #
-# Correctness note: split-brain safety does NOT depend on this agent being a
+# Correctness note, split-brain safety does not depend on this agent being a
 # perfect leader-election implementation. The engine's object-store epoch fence
 # (single-writer fencing, validated by the failover suites -- test/ha_replication/
 # here and tidesdb's test/failover/) guarantees a superseded primary's writes are
@@ -97,7 +97,7 @@ data:
     tidesdb_s3_secret_key=__S3_SECRET_KEY__
     tidesdb_s3_use_ssl=ON
     tidesdb_s3_path_style=OFF
-    tidesdb_objstore_local_cache_max=536870912
+    tidesdb_objstore_local_cache_max=512M
 
     # Every pod boots read-only. The agent promotes the lease holder.
     tidesdb_replica_mode=ON
@@ -107,14 +107,14 @@ data:
     # latency); leave OFF for async upload with a small RPO. Make this a conscious
     # choice -- see README.
     tidesdb_objstore_wal_sync_on_commit=OFF
-    tidesdb_objstore_wal_sync_threshold=1048576
+    tidesdb_objstore_wal_sync_threshold=1M
     tidesdb_objstore_replicate_wal=ON
     tidesdb_objstore_replica_replay_wal=ON
 
     # Engine tuning
     tidesdb_unified_memtable=ON
-    tidesdb_unified_memtable_write_buffer_size=134217728
-    tidesdb_block_cache_size=268435456
+    tidesdb_unified_memtable_write_buffer_size=128M
+    tidesdb_block_cache_size=256M
     tidesdb_flush_threads=4
     tidesdb_compaction_threads=4
     tidesdb_log_level=INFO

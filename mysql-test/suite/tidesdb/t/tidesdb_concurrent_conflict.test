@@ -21,7 +21,7 @@ INSERT INTO t VALUES (1,10),(2,20),(3,30),(4,40),(5,50);
 connect (con1, localhost, root,,);
 connect (con2, localhost, root,,);
 
---echo # ---- TEST 1: Two UPDATEs on same row ----
+--echo # =+=+= TEST 1: Two UPDATEs on same row =+=+=
 connection con1;
 START TRANSACTION;
 UPDATE t SET x = 999 WHERE i = 1;
@@ -39,7 +39,7 @@ connection default;
 --echo # con2 wins: x should be 888
 SELECT * FROM t WHERE i = 1;
 
---echo # ---- TEST 2: UPDATE vs DELETE on same row ----
+--echo # =+=+= TEST 2: UPDATE vs DELETE on same row =+=+=
 connection con1;
 START TRANSACTION;
 UPDATE t SET x = 777 WHERE i = 2;

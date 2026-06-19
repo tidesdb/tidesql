@@ -8,7 +8,7 @@ b INT
 ) ENGINE=TidesDB;
 connect  con1, localhost, root,,;
 connect  con2, localhost, root,,;
-# ---- TEST: Two INSERTs with same PK ----
+# =+=+= TEST: Two INSERTs with same PK =+=+=
 connection con1;
 START TRANSACTION;
 INSERT INTO t VALUES (1, 10);
