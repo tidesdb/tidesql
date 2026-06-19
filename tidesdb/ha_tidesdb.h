@@ -152,9 +152,11 @@ static constexpr uint8_t INT_SORT_SIGN_FLIP_MASK = 0x80;
 static constexpr uint DATE_PACK_LEN = 3;
 static constexpr uint DATETIME_MAX_PACK_LEN = 8;
 
-/* Sysvar enum index for tidesdb_object_store_backend.  0 = LOCAL, 1 = S3. */
+/* Sysvar enum index for tidesdb_object_store_backend.  0 = LOCAL, 1 = S3,
+   2 = FS (local filesystem object-store connector, for failover testing without S3). */
 static constexpr uint OBJSTORE_BACKEND_LOCAL = 0;
 static constexpr uint OBJSTORE_BACKEND_S3 = 1;
+static constexpr uint OBJSTORE_BACKEND_FS = 2;
 
 /* Separator that joins db and table names when forming a TidesDB CF name
    from a MariaDB path (e.g. "test/foo" -> "test__foo").  Centralized so

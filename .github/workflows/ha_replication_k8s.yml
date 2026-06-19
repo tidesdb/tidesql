@@ -1,0 +1,55 @@
+name: HA Replication (k8s SQL failover, kind + MinIO)
+
+# Cloud-simulation SQL failover: real mariadbd pods on a kind cluster fencing
+# against a real MinIO bucket over the TidesDB S3 connector's conditional writes --
+# the analogue of the tidesdb library's failover_k8s, one layer up. Heavier than
+# the FS-backend ha_replication run (it builds a MariaDB+plugin node image), so it
+# is nightly + manual + on PRs that touch the plugin or the harness.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"
+  pull_request:
+    branches: [ "master" ]
+    paths:
+      - "tidesdb/**"
+      - "test/ha_replication/**"
+      - ".github/workflows/ha_replication_k8s.yml"
+
+jobs:
+  ha-replication-k8s:
+    runs-on: ubuntu-latest
+    name: SQL failover (kind + MinIO)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free up disk for the MariaDB build
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: tidesql-failover
+
+      - name: Build node image (MariaDB + plugin + S3 libtidesdb)
+        run: docker build -f test/ha_replication/Dockerfile -t tidesql-node:ci .
+
+      - name: Load image into kind
+        run: kind load docker-image tidesql-node:ci --name tidesql-failover
+
+      - name: Run k8s failover scenarios
+        run: |
+          chmod +x test/ha_replication/run_k8s.sh
+          ./test/ha_replication/run_k8s.sh
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -o wide || true
+          kubectl describe pods -l app=tidesql-node || true
+          for p in tidesql-node-0 tidesql-node-1 tidesql-node-2; do
+            echo "=== logs $p ==="; kubectl logs "$p" --tail=80 || true
+          done
+          kubectl logs deploy/minio --tail=40 || true
