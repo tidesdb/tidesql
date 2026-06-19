@@ -736,7 +736,7 @@ static void tdb_lock_promote_waiters(tdb_row_lock_t *lock)
    stack and in `visited` are always safe to follow; trx structs outlive
    any held lock so holder->waiting_on_lock dereferences stay valid.
    Bounded by DEADLOCK_MAX_DEPTH.  When the frontier overflows the cap
-   we return true: a false-positive triggers a cheap retry, while a
+   we return true-- a false-positive triggers a cheap retry, while a
    false-negative becomes a 50 s lock-wait-timeout stall. */
 static bool tdb_lock_would_deadlock(tidesdb_trx_t *requestor, tdb_row_lock_t *target_lock,
                                     tdb_lock_mode_t want_mode)
@@ -1155,7 +1155,7 @@ static const char *ha_tidesdb_exts[] = {NullS};
 /* ******************** Full-Text Search helpers ******************** */
 
 /* MariaDB renamed HA_FULLTEXT -> HA_FULLTEXT_legacy after the 11.x series
-   (flag bit 128 unchanged).  Detect via the flag: KEY::algorithm is only set
+   (flag bit 128 unchanged).  Detect via the flag, KEY::algorithm is only set
    to HA_KEY_ALG_FULLTEXT on newer servers, and notably not in the ALTER
    key_info_buffer on 11.4, so the algorithm-only check missed FULLTEXT adds. */
 #ifndef HA_FULLTEXT
@@ -1353,7 +1353,7 @@ static int fts_update_meta(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t
 {
     int64_t total_docs = 0, total_words = 0;
     /* A transient read failure must not be turned into a zero-based
-       write-back: zero - delta clamped at 0 would persist garbage and
+       write-back, zero - delta clamped at 0 would persist garbage and
        only manual rebuild would fix BM25.  Fresh index (NOT_FOUND) is
        the only "no prior value" case we treat as zero. */
     int rrc = fts_load_meta(txn, data_cf, keynr, &total_docs, &total_words);
@@ -1487,13 +1487,15 @@ static void tdb_fts_blend_chars_update(MYSQL_THD thd, struct st_mysql_sys_var *v
 
 /* Stop word support
    Mirrors InnoDB's innodb_ft_server_stopword_table.  When NULL, we use the
-   36-word default list from information_schema.INNODB_FT_DEFAULT_STOPWORD.
+   default list from information_schema.INNODB_FT_DEFAULT_STOPWORD.
    When set to "db/table", we read the 'value' column at next FTS rebuild.
    The stop word set is stored in a global unordered_set protected by a
    read-mostly rwlock (writes are rare -- only on SET GLOBAL or plugin init). */
 static char *srv_ft_stopword_table = NULL; /* db/table or NULL for defaults */
 
-/* InnoDB's default 36 stop words, matching INNODB_FT_DEFAULT_STOPWORD */
+/* InnoDB's default stop words, copied verbatim from INNODB_FT_DEFAULT_STOPWORD.
+   The array holds 36 entries but InnoDB itself lists "the" twice, so 35 distinct
+   words load into the set below.  Kept identical to InnoDB's list on purpose. */
 static const char *tdb_default_stopwords[] = {
     "a",   "about", "an",   "are", "as",   "at",  "be",  "by",   "com",  "de",
     "en",  "for",   "from", "how", "i",    "in",  "is",  "it",   "la",   "of",
@@ -2745,7 +2747,7 @@ static MYSQL_SYSVAR_STR(ft_stopword_table, srv_ft_stopword_table,
                         PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
                         "User-defined stop word table in 'db_name/table_name' format. "
                         "The table must have a VARCHAR column named 'value'. "
-                        "When NULL (default), uses the same 36 default stop words as "
+                        "When NULL (default), uses the same default stop words as "
                         "information_schema.INNODB_FT_DEFAULT_STOPWORD. "
                         "Set to empty string to disable stop word filtering entirely",
                         NULL, tdb_ft_stopword_table_update, NULL);
@@ -3979,7 +3981,7 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print
         snprintf(buf + pos, sizeof(buf) - pos, "Column families: %d\n", db_st.num_column_families);
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Global sequence: %lu\n",
                     (unsigned long)db_st.global_seq);
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n--- Memory ---\n");
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n=+=+= Memory =+=+=\n");
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Total system memory: %lu MB\n",
                     (unsigned long)(db_st.total_memory / (1024 * 1024)));
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Resolved memory limit: %lu MB\n",
@@ -3990,7 +3992,7 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print
                     (long)db_st.total_memtable_bytes);
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Transaction memory bytes: %ld\n",
                     (long)db_st.txn_memory_bytes);
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n--- Storage ---\n");
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n=+=+= Storage =+=+=\n");
     pos +=
         snprintf(buf + pos, sizeof(buf) - pos, "Total SSTables: %d\n", db_st.total_sstable_count);
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Open SSTable handles: %d\n",
@@ -3999,7 +4001,7 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print
                     (unsigned long)db_st.total_data_size_bytes);
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Immutable memtables: %d\n",
                     db_st.total_immutable_count);
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n--- Background ---\n");
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n=+=+= Background =+=+=\n");
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Flush pending: %d\n", db_st.flush_pending_count);
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Flush queue size: %lu\n",
                     (unsigned long)db_st.flush_queue_size);
@@ -4011,7 +4013,7 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print
        carries the full memtable picture. */
     if (db_st.unified_memtable_enabled)
     {
-        pos += snprintf(buf + pos, sizeof(buf) - pos, "\n--- Unified Memtable ---\n");
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "\n=+=+= Unified Memtable =+=+=\n");
         pos += snprintf(buf + pos, sizeof(buf) - pos, "Active bytes: %ld\n",
                         (long)db_st.unified_memtable_bytes);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "Immutable count: %d\n",
@@ -4036,7 +4038,7 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print
         double wa_total = 0.0;
         if (db_st.user_bytes_written > 0)
             wa_total = (double)total_out_bytes / (double)db_st.user_bytes_written;
-        pos += snprintf(buf + pos, sizeof(buf) - pos, "\n--- Write Amplification ---\n");
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "\n=+=+= Write Amplification =+=+=\n");
         pos += snprintf(buf + pos, sizeof(buf) - pos, "User bytes written: %lu\n",
                         (unsigned long)db_st.user_bytes_written);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "Unified WAL bytes: %lu\n",
@@ -4052,7 +4054,7 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print
                         (unsigned long)db_st.compaction_bytes_read);
         pos += snprintf(buf + pos, sizeof(buf) - pos, "Total WA ratio: %.2fx\n", wa_total);
     }
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n--- Block Cache ---\n");
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n=+=+= Block Cache =+=+=\n");
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Enabled: %s\n", cache_st.enabled ? "YES" : "NO");
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Entries: %lu\n",
                     (unsigned long)cache_st.total_entries);
@@ -4068,7 +4070,7 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print
     /* Tombstone observability.  Aggregates are populated by the
        tidesdb_refresh_status_vars call at the top of this function, which
        walks all CFs once. */
-    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n--- Tombstones ---\n");
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n=+=+= Tombstones =+=+=\n");
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Total tombstones: %ld\n",
                     (long)srv_stat_total_tombstones);
     pos += snprintf(buf + pos, sizeof(buf) - pos, "Tombstone ratio: %.2f%%\n",
@@ -4079,7 +4081,7 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print
     /* Object store stats */
     if (db_st.object_store_enabled)
     {
-        pos += snprintf(buf + pos, sizeof(buf) - pos, "\n--- Object Store ---\n");
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "\n=+=+= Object Store =+=+=\n");
         pos += snprintf(buf + pos, sizeof(buf) - pos, "Connector: %s\n",
                         db_st.object_store_connector ? db_st.object_store_connector : "unknown");
         pos += snprintf(buf + pos, sizeof(buf) - pos, "Total uploads: %lu\n",
@@ -4100,8 +4102,8 @@ static bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print
     /* Last conflict info */
     mysql_mutex_lock(&last_conflict_mutex);
     if (last_conflict_info[0])
-        pos +=
-            snprintf(buf + pos, sizeof(buf) - pos, "\n--- Conflicts ---\n%s\n", last_conflict_info);
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "\n=+=+= Conflicts =+=+=\n%s\n",
+                        last_conflict_info);
     mysql_mutex_unlock(&last_conflict_mutex);
 
     static constexpr const char TIDESDB_ENGINE_NAME[] = "TIDESDB";
@@ -4598,12 +4600,12 @@ static void schema_cf_ensure_databases()
 /*
   Establish the schema-discovery CF and materialise the database directories it
   references.  Idempotent and safe to call repeatedly, from several contexts:
-   - open: a node that starts as a primary creates the CF (may_create); a node
+   - open, a node that starts as a primary creates the CF (may_create); a node
      that starts as a replica only resolves whatever a primary has published.
-   - the discovery worker: a replica that started before any primary lazily
+   - the discovery worker, a replica that started before any primary lazily
      resolves the CF once it appears in the bucket, and keeps new database dirs
      materialised as tables are created upstream.  Never creates.
-   - the promote callback: a node promoted from a replica creates the CF so its
+   - the promote callback, a node promoted from a replica creates the CF so its
      own CREATE TABLE statements publish FRMs that downstream replicas discover.
 
   Creation is gated on the explicit may_create rather than the runtime role
@@ -5068,7 +5070,7 @@ static int tidesdb_deinit_func(void *p)
     {
         /* Shutdown speed is governed by the tidesdb_finish_compactions_on_close
            config option (tidesdb_config_t.finish_compactions_on_close) applied
-           at open: OFF (default) makes tidesdb_close cancel in-flight
+           at open, OFF (default) makes tidesdb_close cancel in-flight
            compactions at their next checkpoint for a fast shutdown, ON lets
            them finish first.  No explicit cancel call is needed here. */
         tidesdb_close(tdb_global);
@@ -7609,7 +7611,7 @@ int ha_tidesdb::index_next(uchar *buf)
         int ret = iter_read_current(buf);
         if (ret == 0 && pk_partial_exact_active_ && idx_search_comp_len_ > 0)
         {
-            /* Continuation of a partial-PK HA_READ_KEY_EXACT scan: the
+            /* Continuation of a partial-PK HA_READ_KEY_EXACT scan, the
                iterator might have stepped past the prefix.  Validate the
                PK still starts with the original search bytes; if not the
                scan is finished.  index_next_same already does this; the
@@ -8670,7 +8672,7 @@ int ha_tidesdb::delete_all_rows(void)
   references to MERGE_SOURCE_TXN_OPS that txn_reset clears.
 
   If the inner commit fails (e.g. transient TDB_ERR_UNKNOWN from a unified
-  memtable rotation race) we MUST surface that to the SQL layer.  Returning
+  memtable rotation race) we must surface that to the SQL layer.  Returning
   0 here while the buffered ops are gone causes silent data loss -- the
   caller (write_row / update_row / delete_row) reports success even though
   up to TIDESDB_BULK_INSERT_BATCH_OPS rows were dropped on the floor.

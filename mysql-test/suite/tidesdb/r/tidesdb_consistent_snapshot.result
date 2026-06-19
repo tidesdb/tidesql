@@ -8,7 +8,7 @@ b INT
 # Seed some data so global_seq > 0
 INSERT INTO t_snap64 VALUES (100, 100);
 DELETE FROM t_snap64 WHERE a = 100;
-# ---- TEST 1: START TRANSACTION WITH CONSISTENT SNAPSHOT ----
+# =+=+= TEST 1: START TRANSACTION WITH CONSISTENT SNAPSHOT =+=+=
 connect  con2, localhost, root,,;
 connection default;
 SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
@@ -28,7 +28,7 @@ COMMIT;
 SELECT * FROM t_snap64 ORDER BY a;
 a	b
 1	10
-# ---- TEST 2: Multiple inserts after snapshot ----
+# =+=+= TEST 2: Multiple inserts after snapshot =+=+=
 SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 START TRANSACTION WITH CONSISTENT SNAPSHOT;
 connection con2;
@@ -46,7 +46,7 @@ a	b
 1	10
 2	20
 3	30
-# ---- TEST 3: Without CONSISTENT SNAPSHOT, new data IS visible ----
+# =+=+= TEST 3: Without CONSISTENT SNAPSHOT, new data IS visible =+=+=
 BEGIN;
 connection con2;
 INSERT INTO t_snap64 (a, b) VALUES (4, 40);

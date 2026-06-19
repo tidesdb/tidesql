@@ -11,32 +11,32 @@ Unified memtable: ON
 Column families: N
 Global sequence: N
 
---- Memory ---
+=+=+= Memory =+=+=
 Total system memory: N MB
 Resolved memory limit: N MB
 Memory pressure level: N
 Total memtable bytes: N
 Transaction memory bytes: N
 
---- Storage ---
+=+=+= Storage =+=+=
 Total SSTables: N
 Open SSTable handles: N
 Total data size: N bytes
 Immutable memtables: N
 
---- Background ---
+=+=+= Background =+=+=
 Flush pending: N
 Flush queue size: N
 Compaction queue size: N
 
---- Unified Memtable ---
+=+=+= Unified Memtable =+=+=
 Active bytes: N
 Immutable count: N
 Currently flushing: NO
 WAL generation: N
 Next CF index: N
 
---- Write Amplification ---
+=+=+= Write Amplification =+=+=
 User bytes written: N
 Unified WAL bytes: N
 Per-CF WAL bytes: N
@@ -45,7 +45,7 @@ Compaction bytes written: N (N sstables)
 Compaction bytes read: N
 Total WA ratio: N.Nx
 
---- Block Cache ---
+=+=+= Block Cache =+=+=
 Enabled: YES
 Entries: N
 Size: N bytes
@@ -54,7 +54,7 @@ Misses: N
 Hit rate: N.N%
 Partitions: N
 
---- Tombstones ---
+=+=+= Tombstones =+=+=
 Total tombstones: N
 Tombstone ratio: N.N%
 Worst SSTable density: N.N% at level N

@@ -4,7 +4,7 @@
 # Tests INSTANT, INPLACE (add/drop index), and COPY fallback
 #
 
---echo # ---- Setup ----
+--echo # =+=+= Setup =+=+=
 CREATE TABLE t_ddl (
   id INT PRIMARY KEY,
   a INT,
@@ -18,20 +18,20 @@ INSERT INTO t_ddl VALUES (3, 30, 'gamma', 300);
 INSERT INTO t_ddl VALUES (4, 10, 'delta', 400);
 INSERT INTO t_ddl VALUES (5, 50, 'epsilon', 500);
 
---echo # ---- INSTANT: change column default ----
+--echo # =+=+= INSTANT: change column default =+=+=
 ALTER TABLE t_ddl ALTER COLUMN c SET DEFAULT 999, ALGORITHM=INSTANT;
 INSERT INTO t_ddl (id, a, b) VALUES (6, 60, 'zeta');
 SELECT id, c FROM t_ddl WHERE id = 6;
 
---echo # ---- INSTANT: rename column ----
+--echo # =+=+= INSTANT: rename column =+=+=
 ALTER TABLE t_ddl CHANGE b b_name VARCHAR(100), ALGORITHM=INSTANT;
 SELECT id, b_name FROM t_ddl WHERE id = 1;
 
---echo # ---- INSTANT: change table option (SYNC_MODE) ----
+--echo # =+=+= INSTANT: change table option (SYNC_MODE) =+=+=
 ALTER TABLE t_ddl SYNC_MODE='NONE', ALGORITHM=INSTANT;
 SHOW CREATE TABLE t_ddl;
 
---echo # ---- INPLACE: add secondary index ----
+--echo # =+=+= INPLACE: add secondary index =+=+=
 ALTER TABLE t_ddl ADD INDEX idx_a (a), ALGORITHM=INPLACE;
 SHOW INDEX FROM t_ddl;
 
@@ -39,47 +39,47 @@ SHOW INDEX FROM t_ddl;
 SELECT id, a FROM t_ddl WHERE a = 10 ORDER BY id;
 SELECT id, a FROM t_ddl WHERE a >= 30 ORDER BY a;
 
---echo # ---- INPLACE: add another index ----
+--echo # =+=+= INPLACE: add another index =+=+=
 ALTER TABLE t_ddl ADD INDEX idx_c (c), ALGORITHM=INPLACE;
 SHOW INDEX FROM t_ddl;
 EXPLAIN SELECT id, c FROM t_ddl WHERE c = 200;
 SELECT id, c FROM t_ddl WHERE c = 200;
 
---echo # ---- INPLACE: drop index ----
+--echo # =+=+= INPLACE: drop index =+=+=
 ALTER TABLE t_ddl DROP INDEX idx_a, ALGORITHM=INPLACE;
 SHOW INDEX FROM t_ddl;
 
 --echo # Verify remaining index still works
 SELECT id, c FROM t_ddl WHERE c = 300;
 
---echo # ---- INPLACE: add + drop in one statement ----
+--echo # =+=+= INPLACE: add + drop in one statement =+=+=
 ALTER TABLE t_ddl ADD INDEX idx_a2 (a), DROP INDEX idx_c, ALGORITHM=INPLACE;
 SHOW INDEX FROM t_ddl;
 EXPLAIN SELECT id, a FROM t_ddl WHERE a = 20;
 SELECT id, a FROM t_ddl WHERE a = 20;
 
---echo # ---- INSTANT: add column (NOT NULL DEFAULT) ----
+--echo # =+=+= INSTANT: add column (NOT NULL DEFAULT) =+=+=
 ALTER TABLE t_ddl ADD COLUMN d INT NOT NULL DEFAULT 0, ALGORITHM=INSTANT;
 SELECT id, d FROM t_ddl WHERE id = 1;
 
---echo # ---- Verify old rows readable after ADD COLUMN ----
+--echo # =+=+= Verify old rows readable after ADD COLUMN =+=+=
 SELECT id, a, b_name, c, d FROM t_ddl ORDER BY id;
 
---echo # ---- Insert with new schema and verify ----
+--echo # =+=+= Insert with new schema and verify =+=+=
 INSERT INTO t_ddl VALUES (7, 70, 'eta', 700, 42);
 SELECT id, d FROM t_ddl WHERE id IN (1, 7) ORDER BY id;
 
---echo # ---- INSTANT: drop column ----
+--echo # =+=+= INSTANT: drop column =+=+=
 ALTER TABLE t_ddl DROP COLUMN d, ALGORITHM=INSTANT;
 SELECT * FROM t_ddl WHERE id = 1;
 
---echo # ---- Verify all rows readable after DROP COLUMN ----
+--echo # =+=+= Verify all rows readable after DROP COLUMN =+=+=
 SELECT id, a, b_name, c FROM t_ddl ORDER BY id;
 
---echo # ---- Cleanup ----
+--echo # =+=+= Cleanup =+=+=
 DROP TABLE t_ddl;
 
---echo # ---- Test with data and hidden PK (no explicit PK) ----
+--echo # =+=+= Test with data and hidden PK (no explicit PK) =+=+=
 CREATE TABLE t_nopk (
   a INT,
   b VARCHAR(50)
@@ -98,7 +98,7 @@ ALTER TABLE t_nopk DROP INDEX idx_a, ALGORITHM=INPLACE;
 
 DROP TABLE t_nopk;
 
---echo # ---- ADD UNIQUE must reject duplicates ----
+--echo # =+=+= ADD UNIQUE must reject duplicates =+=+=
 CREATE TABLE t_dup (
   i INT NOT NULL,
   j INT NOT NULL DEFAULT 0
@@ -117,7 +117,7 @@ SELECT COUNT(*) FROM t_dup;
 
 DROP TABLE t_dup;
 
---echo # ---- ADD FULLTEXT must back-fill pre-existing rows ----
+--echo # =+=+= ADD FULLTEXT must back-fill pre-existing rows =+=+=
 # Regression: inplace_alter_table used to skip FTS/SPATIAL keys, leaving the
 # new CF empty until the next write_row. check_if_supported_inplace_alter
 # now refuses ALGORITHM=INPLACE for these so MariaDB falls back to COPY,
@@ -137,7 +137,7 @@ ALTER TABLE t_ft ADD FULLTEXT (body);
 SELECT id FROM t_ft WHERE MATCH(body) AGAINST('tides') ORDER BY id;
 DROP TABLE t_ft;
 
---echo # ---- ADD SPATIAL must back-fill pre-existing rows ----
+--echo # =+=+= ADD SPATIAL must back-fill pre-existing rows =+=+=
 CREATE TABLE t_sp (
   id INT PRIMARY KEY,
   g GEOMETRY NOT NULL

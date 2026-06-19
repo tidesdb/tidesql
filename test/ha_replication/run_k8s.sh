@@ -1,10 +1,10 @@
 #!/bin/bash
-# Cloud-simulation SQL failover test: real mariadbd pods on a kind cluster fencing
+# Cloud-simulation SQL failover test, real mariadbd pods on a kind cluster fencing
 # against a real MinIO bucket over the TidesDB S3 connector's conditional writes.
 # The analogue of tidesdb's test/failover/run_k8s.sh, one layer up -- each node is
 # a MariaDB server and the driver speaks SQL via `kubectl exec`.
 #
-# Assumes: a kind cluster is up, and the image tidesql-node:ci has been built and
+# Assumes a kind cluster is up, and the image tidesql-node:ci has been built and
 # `kind load`ed (the CI workflow does both). Run from the repo root.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -54,7 +54,7 @@ deploy(){
 teardown(){ kubectl delete -f "$HERE/k8s/nodes.yaml" --ignore-not-found --grace-period=0 --force >/dev/null 2>&1; }
 # dump the relevant node log lines before teardown removes the pods, so a failure is diagnosable
 dump_logs(){ for n in "${NODES[@]}"; do
-    echo "----- logs $n -----"
+    echo "=+=+= logs $n =+=+="
     kubectl logs "$n" --tail=80 2>&1 | grep -iE "tidesdb|schema|discover|replica|primary|epoch|fenc|object store|s3|error|fail|abort" || echo "  (no matching log lines)"
   done; }
 
@@ -66,7 +66,7 @@ bootstrap_primary(){   # promote node-0, create the table, load baseline rows of
     kx tidesql-node-0 "OPTIMIZE TABLE ha.t"
 }
 
-# scenario 1: promote a replica, surviving replica re-follows
+# scenario 1 -- promote a replica, surviving replica re-follows
 scenario_failover_refollow(){
     echo "== k8s scenario failover_refollow =="
     deploy || return; bootstrap_primary k
@@ -81,7 +81,7 @@ scenario_failover_refollow(){
     teardown
 }
 
-# scenario 2: a live old primary is fenced (zombie)
+# scenario 2 -- a live old primary is fenced (zombie)
 scenario_zombie_fence(){
     echo "== k8s scenario zombie_fence =="
     deploy || return; bootstrap_primary a
@@ -98,7 +98,7 @@ scenario_zombie_fence(){
     teardown
 }
 
-# scenario 3: partition the old primary from MinIO, then promote
+# scenario 3 -- partition the old primary from MinIO, then promote
 scenario_partition_fence(){
     echo "== k8s scenario partition_fence =="
     deploy || return; bootstrap_primary a

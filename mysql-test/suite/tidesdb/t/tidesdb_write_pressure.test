@@ -118,7 +118,7 @@ connect (wr4, localhost, root,,);
 --disable_query_log
 --disable_result_log
 
-# ---- Connection wr1: writes to sbtest1 ----
+# =+=+= Connection wr1: writes to sbtest1 =+=+=
 connection wr1;
 delimiter |;
 send
@@ -141,7 +141,7 @@ send
 |
 delimiter ;|
 
-# ---- Connection wr2: writes to sbtest1 (overlapping with wr1 -> conflicts) ----
+# =+=+= Connection wr2: writes to sbtest1 (overlapping with wr1 -> conflicts) =+=+=
 connection wr2;
 delimiter |;
 send
@@ -164,7 +164,7 @@ send
 |
 delimiter ;|
 
-# ---- Connection wr3: writes to sbtest2 ----
+# =+=+= Connection wr3: writes to sbtest2 =+=+=
 connection wr3;
 delimiter |;
 send
@@ -187,7 +187,7 @@ send
 |
 delimiter ;|
 
-# ---- Connection wr4: writes to sbtest2 (overlapping with wr3 -> conflicts) ----
+# =+=+= Connection wr4: writes to sbtest2 (overlapping with wr3 -> conflicts) =+=+=
 connection wr4;
 delimiter |;
 send
@@ -210,7 +210,7 @@ send
 |
 delimiter ;|
 
-# ---- Reap all ----
+# =+=+= Reap all =+=+=
 connection wr1;
 reap;
 

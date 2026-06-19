@@ -7,7 +7,7 @@ name: HA Replication (SQL failover, FS backend)
 #
 # Building MariaDB + the plugin is heavy, so this runs nightly + on demand + on
 # PRs that touch the plugin or the harness. A real-MinIO S3 tier (the analogue of
-# the library's failover_k8s) is a planned follow-up.
+# the library's failover_k8s) runs separately in ha_replication_k8s.yml.
 on:
   workflow_dispatch:
   schedule:

@@ -2,7 +2,7 @@
 # SQL-level single-writer failover test for TideSQL.
 #
 # The library proves the fence with raw tidesdb_node processes (tidesdb's
-# test/failover/run_local.sh). This is the same idea one layer up: real mariadbd
+# test/failover/run_local.sh). This is the same idea one layer up -- real mariadbd
 # nodes, driven entirely over SQL, sharing one directory as the object-store
 # bucket via the FS backend (tidesdb_object_store_backend=FS) -- so it needs no
 # S3/MinIO and runs anywhere.
@@ -17,7 +17,7 @@
 #   zombie_fence     -- promote a replica while the old primary stays alive; the
 #                       old primary's later writes must be fenced out.
 #
-# Env: TIDESQL_PREFIX (MariaDB install with ha_tidesdb.so), TDB_HA_KEEP=1 to keep
+# Env-- TIDESQL_PREFIX (MariaDB install with ha_tidesdb.so), TDB_HA_KEEP=1 to keep
 # the scratch dir after the run, TDB_HA_JEMALLOC to override the LD_PRELOAD path.
 set -u
 
@@ -31,7 +31,7 @@ SCRATCH="${TDB_HA_SCRATCH:-$ROOT/test/ha_replication/.scratch}"
 BUCKET="$SCRATCH/bucket"
 PORT_BASE=7500
 SYNC_US=500000          # replica MANIFEST poll interval
-WBUF=4194304            # small write buffer -> several sstables, exercises compaction/fence
+WBUF=4M                 # small write buffer -> several sstables, exercises compaction/fence
 declare -a PIDS=()
 fail=0
 
@@ -88,12 +88,12 @@ EOF
     LD_PRELOAD="$JEMALLOC" "$MARIADBD" --defaults-file="$dir/my.cnf" >"$dir/err.log" 2>&1 &
     PIDS+=($!); }
 
-# clean slate: kill any nodes, wipe the bucket AND node datadirs, start fresh nodes
+# clean slate -- kill any nodes, wipe the bucket AND node datadirs, start fresh nodes
 fresh(){ kill_nodes; rm -rf "$BUCKET" "$SCRATCH"/n*; mkdir -p "$BUCKET"
     for i in "$@"; do start_node "$i"; done
     for i in "$@"; do wait_ready "$i" || { echo "  FAIL node $i not ready (see $SCRATCH/n$i/err.log)"; fail=1; return 1; }; done; }
 
-# scenario 1: a lagging replica is promoted and catches up
+# scenario 1 -- a lagging replica is promoted and catches up
 scenario_failover_catchup(){
     echo "== scenario failover_catchup =="
     fresh 0 1 || return
@@ -115,7 +115,7 @@ scenario_failover_catchup(){
         "$(xrc 1 'CREATE TABLE ha.t2 (id INT PRIMARY KEY) ENGINE=TidesDB; INSERT INTO ha.t2 VALUES (1)')" 0
 }
 
-# scenario 2: a live old primary is fenced after a replica is promoted
+# scenario 2 -- a live old primary is fenced after a replica is promoted
 scenario_zombie_fence(){
     echo "== scenario zombie_fence =="
     fresh 0 1 || return

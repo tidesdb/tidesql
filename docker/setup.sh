@@ -98,7 +98,7 @@ if [ -z "${TIDESDB_VERSION:-}" ]; then
     TIDESDB_VERSION="$_tidesdb_latest"
 fi
 
-# Memory allocator for libtidesdb.so.  One of: system (default), jemalloc, mimalloc, tcmalloc.
+# Memory allocator for libtidesdb.so.  One of-- system (default), jemalloc, mimalloc, tcmalloc.
 # Forwarded to the Dockerfile as --build-arg ALLOCATOR=...  Affects only TidesDB's
 # internal allocations; for a process-wide swap also LD_PRELOAD at container startup.
 ALLOCATOR=${ALLOCATOR:-system}
@@ -131,7 +131,7 @@ docker run -d \
 r=$?
 
 echo
-echo '-----'
+echo '=+=+='
 echo
 echo "### Done!"
 echo "Exit code: $r"

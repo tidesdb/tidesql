@@ -12,7 +12,7 @@ CREATE TABLE t_snap64 (
 INSERT INTO t_snap64 VALUES (100, 100);
 DELETE FROM t_snap64 WHERE a = 100;
 
---echo # ---- TEST 1: START TRANSACTION WITH CONSISTENT SNAPSHOT ----
+--echo # =+=+= TEST 1: START TRANSACTION WITH CONSISTENT SNAPSHOT =+=+=
 
 connect (con2, localhost, root,,);
 connection default;
@@ -34,7 +34,7 @@ COMMIT;
 --echo # After COMMIT, a new snapshot should see the row
 SELECT * FROM t_snap64 ORDER BY a;
 
---echo # ---- TEST 2: Multiple inserts after snapshot ----
+--echo # =+=+= TEST 2: Multiple inserts after snapshot =+=+=
 
 SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 START TRANSACTION WITH CONSISTENT SNAPSHOT;
@@ -52,7 +52,7 @@ COMMIT;
 --echo # After COMMIT, should see all 3 rows
 SELECT * FROM t_snap64 ORDER BY a;
 
---echo # ---- TEST 3: Without CONSISTENT SNAPSHOT, new data IS visible ----
+--echo # =+=+= TEST 3: Without CONSISTENT SNAPSHOT, new data IS visible =+=+=
 
 BEGIN;
 
