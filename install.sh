@@ -9,7 +9,7 @@
 #   1. Detect OS (Debian, RHEL, Arch, macOS, Windows)
 #   2. Install system dependencies
 #        - Linux      apt/dnf/pacman (cmake, compilers, zstd, lz4, snappy, ssl, etc.)
-#        - macOS      Homebrew (cmake, ninja, zstd, lz4, snappy, openssl, etc.)
+#        - macOS      Homebrew (cmake, ninja, zstd, lz4, snappy, etc.)
 #        - Windows    vcpkg (zstd, lz4, snappy, pthreads)
 #   3. Build & install TidesDB library
 #        - Clone tidesdb at the requested version tag
@@ -443,7 +443,7 @@ install_deps() {
                 die "Homebrew is required on macOS. Install from https://brew.sh"
             fi
             brew install cmake ninja bison flex \
-                snappy lz4 zstd openssl@3 gnutls \
+                snappy lz4 zstd gnutls \
                 ${allocator_pkg}
             ;;
         windows)
