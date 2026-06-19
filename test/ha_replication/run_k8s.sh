@@ -106,9 +106,12 @@ scenario_partition_fence(){
     partition_from_minio tidesql-node-0          # old primary is now cut off from the bucket
     check "promote node-1 while node-0 partitioned" "$(kxrc tidesql-node-1 'SET GLOBAL tidesdb_promote_primary=ON')" 0
     wait_primary tidesql-node-1 2 || { echo "  FAIL node-1 not primary"; fail=1; heal_partition tidesql-node-0; teardown; return; }
-    insert_rows tidesql-node-0 z 1001 1200 || true   # writes locally, cannot reach the bucket
+    insert_rows tidesql-node-0 z 1001 1003 || true   # commits locally, the wal upload cannot reach the bucket
+    heal_partition tidesql-node-0                # bucket reachable again, but node-0 still thinks it is primary
+    # force node-0 to publish now that it can reach the bucket; the lease renew fails on node-1's
+    # higher epoch and node-0 self-demotes. without an active publish a reconnected old primary has
+    # no reason to re-check the lease, exactly as the library partition_zombie scenario drives it
     kx tidesql-node-0 "OPTIMIZE TABLE ha.t" || true
-    heal_partition tidesql-node-0                # partition heals; node-0 now sees the higher epoch
     for _ in $(seq 1 30); do [ "$(kstat tidesql-node-0 replica_mode_active)" = "1" ] && break; sleep 1; done
     insert_rows tidesql-node-1 b 2001 2200; kx tidesql-node-1 "OPTIMIZE TABLE ha.t"; sleep 3
     check "partitioned old primary fenced" "$(kstat tidesql-node-0 replica_mode_active)" 1
