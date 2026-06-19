@@ -14,6 +14,8 @@ mkdir -p "$DATADIR" /data/tdb
 
 cat > /etc/tidesdb-node.cnf <<EOF
 [mysqld]
+# the container runs as root; mariadbd refuses root unless told explicitly.
+user=root
 datadir=$DATADIR
 port=${TDB_NODE_PORT:-3306}
 socket=/tmp/mysql.sock
