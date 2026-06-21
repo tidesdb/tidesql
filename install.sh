@@ -183,8 +183,11 @@ WITH_S3=false
 #   mimalloc   routes TidesDB allocations through mimalloc (pkg: libmimalloc-dev)
 #   tcmalloc   routes TidesDB allocations through tcmalloc (pkg: libgoogle-perftools-dev)
 # Note this affects only libtidesdb.so's internal allocations; mariadbd's own
-# allocator is unchanged.  For a process-wide swap, combine with
-# LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 at mariadbd startup.
+# allocator is unchanged.  When set, the installer resolves the allocator via
+# ldconfig (so it finds it wherever the linker knows it, e.g. /usr/lib64 on
+# RHEL or the Debian multiarch dir) and wires it into the generated cnf as
+# [mysqld_safe] malloc-lib, so mariadb-safe preloads it automatically.  For a
+# direct mariadbd start, LD_PRELOAD that same resolved path.
 ALLOCATOR="system"
 
 # Ensure VCPKG_ROOT is set on Windows (needed even with --skip-deps) 
@@ -229,6 +232,19 @@ ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 err()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 die()   { err "$@"; exit 1; }
+
+# Path to the installed libtidesdb shared library.  CMake installs to lib64 on
+# RHEL/Fedora/SUSE and to lib on Debian and macOS, so probe both rather than
+# assuming lib.  Prints the path and returns 0, or returns 1 if not found.
+find_libtidesdb() {
+    local d f
+    for d in lib64 lib; do
+        for f in "${TIDESDB_PREFIX}/${d}/libtidesdb.so" "${TIDESDB_PREFIX}/${d}/libtidesdb.dylib"; do
+            [[ -e "$f" ]] && { printf '%s\n' "$f"; return 0; }
+        done
+    done
+    return 1
+}
 
 # Parse arguments 
 usage() {
@@ -484,10 +500,12 @@ build_tidesdb() {
         warn "Skipping TidesDB build (--skip-tidesdb)"
         # Quick check that the library exists at the expected prefix
         local found=false
-        for ext in so dylib a lib; do
-            if ls "${TIDESDB_PREFIX}/lib/libtidesdb"*.${ext} &>/dev/null 2>&1; then
-                found=true; break
-            fi
+        for libdir in lib64 lib; do
+            for ext in so dylib a lib; do
+                if ls "${TIDESDB_PREFIX}/${libdir}/libtidesdb"*.${ext} &>/dev/null 2>&1; then
+                    found=true; break 2
+                fi
+            done
         done
         if ! $found; then
             if [[ "$OS" != "windows" ]] && ldconfig -p 2>/dev/null | grep -q libtidesdb; then
@@ -562,7 +580,7 @@ build_tidesdb() {
     # Show which allocator is actually linked so users can verify after a build.
     if [[ "$ALLOCATOR" != "system" ]]; then
         local installed_lib
-        installed_lib="$(ls -1 "${TIDESDB_PREFIX}/lib/libtidesdb."{so,dylib} 2>/dev/null | head -1 || true)"
+        installed_lib="$(find_libtidesdb || true)"
         if [[ -n "$installed_lib" ]] && command -v ldd &>/dev/null; then
             local allocator_linkage
             allocator_linkage="$(ldd "$installed_lib" 2>/dev/null | grep -Eo '(jemalloc|mimalloc|tcmalloc)[^ ]*' | head -1 || true)"
@@ -1124,14 +1142,19 @@ print_summary() {
         _summary_lines+=("Build type           : ${CYAN}Release + PGO${NC}")
     fi
     if [[ "$ALLOCATOR" != "system" ]]; then
+        local _vlib
+        _vlib="$(find_libtidesdb || echo "${TIDESDB_PREFIX}/lib/libtidesdb.so")"
         _summary_lines+=(
             "Allocator            : ${CYAN}${ALLOCATOR}${NC}"
             ""
             "Verify the allocator is linked into libtidesdb:"
-            "  ldd ${TIDESDB_PREFIX}/lib/libtidesdb.so | grep -E 'jemalloc|mimalloc|tcmalloc'"
+            "  ldd ${_vlib} | grep -E 'jemalloc|mimalloc|tcmalloc'"
             ""
-            "For a process-wide allocator swap also LD_PRELOAD at startup:"
-            "  LD_PRELOAD=\$(pkg-config --variable=libdir ${ALLOCATOR})/lib${ALLOCATOR}.so.2 \\"
+            "mariadb-safe already preloads ${ALLOCATOR} via the [mysqld_safe]"
+            "malloc-lib line written into the cnf, so a normal start needs nothing"
+            "extra.  To preload it manually for a direct mariadbd start (resolves"
+            "the real path wherever ldconfig knows it, e.g. /usr/lib64 on RHEL):"
+            "  LD_PRELOAD=\$(ldconfig -p | awk '/lib${ALLOCATOR}\\.so/ {print \$NF; exit}') \\"
             "    ${start_cmd} --defaults-file=${MARIADB_PREFIX}/${cnf_name} &"
         )
     fi
