@@ -50,5 +50,5 @@ SET autocommit=1;
 DROP TABLE t_alter_big;
 
 --echo #
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

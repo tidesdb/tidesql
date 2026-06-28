@@ -82,5 +82,5 @@ SELECT COUNT(*) AS dst_rows, MIN(id) AS min_id, MAX(id) AS max_id FROM bulk_dst;
 DROP TABLE bulk_src;
 DROP TABLE bulk_dst;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

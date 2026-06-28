@@ -186,5 +186,5 @@ disconnect s3;
 connection default;
 DROP TABLE acct;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

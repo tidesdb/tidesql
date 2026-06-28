@@ -123,5 +123,5 @@ DROP TABLE district;
 # Note: pessimistic_locking was set to ON via .opt file;
 # we leave it ON so MTR state check does not complain.
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

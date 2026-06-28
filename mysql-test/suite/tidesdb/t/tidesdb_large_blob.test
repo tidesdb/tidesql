@@ -67,5 +67,5 @@ SELECT id, LENGTH(a), LENGTH(b), LENGTH(c) FROM t_multi_blob;
 
 DROP TABLE t_blob, t_blob_idx, t_multi_blob;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

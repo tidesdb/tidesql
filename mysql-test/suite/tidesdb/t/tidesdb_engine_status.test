@@ -17,5 +17,5 @@ SHOW ENGINE TIDESDB STATUS;
 DROP TABLE t1;
 
 --echo #
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

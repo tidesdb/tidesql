@@ -22,5 +22,5 @@ SELECT @@global.tidesdb_flush_threads AS flush_threads,
 --let SEARCH_PATTERN= tidesdb_max_concurrent_flushes=2 is lower than tidesdb_flush_threads=4
 --source include/search_pattern_in_file.inc
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

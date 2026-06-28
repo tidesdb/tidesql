@@ -73,5 +73,5 @@ connection default;
 DROP TABLE t_snap64;
 
 --echo #
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

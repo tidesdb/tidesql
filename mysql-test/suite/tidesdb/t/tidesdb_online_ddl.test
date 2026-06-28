@@ -153,4 +153,4 @@ SELECT id FROM t_sp WHERE MBRWithin(g, ST_GeomFromText('POLYGON((-1 -1, -1 5, 5 
 ORDER BY id;
 DROP TABLE t_sp;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc

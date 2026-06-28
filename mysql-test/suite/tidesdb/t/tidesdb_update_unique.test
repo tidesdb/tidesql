@@ -49,4 +49,4 @@ UPDATE t4 SET id=2 WHERE id=1;
 SET SESSION tidesdb_skip_unique_check=DEFAULT;
 DROP TABLE t4;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc

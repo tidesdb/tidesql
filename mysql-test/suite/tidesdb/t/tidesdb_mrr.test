@@ -85,5 +85,5 @@ SELECT * FROM t_pk WHERE id IN (7, 2, 9, 3, 5) ORDER BY id;
 DROP TABLE t_pk, t_uk, t_big;
 SET optimizer_switch = @saved_opt_switch;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

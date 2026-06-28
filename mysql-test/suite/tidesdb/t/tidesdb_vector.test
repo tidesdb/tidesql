@@ -1,4 +1,4 @@
---source suite/tidesdb/include/have_tidesdb_vector.inc
+--source include/have_tidesdb_vector.inc
 --source include/have_tidesdb.inc
 #
 # Test: Vector search (MHNSW approximate nearest neighbor)
@@ -100,5 +100,5 @@ LIMIT 2;
 
 DROP TABLE docs;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

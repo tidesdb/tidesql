@@ -627,4 +627,4 @@ DROP TABLE emp_projects;
 DROP TABLE projects;
 DROP TABLE employees;
 DROP TABLE departments;
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc

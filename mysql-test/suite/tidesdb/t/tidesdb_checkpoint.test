@@ -38,5 +38,5 @@ SET GLOBAL tidesdb_checkpoint_dir = '';
 DROP TABLE t_ckpt;
 --exec rm -rf $MYSQLTEST_VARDIR/tmp/tidesdb_checkpoint_test
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

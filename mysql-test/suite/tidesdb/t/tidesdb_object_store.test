@@ -107,5 +107,5 @@ DROP TABLE t_obj;
 DROP TABLE t_idx;
 DROP TABLE t_bulk;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

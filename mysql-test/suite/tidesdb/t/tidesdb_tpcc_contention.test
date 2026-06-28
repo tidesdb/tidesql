@@ -160,5 +160,5 @@ DROP TABLE district;
 DROP TABLE orders;
 DROP TABLE new_order;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

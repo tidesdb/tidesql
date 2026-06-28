@@ -35,5 +35,5 @@ SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_write_buffer_size';
 SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_sync_mode';
 SHOW GLOBAL VARIABLES LIKE 'tidesdb_default_isolation_level';
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

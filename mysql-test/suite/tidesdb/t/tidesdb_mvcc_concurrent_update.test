@@ -84,4 +84,4 @@ FROM district WHERE d_w_id=1 AND d_id=1;
 DROP TABLE district;
 DROP TABLE txn_log;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc

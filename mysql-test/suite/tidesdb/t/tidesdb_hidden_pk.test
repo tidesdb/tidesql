@@ -61,5 +61,5 @@ SELECT * FROM t_nopk;
 
 DROP TABLE t_nopk, t_nopk_idx, t_nopk_blob;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

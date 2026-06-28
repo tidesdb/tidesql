@@ -553,5 +553,5 @@ DROP TABLE stress_main;
 DROP TABLE stress_nopk;
 DROP TABLE stress_wide;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

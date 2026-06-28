@@ -38,4 +38,4 @@ ANALYZE TABLE t3;
 
 --echo # Cleanup
 DROP TABLE t1, t2, t3;
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc

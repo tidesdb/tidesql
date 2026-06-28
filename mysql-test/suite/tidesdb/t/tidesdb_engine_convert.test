@@ -103,5 +103,5 @@ SELECT c FROM t_complex WHERE d = 100 ORDER BY c;
 
 DROP TABLE t_innodb, t_round, t_blob_mig, t_ai, t_complex;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.
