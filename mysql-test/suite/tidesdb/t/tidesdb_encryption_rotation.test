@@ -39,5 +39,5 @@ SELECT * FROM enc ORDER BY id;
 DROP TABLE enc;
 SET GLOBAL debug_key_management_version = DEFAULT;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

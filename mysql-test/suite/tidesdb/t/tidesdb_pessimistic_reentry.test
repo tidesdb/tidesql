@@ -46,5 +46,5 @@ disconnect a;
 connection default;
 DROP TABLE r;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

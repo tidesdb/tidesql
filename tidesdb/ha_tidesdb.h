@@ -563,6 +563,18 @@ struct tidesdb_trx_t
        as the row writes that produced it. */
     std::vector<fts_meta_delta_t> fts_meta_pending;
     bool fts_meta_dirty{false};
+
+    /* Uniqueness probing must not seed the WRITE txn's read-set, a point-get
+       of an absent key records read-seq 0, which the library's first-committer
+       reservation then uses as the conflict base, so a stale slot from any
+       prior write of that key trips a spurious conflict under load.  Instead we
+       probe committed data on a dedicated READ_COMMITTED txn (no read-set, never
+       pins the snapshot floor) and track same-txn pending existence here:
+       true = inserted this txn (re-insert is a duplicate),
+       false = deleted this txn (re-insert is allowed though committed has it).
+       Keyed by cf_name + primary-key bytes; cleared at commit/rollback. */
+    tidesdb_txn_t *dup_rtxn{nullptr};
+    std::unordered_map<std::string, bool> txn_key_state;
 };
 
 /*
@@ -792,6 +804,11 @@ class ha_tidesdb : public handler
 
     /* Fetch a row by its PK bytes into buf; sets current_pk + last_row */
     int fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len, uchar *buf);
+
+    /* Probe whether a PK already exists, WITHOUT entering the write txn's
+       read-set.  tkey = cf_name + data-key bytes.  Returns 1 = exists,
+       0 = absent, <0 = -(HA error). */
+    int probe_pk_exists(tidesdb_trx_t *trx, const std::string &tkey, const uchar *dk, uint dk_len);
 
     /* Compute the absolute TTL timestamp for a row being written.
        Reads per-row TTL_COL value if present, else uses table default.

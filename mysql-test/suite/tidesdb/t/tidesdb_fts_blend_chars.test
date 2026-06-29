@@ -66,4 +66,4 @@ SET GLOBAL tidesdb_fts_blend_chars = NULL;
 
 DROP TABLE docs;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc

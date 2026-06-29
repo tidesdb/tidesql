@@ -42,5 +42,5 @@ SELECT id, name, age FROM t_json WHERE id = 1;
 DROP TABLE t_json;
 
 --echo #
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

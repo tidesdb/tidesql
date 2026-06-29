@@ -47,5 +47,5 @@ connection default;
 disconnect con1;
 DROP TABLE t_snap, t_rc;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

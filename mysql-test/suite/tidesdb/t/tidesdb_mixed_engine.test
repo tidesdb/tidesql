@@ -72,5 +72,5 @@ SELECT a.v AS tdb_v, b.v AS inn_v FROM t_tdb a, t_inn b WHERE a.id = 1 AND b.id 
 
 DROP TABLE t_tdb, t_inn, t_tdb2, t_inn2;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

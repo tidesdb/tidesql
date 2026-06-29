@@ -99,5 +99,5 @@ ORDER BY id;
 
 DROP TABLE pts;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

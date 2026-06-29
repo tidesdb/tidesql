@@ -72,5 +72,5 @@ SELECT COUNT(*) FROM t_trunc57;
 DROP TABLE t_trunc57;
 
 --echo #
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

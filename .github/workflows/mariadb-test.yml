@@ -94,6 +94,14 @@ jobs:
         restore-keys: |
           vcpkg-windows-x64-
 
+    # Resolve the TidesDB library version we are about to build so the cache key
+    # tracks the LIBRARY, not the plugin.  Without this the key hashed the plugin
+    # dir (tidesql/tidesdb/**), so a library bump never invalidated the cache.
+    - name: Resolve TidesDB library revision
+      id: tidesdb_rev
+      shell: bash
+      run: echo "sha=$(git ls-remote https://github.com/tidesdb/tidesdb.git HEAD | cut -f1)" >> "$GITHUB_OUTPUT"
+
     - name: Cache TidesDB library
       uses: actions/cache@v4
       with:
@@ -101,9 +109,10 @@ jobs:
           /usr/local/lib/libtidesdb*
           /usr/local/include/tidesdb*
           C:/tidesdb
-        key: tidesdb-${{ runner.os }}-${{ hashFiles('tidesql/tidesdb/**') }}
-        restore-keys: |
-          tidesdb-${{ runner.os }}-
+        # Exact upstream-commit match only.  No restore-keys fallback: a loose
+        # "tidesdb-${{ runner.os }}-" prefix would restore the newest cache for
+        # the OS regardless of contents, i.e. a stale library.
+        key: tidesdb-${{ runner.os }}-${{ steps.tidesdb_rev.outputs.sha }}
 
     - name: Cache ccache
       if: runner.os != 'Windows'

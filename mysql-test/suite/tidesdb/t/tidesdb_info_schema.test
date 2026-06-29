@@ -129,4 +129,4 @@ if ($ut2 < $ut1)
 --enable_warnings
 --echo # =+=+= cleanup =+=+=
 DROP TABLE t_info_schema;
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc

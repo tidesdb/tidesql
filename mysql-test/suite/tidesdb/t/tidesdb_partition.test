@@ -226,5 +226,5 @@ DROP TABLE t_show_part;
 
 --echo #
 --echo #
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

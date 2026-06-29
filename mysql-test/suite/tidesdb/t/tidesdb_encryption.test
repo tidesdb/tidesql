@@ -140,5 +140,5 @@ SELECT * FROM t_enc_null ORDER BY id;
 
 DROP TABLE t_enc_null;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

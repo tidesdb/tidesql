@@ -74,4 +74,4 @@ SELECT COUNT(*) FROM docs WHERE MATCH(body) AGAINST('dog');
 
 DROP TABLE docs;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc

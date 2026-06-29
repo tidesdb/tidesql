@@ -130,5 +130,5 @@ SELECT IF(VARIABLE_VALUE >= 0, 'ok', 'bad') AS density
 SELECT IF(VARIABLE_VALUE >= 0, 'ok', 'bad') AS density_level
   FROM information_schema.GLOBAL_STATUS WHERE VARIABLE_NAME='TIDESDB_MAX_SST_TOMBSTONE_DENSITY_LEVEL';
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

@@ -137,5 +137,5 @@ WHERE MATCH(title) AGAINST(CONCAT(REPEAT('a', 1024), '*') IN BOOLEAN MODE);
 
 DROP TABLE articles;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

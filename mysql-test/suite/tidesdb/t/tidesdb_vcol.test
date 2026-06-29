@@ -193,5 +193,5 @@ DROP TABLE t_vcol_show;
 
 --echo #
 --echo #
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

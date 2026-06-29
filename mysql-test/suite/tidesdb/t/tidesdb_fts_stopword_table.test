@@ -27,5 +27,5 @@ DROP TABLE docs;
 DROP TABLE swords;
 SET GLOBAL tidesdb_ft_stopword_table = DEFAULT;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

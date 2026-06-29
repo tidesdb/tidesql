@@ -58,5 +58,5 @@ disconnect killer;
 connection default;
 DROP TABLE k;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

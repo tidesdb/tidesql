@@ -27,5 +27,5 @@ SELECT * FROM t_sp ORDER BY id;
 DROP TABLE t_sp;
 
 --echo #
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

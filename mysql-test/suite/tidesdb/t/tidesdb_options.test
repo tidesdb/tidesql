@@ -178,5 +178,5 @@ DROP TABLE t_default_iso;
 --echo #
 
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

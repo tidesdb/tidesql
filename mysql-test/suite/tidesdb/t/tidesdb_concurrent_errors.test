@@ -369,5 +369,5 @@ disconnect c4;
 
 DROP TABLE t1;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

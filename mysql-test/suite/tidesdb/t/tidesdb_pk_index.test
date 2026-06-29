@@ -172,5 +172,5 @@ SELECT * FROM t_bigpk ORDER BY id;
 SELECT * FROM t_bigpk WHERE id = 9223372036854775807;
 
 DROP TABLE t_bigpk;
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 

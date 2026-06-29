@@ -13,5 +13,5 @@ SHOW VARIABLES LIKE 'tidesdb_data_home_dir';
 SET GLOBAL tidesdb_data_home_dir = '/tmp/test';
 
 --echo #
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

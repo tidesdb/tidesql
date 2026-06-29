@@ -113,5 +113,5 @@ SET GLOBAL tidesdb_backup_dir = '';
 --exec rm -rf $backup_dir
 --exec rm -rf $backup_dir2
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

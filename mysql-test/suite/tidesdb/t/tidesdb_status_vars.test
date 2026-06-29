@@ -49,5 +49,5 @@ WHERE VARIABLE_NAME LIKE 'TIDESDB%' ORDER BY VARIABLE_NAME;
 
 DROP TABLE t_stat;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.

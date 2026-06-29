@@ -97,5 +97,5 @@ SELECT id FROM t_um_idx WHERE b = 200;
 
 DROP TABLE t_um1, t_um2, t_um3, t_um_idx;
 
---source suite/tidesdb/include/cleanup_tidesdb.inc
+--source include/cleanup_tidesdb.inc
 --echo # Done.
