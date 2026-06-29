@@ -3773,6 +3773,11 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
         return 0;
     }
 
+    /* Real commit -- the txn's pending writes are about to be flushed, so the
+       same-txn key-state overrides no longer apply (whether the commit
+       succeeds or is rolled back on conflict). */
+    trx->txn_key_state.clear();
+
     /* We must release any active statement savepoint before final commit/rollback.
        Savepoints must be explicitly released before txn_commit. */
     if (trx->stmt_savepoint_active)
@@ -3878,6 +3883,7 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
        so discard them along with the txn's other write state. */
     trx->fts_meta_pending.clear();
     trx->fts_meta_dirty = false;
+    trx->txn_key_state.clear();
 
     /* Full rollback -- we keep txn alive for reuse via reset on next use. */
     tidesdb_txn_rollback(trx->txn);
@@ -3904,6 +3910,7 @@ static int tidesdb_close_connection(handlerton *, THD *thd)
             tidesdb_txn_rollback(trx->txn);
             tidesdb_txn_free(trx->txn);
         }
+        if (trx->dup_rtxn) tidesdb_txn_free(trx->dup_rtxn);
         delete trx;
         thd_set_ha_data(thd, tidesdb_hton, NULL);
     }
@@ -6700,6 +6707,75 @@ int ha_tidesdb::iter_read_current(uchar *buf)
     return HA_ERR_END_OF_FILE;
 }
 
+/*
+  Probe whether a PK already exists for an INSERT/UPDATE uniqueness check
+  WITHOUT recording the read in the write transaction.
+
+  A tracking tidesdb_txn_get() of an absent key records read-seq 0 in the txn
+  read-set; the library's first-committer-wins reservation then uses that 0 as
+  the write's conflict base, so a stale reservation slot left by any prior write
+  of the same key (slots survive across DROP/recreate) trips a spurious
+  TDB_ERR_CONFLICT under load.  The probe must therefore stay out of the write
+  txn's read-set.  We answer from two sources:
+
+    -- same-txn pending state (trx->txn_key_state) -- this txn may have already
+       inserted (-> duplicate) or deleted (-> not a duplicate) the key, which
+       committed data alone cannot tell us; and
+    -- committed data, read on a dedicated READ_COMMITTED txn that is reset per
+       probe.  Being read-only it never reserves writes (no base pollution), and
+       READ_COMMITTED is skipped by the snapshot floor so it never pins min_snap.
+*/
+int ha_tidesdb::probe_pk_exists(tidesdb_trx_t *trx, const std::string &tkey, const uchar *dk,
+                                uint dk_len)
+{
+    if (trx)
+    {
+        auto it = trx->txn_key_state.find(tkey);
+        if (it != trx->txn_key_state.end()) return it->second ? 1 : 0;
+
+        int rc;
+        if (!trx->dup_rtxn)
+        {
+            rc = tidesdb_txn_begin_with_isolation(tdb_global, TDB_ISOLATION_READ_COMMITTED,
+                                                  &trx->dup_rtxn);
+        }
+        else
+        {
+            /* tidesdb_txn_reset requires a committed txn (it is the post-commit
+               reuse path).  Finalize the previous probe's read-only txn first --
+               num_ops==0 at READ_COMMITTED takes the library's read-only commit
+               fast path, so this is cheap and never reserves anything. */
+            tidesdb_txn_commit(trx->dup_rtxn);
+            rc = tidesdb_txn_reset(trx->dup_rtxn, TDB_ISOLATION_READ_COMMITTED);
+        }
+        if (rc != TDB_SUCCESS) return -tdb_rc_to_ha(rc, "probe_pk_exists txn");
+
+        uint8_t *v = NULL;
+        size_t l = 0;
+        int g = tidesdb_txn_get(trx->dup_rtxn, share->cf, dk, dk_len, &v, &l);
+        if (g == TDB_SUCCESS)
+        {
+            if (v) tidesdb_free(v);
+            return 1;
+        }
+        if (g == TDB_ERR_NOT_FOUND) return 0;
+        return -tdb_rc_to_ha(g, "probe_pk_exists get");
+    }
+
+    /* No per-connection trx (rare).  Fall back to the tracking get; without a
+       reused write txn there is no reservation base to pollute. */
+    uint8_t *v = NULL;
+    size_t l = 0;
+    int g = tidesdb_txn_get(stmt_txn, share->cf, dk, dk_len, &v, &l);
+    if (g == TDB_SUCCESS)
+    {
+        if (v) tidesdb_free(v);
+        return 1;
+    }
+    if (g == TDB_ERR_NOT_FOUND) return 0;
+    return -tdb_rc_to_ha(g, "probe_pk_exists get(fallback)");
+}
+
 /* ******************** write_row (INSERT) ******************** */
 
 int ha_tidesdb::write_row(const uchar *buf)
@@ -6825,22 +6901,25 @@ int ha_tidesdb::write_row(const uchar *buf)
     if (share->has_user_pk && !skip_pk_unique &&
         !(write_can_replace_ && share->num_secondary_indexes == 0))
     {
-        uint8_t *dup_val = NULL;
-        size_t dup_len = 0;
-        int grc = tidesdb_txn_get(txn, share->cf, dk, dk_len, &dup_val, &dup_len);
-        if (grc == TDB_SUCCESS)
+        std::string tkey(share->cf_name);
+        tkey.append((const char *)dk, dk_len);
+        int ex = probe_pk_exists(trx, tkey, dk, dk_len);
+        if (ex < 0)
         {
-            tidesdb_free(dup_val);
+            tmp_restore_column_map(&table->read_set, old_map);
+            DBUG_RETURN(-ex);
+        }
+        if (ex)
+        {
             errkey = lookup_errkey = share->pk_index;
             memcpy(dup_ref, pk, pk_len);
             tmp_restore_column_map(&table->read_set, old_map);
             DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
         }
-        if (grc != TDB_ERR_NOT_FOUND)
-        {
-            tmp_restore_column_map(&table->read_set, old_map);
-            DBUG_RETURN(tdb_rc_to_ha(grc, "write_row pk_dup_check"));
-        }
+        /* Not a duplicate -- record the pending insert so a later insert of the
+           same key in this same txn is still caught (committed data cannot show
+           a pending insert).  The put below stays blind, so base = snapshot. */
+        if (trx) trx->txn_key_state[tkey] = true;
     }
 
     /* We check UNIQUE secondary index uniqueness.  This honours the
@@ -8004,21 +8083,31 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
         {
             uchar chk_dk[DATA_KEY_BUF_LEN];
             uint chk_dk_len = build_data_key(new_pk, new_pk_len, chk_dk);
-            uint8_t *dup_val = NULL;
-            size_t dup_len = 0;
-            int grc = tidesdb_txn_get(txn, share->cf, chk_dk, chk_dk_len, &dup_val, &dup_len);
-            if (grc == TDB_SUCCESS)
+            std::string ntkey(share->cf_name);
+            ntkey.append((const char *)chk_dk, chk_dk_len);
+            int ex = probe_pk_exists(trx, ntkey, chk_dk, chk_dk_len);
+            if (ex < 0)
             {
-                tidesdb_free(dup_val);
+                tmp_restore_column_map(&table->read_set, old_map);
+                DBUG_RETURN(-ex);
+            }
+            if (ex)
+            {
                 errkey = lookup_errkey = share->pk_index;
                 memcpy(dup_ref, new_pk, new_pk_len);
                 tmp_restore_column_map(&table->read_set, old_map);
                 DBUG_RETURN(HA_ERR_FOUND_DUPP_KEY);
             }
-            if (grc != TDB_ERR_NOT_FOUND)
+            /* PK moves old -> new -- keep same-txn existence consistent so a
+               later insert in this txn sees the right state. */
+            if (trx)
             {
-                tmp_restore_column_map(&table->read_set, old_map);
-                DBUG_RETURN(tdb_rc_to_ha(grc, "update_row pk_dup_check"));
+                uchar old_dk_chk[DATA_KEY_BUF_LEN];
+                uint old_dk_chk_len = build_data_key(old_pk, old_pk_len, old_dk_chk);
+                std::string otkey(share->cf_name);
+                otkey.append((const char *)old_dk_chk, old_dk_chk_len);
+                trx->txn_key_state[otkey] = false;
+                trx->txn_key_state[ntkey] = true;
             }
         }
 
@@ -8465,6 +8554,16 @@ int ha_tidesdb::delete_row(const uchar *buf)
     {
         tmp_restore_column_map(&table->read_set, old_map);
         DBUG_RETURN(tdb_rc_to_ha(rc, "delete_row"));
+    }
+
+    /* Record that this txn deleted the key, so a re-insert of it later in the
+       same txn is NOT reported as a duplicate even though committed data still
+       carries it (the deletion is only pending until commit). */
+    if (trx && share->has_user_pk)
+    {
+        std::string tkey(share->cf_name);
+        tkey.append((const char *)dk, dk_len);
+        trx->txn_key_state[tkey] = false;
     }
 
     /* We delete secondary index entries in a single consolidated dispatch loop.
