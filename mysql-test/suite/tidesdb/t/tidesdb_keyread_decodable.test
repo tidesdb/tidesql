@@ -1,0 +1,117 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# HA_KEYREAD_ONLY (index-only "Using index" plans) must only be advertised for
+# indexes whose columns can be reconstructed from their mem-comparable sort key
+# by decode_sort_key_part.  For undecodable column types (VARCHAR, DECIMAL,
+# floating point, multi-byte CHAR) a keyread would fall back to a primary-key
+# row fetch at runtime, so advertising a covering plan mis-prices the query.
+#
+# We FORCE INDEX so the plan deterministically uses the secondary index, then
+# read the Extra column: "Using index" appears only when the index-only read is
+# genuinely available.  The rows estimate is masked as it is not stable.
+#
+
+--echo #
+--echo # ============================================
+--echo # Decodable column types: covering (Using index) IS offered
+--echo # ============================================
+--echo #
+CREATE TABLE cov_ok (
+  id INT PRIMARY KEY,
+  i  INT,
+  b  BIGINT,
+  d  DATE,
+  ts DATETIME,
+  c  CHAR(8) CHARACTER SET binary,
+  KEY k_i  (i),
+  KEY k_b  (b),
+  KEY k_d  (d),
+  KEY k_ts (ts),
+  KEY k_c  (c)
+) ENGINE=TIDESDB;
+INSERT INTO cov_ok VALUES
+  (1, 10, 100, '2020-01-01', '2020-01-01 10:00:00', 'aaa'),
+  (2, 20, 200, '2021-02-02', '2021-02-02 11:00:00', 'bbb'),
+  (3, 30, 300, '2022-03-03', '2022-03-03 12:00:00', 'ccc');
+
+--replace_column 9 #
+EXPLAIN SELECT i  FROM cov_ok FORCE INDEX (k_i)  WHERE i  = 20;
+--replace_column 9 #
+EXPLAIN SELECT b  FROM cov_ok FORCE INDEX (k_b)  WHERE b  = 200;
+--replace_column 9 #
+EXPLAIN SELECT d  FROM cov_ok FORCE INDEX (k_d)  WHERE d  = '2021-02-02';
+--replace_column 9 #
+EXPLAIN SELECT ts FROM cov_ok FORCE INDEX (k_ts) WHERE ts = '2021-02-02 11:00:00';
+--replace_column 9 #
+EXPLAIN SELECT c  FROM cov_ok FORCE INDEX (k_c)  WHERE c  = 'bbb';
+
+--echo #
+--echo # ============================================
+--echo # Undecodable column types: covering is NOT offered (no Using index)
+--echo # ============================================
+--echo #
+CREATE TABLE cov_no (
+  id INT PRIMARY KEY,
+  s  VARCHAR(50),
+  u  CHAR(8) CHARACTER SET utf8mb4,
+  m  DECIMAL(10,2),
+  f  DOUBLE,
+  KEY k_s (s),
+  KEY k_u (u),
+  KEY k_m (m),
+  KEY k_f (f)
+) ENGINE=TIDESDB;
+INSERT INTO cov_no VALUES
+  (1, 'alpha', 'x1', 1.50, 1.5),
+  (2, 'beta',  'x2', 2.50, 2.5),
+  (3, 'gamma', 'x3', 3.50, 3.5);
+
+--replace_column 9 #
+EXPLAIN SELECT s FROM cov_no FORCE INDEX (k_s) WHERE s = 'beta';
+--replace_column 9 #
+EXPLAIN SELECT u FROM cov_no FORCE INDEX (k_u) WHERE u = 'x2';
+--replace_column 9 #
+EXPLAIN SELECT m FROM cov_no FORCE INDEX (k_m) WHERE m = 2.50;
+--replace_column 9 #
+EXPLAIN SELECT f FROM cov_no FORCE INDEX (k_f) WHERE f = 2.5;
+
+--echo # results are still correct on the non-covering (PK fetch) path
+SELECT s FROM cov_no FORCE INDEX (k_s) WHERE s = 'beta';
+SELECT m FROM cov_no FORCE INDEX (k_m) WHERE m = 2.50;
+
+--echo #
+--echo # ============================================
+--echo # Composite index: covering decided per key part, not per whole index
+--echo # ============================================
+--echo #
+CREATE TABLE cov_mix (
+  id INT PRIMARY KEY,
+  a  INT,
+  b  INT,
+  s  VARCHAR(50),
+  KEY k_ab (a, b),
+  KEY k_as (a, s)
+) ENGINE=TIDESDB;
+INSERT INTO cov_mix VALUES (1, 1, 10, 'x'), (2, 2, 20, 'y'), (3, 3, 30, 'z');
+
+--echo # (a INT, b INT): both decodable -> Using index
+--replace_column 9 #
+EXPLAIN SELECT a, b FROM cov_mix FORCE INDEX (k_ab) WHERE a = 2;
+--echo # (a INT, s VARCHAR), reading only the decodable a -> still Using index
+--replace_column 9 #
+EXPLAIN SELECT a FROM cov_mix FORCE INDEX (k_as) WHERE a = 2;
+--echo # (a INT, s VARCHAR), reading the undecodable s -> no Using index
+--replace_column 9 #
+EXPLAIN SELECT a, s FROM cov_mix FORCE INDEX (k_as) WHERE a = 2;
+--echo # result on the s (non-covering) path is still correct
+SELECT a, s FROM cov_mix FORCE INDEX (k_as) WHERE a = 2;
+
+DROP TABLE cov_ok;
+DROP TABLE cov_no;
+DROP TABLE cov_mix;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

@@ -1,0 +1,78 @@
+#
+# ============================================
+# > X excludes all X duplicates, includes only greater values
+# ============================================
+#
+CREATE TABLE t1 (id INT PRIMARY KEY, u INT, KEY k_u (u)) ENGINE=TIDESDB;
+INSERT INTO t1 VALUES
+(1, 2), (2, 2), (3, 2), (4, 2), (5, 2),
+(6, 3), (7, 3),
+(8, 4),
+(9, 1), (10, 1);
+# u > 2 -> only the u=3 and u=4 rows
+SELECT id, u FROM t1 FORCE INDEX (k_u) WHERE u > 2 ORDER BY u, id;
+id	u
+6	3
+7	3
+8	4
+# u >= 2 (control) -> includes the u=2 rows
+SELECT id, u FROM t1 FORCE INDEX (k_u) WHERE u >= 2 ORDER BY u, id;
+id	u
+1	2
+2	2
+3	2
+4	2
+5	2
+6	3
+7	3
+8	4
+# u > 4 (greatest value) -> empty
+SELECT id, u FROM t1 FORCE INDEX (k_u) WHERE u > 4 ORDER BY u, id;
+id	u
+# bounded range u > 2 AND u < 4 -> only u=3
+SELECT id, u FROM t1 FORCE INDEX (k_u) WHERE u > 2 AND u < 4 ORDER BY id;
+id	u
+6	3
+7	3
+#
+# ============================================
+# Pathological: a row whose PK encodes to the max key bytes (INT max)
+# sits at X's upper bound and must still be excluded by > X
+# ============================================
+#
+INSERT INTO t1 VALUES (2147483647, 2);
+# the max-PK row has u=2, so u > 2 must NOT return it
+SELECT id, u FROM t1 FORCE INDEX (k_u) WHERE u > 2 ORDER BY u, id;
+id	u
+6	3
+7	3
+8	4
+# u >= 2 must include it
+SELECT id, u FROM t1 FORCE INDEX (k_u) WHERE u >= 2 AND u < 3 ORDER BY id;
+id	u
+1	2
+2	2
+3	2
+4	2
+5	2
+2147483647	2
+#
+# ============================================
+# Composite index: > on the leading part
+# ============================================
+#
+CREATE TABLE t2 (id INT PRIMARY KEY, a INT, b INT, KEY k_ab (a, b)) ENGINE=TIDESDB;
+INSERT INTO t2 VALUES
+(1, 1, 10), (2, 1, 20), (3, 1, 30),
+(4, 2, 10), (5, 2, 20),
+(6, 3, 99);
+# a > 1 -> only a=2 and a=3 rows
+SELECT id, a, b FROM t2 FORCE INDEX (k_ab) WHERE a > 1 ORDER BY a, b;
+id	a	b
+4	2	10
+5	2	20
+6	3	99
+DROP TABLE t1;
+DROP TABLE t2;
+#
+# Done.

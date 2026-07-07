@@ -564,17 +564,31 @@ struct tidesdb_trx_t
     std::vector<fts_meta_delta_t> fts_meta_pending;
     bool fts_meta_dirty{false};
 
-    /* Uniqueness probing must not seed the WRITE txn's read-set, a point-get
-       of an absent key records read-seq 0, which the library's first-committer
-       reservation then uses as the conflict base, so a stale slot from any
-       prior write of that key trips a spurious conflict under load.  Instead we
-       probe committed data on a dedicated READ_COMMITTED txn (no read-set, never
-       pins the snapshot floor) and track same-txn pending existence here:
+    /* Same-txn pending key existence, consulted by probe_pk_exists before its
+       non-tracking tidesdb_txn_contains check on the write txn.  Committed data
+       alone cannot show what this txn has staged, so we record it here:
        true = inserted this txn (re-insert is a duplicate),
        false = deleted this txn (re-insert is allowed though committed has it).
        Keyed by cf_name + primary-key bytes; cleared at commit/rollback. */
-    tidesdb_txn_t *dup_rtxn{nullptr};
     std::unordered_map<std::string, bool> txn_key_state;
+
+    /* Statement-atomicity bookkeeping.  A "stmt" library savepoint is armed at
+       statement start (external_lock) inside a multi-statement transaction so a
+       statement error rolls back only its own effects, not the whole txn.  The
+       library savepoint reverts the txn op array; these members revert the
+       plugin-side shadow state to the same statement boundary.
+
+       stmt_lock_marker is held_locks_head at statement start; locks acquired
+       during the statement sit above it and are released to it on rollback.
+       stmt_key_state_undo journals prior txn_key_state values per mutation
+       (prior: -1 absent, 0 false, 1 true) so we revert in O(statement writes)
+       rather than snapshotting the whole (potentially huge) map.
+       stmt_fts_snapshot is a copy of the small fts_meta_pending vector taken at
+       statement start and restored wholesale on rollback. */
+    tdb_lock_request_t *stmt_lock_marker{nullptr};
+    std::vector<std::pair<std::string, signed char>> stmt_key_state_undo;
+    std::vector<fts_meta_delta_t> stmt_fts_snapshot;
+    bool stmt_fts_dirty_snapshot{false};
 };
 
 /*
@@ -964,7 +978,7 @@ class ha_tidesdb : public handler
 
     /* Bulk UPDATE / DELETE hints -- let multi-row UPDATE/DELETE share the
        same mid-txn commit batching as bulk INSERT so long statements don't
-       blow past TDB_MAX_TXN_OPS or balloon txn memory. */
+       balloon the memory the txn buffers before commit. */
     bool start_bulk_update() override;
     int end_bulk_update() override;
     int bulk_update_row(const uchar *old_data, const uchar *new_data,

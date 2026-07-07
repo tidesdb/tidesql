@@ -997,6 +997,40 @@ static int row_lock_acquire(tidesdb_trx_t *trx, const uchar *key, uint len, THD 
   promotes any waiters now compatible with the remaining granted set,
   and broadcasts the lock's cond.  Called from commit and rollback.
 */
+/* Release one granted request, promoting and waking any waiters it unblocks.
+   Caller owns removing req from its trx->held_locks_head chain. */
+static void tdb_lock_release_one(tdb_lock_request_t *req)
+{
+    tdb_row_lock_t *lock = req->lock;
+    uint part_idx = lock->partition;
+    tdb_lock_partition_t *part = &lock_partitions[part_idx];
+
+    mysql_mutex_lock(&part->mutex);
+
+    /* Unlink req from lock->granted_head. */
+    tdb_lock_request_t **pp = &lock->granted_head;
+    while (*pp && *pp != req) pp = &(*pp)->list_next;
+    if (*pp == req) *pp = req->list_next;
+
+    /* Promote any waiters now grantable, then wake them up. */
+    bool had_waiters = (lock->waiting_head != NULL);
+    tdb_lock_promote_waiters(lock);
+    bool promoted_any = had_waiters && (lock->granted_head != NULL);
+
+    /* If nothing references this slot any more, unlink it from the
+       hash chain and stash it on the partition freelist so the next
+       acquire can reuse it without growing the chain.  Slot memory
+       is retained across reuse for the deadlock walker. */
+    tdb_lock_freelist_if_empty(part, lock);
+
+    mysql_mutex_unlock(&part->mutex);
+
+    if (had_waiters && (promoted_any || lock->waiting_head == NULL))
+        mysql_cond_broadcast(&lock->cond);
+
+    my_free(req);
+}
+
 static void row_locks_release_all(tidesdb_trx_t *trx)
 {
     if (!lock_partitions || !trx) return;
@@ -1006,40 +1040,134 @@ static void row_locks_release_all(tidesdb_trx_t *trx)
     while (req)
     {
         tdb_lock_request_t *next = req->held_next;
-        tdb_row_lock_t *lock = req->lock;
-        uint part_idx = lock->partition;
-        tdb_lock_partition_t *part = &lock_partitions[part_idx];
-
-        mysql_mutex_lock(&part->mutex);
-
-        /* Unlink req from lock->granted_head. */
-        tdb_lock_request_t **pp = &lock->granted_head;
-        while (*pp && *pp != req) pp = &(*pp)->list_next;
-        if (*pp == req) *pp = req->list_next;
-
-        /* Promote any waiters now grantable, then wake them up. */
-        bool had_waiters = (lock->waiting_head != NULL);
-        tdb_lock_promote_waiters(lock);
-        bool promoted_any = had_waiters && (lock->granted_head != NULL);
-
-        /* If nothing references this slot any more, unlink it from the
-           hash chain and stash it on the partition freelist so the next
-           acquire can reuse it without growing the chain.  Slot memory
-           is retained across reuse for the deadlock walker. */
-        tdb_lock_freelist_if_empty(part, lock);
-
-        mysql_mutex_unlock(&part->mutex);
-
-        if (had_waiters && (promoted_any || lock->waiting_head == NULL))
-            mysql_cond_broadcast(&lock->cond);
-
-        my_free(req);
+        tdb_lock_release_one(req);
         released++;
         req = next;
     }
     trx->held_locks_head = NULL;
     trx->waiting_on_lock.store(NULL, std::memory_order_relaxed);
     if (released > 0) srv_stat_lock_held.fetch_sub(released, std::memory_order_relaxed);
+}
+
+/* Release only the locks acquired since a statement-start marker, leaving the
+   marker and everything below it (locks from earlier statements) held.  Because
+   row_lock_acquire pushes new grants onto the head and re-entry never adds a
+   duplicate request, the statement's locks are exactly the run from the current
+   head down to (but excluding) marker. */
+static void row_locks_release_since(tidesdb_trx_t *trx, tdb_lock_request_t *marker)
+{
+    if (!lock_partitions || !trx) return;
+
+    long long released = 0;
+    tdb_lock_request_t *req = trx->held_locks_head;
+    while (req && req != marker)
+    {
+        tdb_lock_request_t *next = req->held_next;
+        tdb_lock_release_one(req);
+        released++;
+        req = next;
+    }
+    trx->held_locks_head = marker;
+    if (released > 0) srv_stat_lock_held.fetch_sub(released, std::memory_order_relaxed);
+}
+
+/* Reserved name of the per-statement savepoint.  The SQL SAVEPOINT callbacks
+   synthesize "sv_%p" names, so this never collides with a user savepoint. */
+static constexpr const char TIDESDB_STMT_SAVEPOINT[] = "stmt";
+
+/* Set trx->txn_key_state[key] = val, journaling the prior value while a
+   statement savepoint is armed so a statement rollback can restore it. */
+static inline void trx_set_key_state(tidesdb_trx_t *trx, const std::string &key, bool val)
+{
+    if (trx->stmt_savepoint_active)
+    {
+        auto it = trx->txn_key_state.find(key);
+        signed char prior = (it == trx->txn_key_state.end()) ? -1 : (it->second ? 1 : 0);
+        trx->stmt_key_state_undo.push_back({key, prior});
+    }
+    trx->txn_key_state[key] = val;
+}
+
+/* Arm a statement savepoint at statement start.  Caller guarantees we are in a
+   multi-statement transaction (not autocommit/DDL), trx->txn exists, and no
+   statement savepoint is currently armed.  On any failure we leave the savepoint
+   unarmed so a later statement rollback safely falls back to full rollback. */
+static void stmt_savepoint_arm(tidesdb_trx_t *trx)
+{
+    /* Defensive: a prior statement's savepoint should already be gone (released
+       on success, removed on rollback), but a user ROLLBACK TO SAVEPOINT can
+       collaterally drop it; releasing again is a cheap no-op if absent. */
+    (void)tidesdb_txn_release_savepoint(trx->txn, TIDESDB_STMT_SAVEPOINT);
+    if (tidesdb_txn_savepoint(trx->txn, TIDESDB_STMT_SAVEPOINT) != TDB_SUCCESS) return;
+
+    trx->stmt_savepoint_active = true;
+    trx->stmt_lock_marker = trx->held_locks_head;
+    trx->stmt_key_state_undo.clear();
+    trx->stmt_fts_snapshot = trx->fts_meta_pending;
+    trx->stmt_fts_dirty_snapshot = trx->fts_meta_dirty;
+}
+
+/* Statement completed successfully -- the statement's writes are now permanent
+   within the (still uncommitted) txn.  Drop the savepoint and per-statement undo
+   state so the next statement re-arms cleanly. */
+static void stmt_savepoint_disarm(tidesdb_trx_t *trx)
+{
+    if (!trx->stmt_savepoint_active) return;
+    (void)tidesdb_txn_release_savepoint(trx->txn, TIDESDB_STMT_SAVEPOINT);
+    trx->stmt_savepoint_active = false;
+    trx->stmt_lock_marker = nullptr;
+    trx->stmt_key_state_undo.clear();
+    trx->stmt_fts_snapshot.clear();
+}
+
+/* Roll back just the current statement's effects to the armed savepoint.
+   Returns true if the partial rollback was performed, false if the caller must
+   fall back to a full transaction rollback (no savepoint armed, or the library
+   savepoint is gone because a bulk mid-commit reset the txn or a user ROLLBACK
+   TO SAVEPOINT removed it). */
+static bool stmt_savepoint_rollback(tidesdb_trx_t *trx)
+{
+    if (!trx->stmt_savepoint_active) return false;
+
+    int rc = tidesdb_txn_rollback_to_savepoint(trx->txn, TIDESDB_STMT_SAVEPOINT);
+    if (rc != TDB_SUCCESS)
+    {
+        /* Savepoint vanished under us -- cannot do a partial rollback. */
+        trx->stmt_savepoint_active = false;
+        trx->stmt_lock_marker = nullptr;
+        trx->stmt_key_state_undo.clear();
+        trx->stmt_fts_snapshot.clear();
+        return false;
+    }
+
+    /* Revert the plugin-side shadow state to the same boundary.  Undo the
+       txn_key_state mutations in reverse so a key set twice restores correctly. */
+    for (auto it = trx->stmt_key_state_undo.rbegin(); it != trx->stmt_key_state_undo.rend(); ++it)
+    {
+        if (it->second < 0)
+            trx->txn_key_state.erase(it->first);
+        else
+            trx->txn_key_state[it->first] = (it->second == 1);
+    }
+    trx->stmt_key_state_undo.clear();
+
+    trx->fts_meta_pending = trx->stmt_fts_snapshot;
+    trx->fts_meta_dirty = trx->stmt_fts_dirty_snapshot;
+    trx->stmt_fts_snapshot.clear();
+
+    /* Drop only the locks the failed statement took; earlier statements keep
+       theirs.  An S->X upgrade on an earlier statement's lock stays X, which is
+       conservative but never incorrect. */
+    row_locks_release_since(trx, trx->stmt_lock_marker);
+    trx->stmt_lock_marker = nullptr;
+
+    /* The library freed the txn ops appended after the savepoint, so any cached
+       iterator over this txn (scan_iter, dup_iter_cache_ on every handler on
+       this connection) now has a stale view.  Bumping the generation makes each
+       handler rebuild lazily, exactly as a bulk mid-commit does. */
+    trx->txn_generation++;
+    trx->stmt_savepoint_active = false;
+    return true;
 }
 
 /* Pick the lock mode for a row materialised on a read path, or report
@@ -3528,6 +3656,21 @@ static tidesdb_column_family_config_t build_cf_config(const ha_table_option_stru
     return cfg;
 }
 
+/* Rows in a table's data column family are encrypted in serialize_row before
+   they reach the library, and ciphertext does not compress, so running the
+   block and value-log compressor over it on every flush and compaction spends
+   CPU for no space saving.  Return a copy of the config with compression forced
+   off when the table is encrypted, leaving every other setting untouched.  This
+   is for the data CF only -- secondary-index CFs hold unencrypted comparable
+   keys and keep whatever compression the table selected. */
+static tidesdb_column_family_config_t data_cf_config(const tidesdb_column_family_config_t &cfg,
+                                                     bool encrypted)
+{
+    tidesdb_column_family_config_t data = cfg;
+    if (encrypted) data.compression_algorithm = (compression_algorithm)TDB_COMPRESS_NONE;
+    return data;
+}
+
 /*
   Resolve a secondary index CF by name.
   Returns the CF pointer (may be NULL if not found).
@@ -3755,21 +3898,13 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
     {
         /* Statement-level commit inside a multi-statement transaction.
            Defer the actual commit -- writes stay buffered in the txn,
-           avoiding expensive txn_begin + commit per statement.
-
-           tidesdb_txn_savepoint() deep-copies the entire
-           write-set (malloc+memcpy for every key/value).  For a txn
-           with N ops across S statements, total copy cost is
-           O(S * N * avg_kv_size) -- quadratic and devastating for
-           multi-statement OLTP transactions.
-
-           We skip the per-statement savepoint entirely.  This means
-           statement-level rollback inside BEGIN...COMMIT falls back to
-           full transaction rollback (same as many simple SE's).
-           The trade-off is a statement failure aborts the entire txn
-           instead of undoing just that statement.  For OLTP this is
-           acceptable since the client will retry the whole transaction
-           anyway after a conflict/error. */
+           avoiding an expensive txn_begin + commit per statement.  The
+           statement succeeded, so its writes become permanent within the
+           still-open txn; drop the statement savepoint armed in external_lock
+           so the next statement re-arms at the new boundary.  (tidesdb_txn
+           savepoints are O(1) -- they record op/cf counts, they do not copy
+           the write-set -- so this per-statement arm/disarm is cheap.) */
+        stmt_savepoint_disarm(trx);
         return 0;
     }
 
@@ -3779,12 +3914,10 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
     trx->txn_key_state.clear();
 
     /* We must release any active statement savepoint before final commit/rollback.
-       Savepoints must be explicitly released before txn_commit. */
-    if (trx->stmt_savepoint_active)
-    {
-        tidesdb_txn_release_savepoint(trx->txn, "stmt");
-        trx->stmt_savepoint_active = false;
-    }
+       Savepoints must be explicitly released before txn_commit.  Disarm also
+       clears the per-statement undo journal and fts snapshot; it leaves
+       fts_meta_pending intact for the flush below. */
+    stmt_savepoint_disarm(trx);
 
     /* Real commit -- flush to storage.
        After a successful commit, we keep the txn object alive and let
@@ -3867,15 +4000,25 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
     if (!is_real_rollback)
     {
         /* Statement-level rollback inside a multi-statement transaction.
-           Without per-statement savepoints (see tidesdb_commit note),
-           we fall through to full transaction rollback.  This is the
-           same behavior as many simple storage engines and is correct --
-           OLTP clients retry the entire transaction after any error. */
+           Roll back only this statement's effects to the savepoint armed in
+           external_lock, preserving the rest of the transaction and its
+           snapshot.  stmt_savepoint_rollback reverts the library op array and
+           the plugin-side shadow state (txn_key_state, fts_meta_pending, and
+           the statement's row locks) together.  It returns false when a partial
+           rollback is impossible -- no savepoint armed, or a bulk mid-commit or
+           user ROLLBACK TO SAVEPOINT removed it -- and we fall through to a full
+           transaction rollback in that case. */
+        if (stmt_savepoint_rollback(trx))
+        {
+            /* Leave trx->dirty as-is: earlier statements' writes remain in the
+               still-open txn, and its snapshot is deliberately preserved. */
+            return 0;
+        }
     }
 
     if (trx->stmt_savepoint_active)
     {
-        tidesdb_txn_release_savepoint(trx->txn, "stmt");
+        tidesdb_txn_release_savepoint(trx->txn, TIDESDB_STMT_SAVEPOINT);
         trx->stmt_savepoint_active = false;
     }
 
@@ -3884,6 +4027,9 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
     trx->fts_meta_pending.clear();
     trx->fts_meta_dirty = false;
     trx->txn_key_state.clear();
+    trx->stmt_key_state_undo.clear();
+    trx->stmt_fts_snapshot.clear();
+    trx->stmt_lock_marker = nullptr;
 
     /* Full rollback -- we keep txn alive for reuse via reset on next use. */
     tidesdb_txn_rollback(trx->txn);
@@ -3910,7 +4056,6 @@ static int tidesdb_close_connection(handlerton *, THD *thd)
             tidesdb_txn_rollback(trx->txn);
             tidesdb_txn_free(trx->txn);
         }
-        if (trx->dup_rtxn) tidesdb_txn_free(trx->dup_rtxn);
         delete trx;
         thd_set_ha_data(thd, tidesdb_hton, NULL);
     }
@@ -5567,8 +5712,64 @@ bool ha_tidesdb::decode_int_sort_key(const uint8_t *src, uint sort_len, bool is_
 
   Returns true on success, false for unsupported types.
 */
+
+/* Whether decode_sort_key_part can reconstruct this field's value from its
+   comparable sort key.  Depends only on the field type and charset, not on any
+   stored bytes, so index_flags can use it to decide index-only capability
+   without touching data.  This is the single source of truth for the set of
+   decodable types -- decode_sort_key_part checks it first, so the two never
+   drift.  The mem-comparable sort key is only invertible for these types; for
+   VARCHAR, DECIMAL, floating point, multi-byte CHAR, BLOB, ENUM/SET and the
+   like the sort weights are lossy, so a keyread of such a column must fall back
+   to the primary-key row fetch. */
+static bool is_keyread_decodable_type(const Field *f)
+{
+    switch (f->real_type())
+    {
+        case MYSQL_TYPE_TINY:
+        case MYSQL_TYPE_SHORT:
+        case MYSQL_TYPE_INT24:
+        case MYSQL_TYPE_LONG:
+        case MYSQL_TYPE_LONGLONG:
+        case MYSQL_TYPE_YEAR:
+        case MYSQL_TYPE_DATE:
+        case MYSQL_TYPE_NEWDATE:
+        case MYSQL_TYPE_DATETIME:
+        case MYSQL_TYPE_DATETIME2:
+        case MYSQL_TYPE_TIMESTAMP:
+        case MYSQL_TYPE_TIMESTAMP2:
+            return true;
+        case MYSQL_TYPE_STRING:
+            /* Fixed CHAR/BINARY only for charsets whose sort weights equal the
+               stored bytes. */
+            return f->charset() == &my_charset_bin || f->charset() == &my_charset_latin1;
+        default:
+            return false;
+    }
+}
+
+/* Whether the field at key part `part` of index `keyno` reconstructs from its
+   sort key.  Resolved through key_part.fieldnr and table_share->field rather
+   than key_part.field, because index_flags builds field->part_of_key on a
+   fresh, unopened handler at frm-parse time where key_part.field and the plugin
+   share are not yet available.  An unresolvable field is treated conservatively
+   as undecodable. */
+static bool index_part_is_decodable(const TABLE_SHARE *ts, uint keyno, uint part)
+{
+    if (!ts || !ts->field || keyno >= ts->keys) return false;
+    const KEY *k = &ts->key_info[keyno];
+    if (part >= k->user_defined_key_parts) return false;
+    uint fnr = k->key_part[part].fieldnr;
+    if (fnr == 0 || fnr - 1 >= ts->fields) return false;
+    return is_keyread_decodable_type(ts->field[fnr - 1]);
+}
+
 bool ha_tidesdb::decode_sort_key_part(const uint8_t *src, uint sort_len, Field *f, uchar *buf)
 {
+    /* Reject undecodable types up front so this stays in lockstep with
+       is_keyread_decodable_type, which index_flags relies on. */
+    if (!is_keyread_decodable_type(f)) return false;
+
     /* Compute the destination pointer exactly once per call.  Every branch
        below wrote `buf + (f->ptr - f->table->record[0])` independently. */
     uchar *to = buf + (uintptr_t)(f->ptr - f->table->record[0]);
@@ -6146,11 +6347,12 @@ int ha_tidesdb::create(const char *name, TABLE *table_arg, HA_CREATE_INFO *creat
     }
 
     tidesdb_column_family_config_t cfg = build_cf_config(opts);
+    tidesdb_column_family_config_t data_cfg = data_cf_config(cfg, opts && opts->encrypted);
 
     /* We create main data CF (we simply skip if it already exists, e.g. crash recovery) */
     if (!tidesdb_get_column_family(tdb_global, cf_name.c_str()))
     {
-        int rc = tidesdb_create_column_family(tdb_global, cf_name.c_str(), &cfg);
+        int rc = tidesdb_create_column_family(tdb_global, cf_name.c_str(), &data_cfg);
         if (rc != TDB_SUCCESS)
         {
             sql_print_error("[TIDESDB] Failed to create CF '%s' (err=%d)", cf_name.c_str(), rc);
@@ -6709,21 +6911,20 @@ int ha_tidesdb::iter_read_current(uchar *buf)
 
 /*
   Probe whether a PK already exists for an INSERT/UPDATE uniqueness check
-  WITHOUT recording the read in the write transaction.
+  without recording the read into the write transaction's conflict footprint.
 
-  A tracking tidesdb_txn_get() of an absent key records read-seq 0 in the txn
-  read-set; the library's first-committer-wins reservation then uses that 0 as
-  the write's conflict base, so a stale reservation slot left by any prior write
-  of the same key (slots survive across DROP/recreate) trips a spurious
-  TDB_ERR_CONFLICT under load.  The probe must therefore stay out of the write
-  txn's read-set.  We answer from two sources:
+  tidesdb_txn_contains resolves at the write txn's snapshot but does not track
+  the read, so an absent-key probe cannot seed read-seq 0 into the first-
+  committer-wins reservation base -- a tracking get would, and a stale
+  reservation slot left by a prior write of the same key would then trip a
+  spurious TDB_ERR_CONFLICT under load.  Uniqueness against a writer that
+  commits the same key after our snapshot is still enforced by this insert's
+  own reservation at commit time.  We answer from two sources:
 
-    -- same-txn pending state (trx->txn_key_state) -- this txn may have already
-       inserted (-> duplicate) or deleted (-> not a duplicate) the key, which
-       committed data alone cannot tell us; and
-    -- committed data, read on a dedicated READ_COMMITTED txn that is reset per
-       probe.  Being read-only it never reserves writes (no base pollution), and
-       READ_COMMITTED is skipped by the snapshot floor so it never pins min_snap.
+    -- same-txn pending state (trx->txn_key_state), which records a key this txn
+       has already inserted (-> duplicate) or deleted (-> not a duplicate), and
+       which committed data alone cannot reveal; and
+    -- a non-tracking existence check on the write txn for everything else.
 */
 int ha_tidesdb::probe_pk_exists(tidesdb_trx_t *trx, const std::string &tkey, const uchar *dk,
                                 uint dk_len)
@@ -6732,48 +6933,13 @@ int ha_tidesdb::probe_pk_exists(tidesdb_trx_t *trx, const std::string &tkey, con
     {
         auto it = trx->txn_key_state.find(tkey);
         if (it != trx->txn_key_state.end()) return it->second ? 1 : 0;
-
-        int rc;
-        if (!trx->dup_rtxn)
-        {
-            rc = tidesdb_txn_begin_with_isolation(tdb_global, TDB_ISOLATION_READ_COMMITTED,
-                                                  &trx->dup_rtxn);
-        }
-        else
-        {
-            /* tidesdb_txn_reset requires a committed txn (it is the post-commit
-               reuse path).  Finalize the previous probe's read-only txn first --
-               num_ops==0 at READ_COMMITTED takes the library's read-only commit
-               fast path, so this is cheap and never reserves anything. */
-            tidesdb_txn_commit(trx->dup_rtxn);
-            rc = tidesdb_txn_reset(trx->dup_rtxn, TDB_ISOLATION_READ_COMMITTED);
-        }
-        if (rc != TDB_SUCCESS) return -tdb_rc_to_ha(rc, "probe_pk_exists txn");
-
-        uint8_t *v = NULL;
-        size_t l = 0;
-        int g = tidesdb_txn_get(trx->dup_rtxn, share->cf, dk, dk_len, &v, &l);
-        if (g == TDB_SUCCESS)
-        {
-            if (v) tidesdb_free(v);
-            return 1;
-        }
-        if (g == TDB_ERR_NOT_FOUND) return 0;
-        return -tdb_rc_to_ha(g, "probe_pk_exists get");
     }
 
-    /* No per-connection trx (rare).  Fall back to the tracking get; without a
-       reused write txn there is no reservation base to pollute. */
-    uint8_t *v = NULL;
-    size_t l = 0;
-    int g = tidesdb_txn_get(stmt_txn, share->cf, dk, dk_len, &v, &l);
-    if (g == TDB_SUCCESS)
-    {
-        if (v) tidesdb_free(v);
-        return 1;
-    }
+    tidesdb_txn_t *probe_txn = (trx && trx->txn) ? trx->txn : stmt_txn;
+    int g = tidesdb_txn_contains(probe_txn, share->cf, dk, dk_len);
+    if (g == TDB_SUCCESS) return 1;
     if (g == TDB_ERR_NOT_FOUND) return 0;
-    return -tdb_rc_to_ha(g, "probe_pk_exists get(fallback)");
+    return -tdb_rc_to_ha(g, "probe_pk_exists contains");
 }
 
 /* ******************** write_row (INSERT) ******************** */
@@ -6919,7 +7085,7 @@ int ha_tidesdb::write_row(const uchar *buf)
         /* Not a duplicate -- record the pending insert so a later insert of the
            same key in this same txn is still caught (committed data cannot show
            a pending insert).  The put below stays blind, so base = snapshot. */
-        if (trx) trx->txn_key_state[tkey] = true;
+        if (trx) trx_set_key_state(trx, tkey, true);
     }
 
     /* We check UNIQUE secondary index uniqueness.  This honours the
@@ -7566,15 +7732,26 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
         }
         else if (find_flag == HA_READ_AFTER_KEY)
         {
-            /* We seek, then skip past any exact prefix matches */
-            tidesdb_iter_seek(scan_iter, comp_key, comp_len);
-            while (tidesdb_iter_valid(scan_iter))
+            /* Skip every entry sharing this index-column prefix in one seek
+               instead of stepping over them one at a time.  Secondary entries
+               are [comparable idx cols][pk], so the greatest entry with this
+               prefix is comp_key followed by the maximum pk (all 0xFF), the same
+               upper bound the PREV branch below builds.  Seeking to it lands on
+               the first strictly-greater index value -- the only prefix match it
+               can land on is the pathological row whose pk itself encodes to all
+               0xFF, which we then step past. */
+            uchar upper[SEC_IDX_KEY_BUF_LEN];
+            memcpy(upper, comp_key, comp_len);
+            memset(upper + comp_len, KEY_INF_HI_BYTE, share->pk_key_len);
+            uint upper_len = comp_len + share->pk_key_len;
+            tidesdb_iter_seek(scan_iter, upper, upper_len);
+            if (tidesdb_iter_valid(scan_iter))
             {
                 uint8_t *ik = NULL;
                 size_t iks = 0;
-                if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) break;
-                if (iks < comp_len || memcmp(ik, comp_key, comp_len) != 0) break;
-                tidesdb_iter_next(scan_iter);
+                if (tidesdb_iter_key(scan_iter, &ik, &iks) == TDB_SUCCESS && iks >= comp_len &&
+                    memcmp(ik, comp_key, comp_len) == 0)
+                    tidesdb_iter_next(scan_iter);
             }
         }
         else if (find_flag == HA_READ_KEY_OR_PREV || find_flag == HA_READ_BEFORE_KEY ||
@@ -8106,14 +8283,20 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                 uint old_dk_chk_len = build_data_key(old_pk, old_pk_len, old_dk_chk);
                 std::string otkey(share->cf_name);
                 otkey.append((const char *)old_dk_chk, old_dk_chk_len);
-                trx->txn_key_state[otkey] = false;
-                trx->txn_key_state[ntkey] = true;
+                trx_set_key_state(trx, otkey, false);
+                trx_set_key_state(trx, ntkey, true);
             }
         }
 
         if (share->num_secondary_indexes > 0)
         {
             const my_ptrdiff_t nd_ptrdiff = (my_ptrdiff_t)(new_data - table->record[0]);
+            /* Reuse the per-index dup-check iterators that write_row caches,
+               invalidating on txn change, so a multi-row UPDATE that shifts a
+               UNIQUE value does not rebuild the catastrophically expensive
+               tidesdb_iter_new() (O(num_sstables) merge-heap construction) on
+               every row.  Mirrors the caching in write_row. */
+            const uint64_t cur_gen = trx ? trx->txn_generation : 0;
             for (uint i = 0; i < table->s->keys; i++)
             {
                 if (share->has_user_pk && i == share->pk_index) continue;
@@ -8157,12 +8340,29 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                     memcmp(old_prefix, new_prefix, new_prefix_len) == 0)
                     continue;
 
-                tidesdb_iter_t *dup_iter = NULL;
-                int irc = tdb_iter_new_blocking(ha_thd(), txn, share->idx_cfs[i], &dup_iter);
-                if (irc != TDB_SUCCESS || !dup_iter)
+                /* Get or create the cached dup-check iterator for this index,
+                   invalidating if the txn changed (commit/reset frees the txn
+                   ops the iterator's MERGE_SOURCE_TXN_OPS depends on).  Shared
+                   with write_row via dup_iter_cache_. */
+                tidesdb_iter_t *dup_iter = dup_iter_cache_[i];
+                if (dup_iter && (dup_iter_txn_[i] != txn || dup_iter_txn_gen_[i] != cur_gen))
                 {
-                    tmp_restore_column_map(&table->read_set, old_map);
-                    DBUG_RETURN(tdb_rc_to_ha(irc, "update_row dup_iter_new"));
+                    tidesdb_iter_free(dup_iter);
+                    dup_iter = NULL;
+                    dup_iter_cache_[i] = NULL;
+                }
+                if (!dup_iter)
+                {
+                    int irc = tdb_iter_new_blocking(ha_thd(), txn, share->idx_cfs[i], &dup_iter);
+                    if (irc != TDB_SUCCESS || !dup_iter)
+                    {
+                        tmp_restore_column_map(&table->read_set, old_map);
+                        DBUG_RETURN(tdb_rc_to_ha(irc, "update_row dup_iter_new"));
+                    }
+                    dup_iter_cache_[i] = dup_iter;
+                    dup_iter_txn_[i] = txn;
+                    dup_iter_txn_gen_[i] = cur_gen;
+                    dup_iter_count_++;
                 }
 
                 tidesdb_iter_seek(dup_iter, new_prefix, new_prefix_len);
@@ -8180,7 +8380,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
                             memcpy(dup_ref, fk + new_prefix_len, suffix_len);
                     }
                 }
-                tidesdb_iter_free(dup_iter);
+                /* Cached iterator is retained for the next row; not freed here. */
 
                 if (dup)
                 {
@@ -8563,7 +8763,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
     {
         std::string tkey(share->cf_name);
         tkey.append((const char *)dk, dk_len);
-        trx->txn_key_state[tkey] = false;
+        trx_set_key_state(trx, tkey, false);
     }
 
     /* We delete secondary index entries in a single consolidated dispatch loop.
@@ -8698,7 +8898,9 @@ int ha_tidesdb::delete_all_rows(void)
         stmt_txn_dirty = false;
     }
 
-    tidesdb_column_family_config_t cfg = build_cf_config(TDB_TABLE_OPTIONS(table));
+    const ha_table_option_struct *t_opts = TDB_TABLE_OPTIONS(table);
+    tidesdb_column_family_config_t cfg = build_cf_config(t_opts);
+    tidesdb_column_family_config_t data_cfg = data_cf_config(cfg, t_opts && t_opts->encrypted);
 
     {
         std::string cf_name = share->cf_name;
@@ -8710,7 +8912,7 @@ int ha_tidesdb::delete_all_rows(void)
             DBUG_RETURN(tdb_rc_to_ha(rc, "truncate drop_cf"));
         }
 
-        rc = tidesdb_create_column_family(tdb_global, cf_name.c_str(), &cfg);
+        rc = tidesdb_create_column_family(tdb_global, cf_name.c_str(), &data_cfg);
         if (rc != TDB_SUCCESS)
         {
             sql_print_error("[TIDESDB] truncate: failed to recreate CF '%s' (err=%d)",
@@ -8763,9 +8965,10 @@ int ha_tidesdb::delete_all_rows(void)
 /*
   Commit the current txn mid-statement and reset it with READ_COMMITTED so
   the next batch starts fresh.  Shared by bulk INSERT/UPDATE/DELETE once
-  buffered ops cross TIDESDB_BULK_INSERT_BATCH_OPS -- keeps us under
-  TDB_MAX_TXN_OPS and bounds txn memory.  Higher isolation levels would
-  cause unbounded read-set growth across batches.
+  buffered ops cross TIDESDB_BULK_INSERT_BATCH_OPS, which bounds the memory the
+  txn holds before commit since the whole write set lives in the ops array
+  until then.  The reset drops to READ_COMMITTED so the read set does not grow
+  across batches the way a higher isolation level would.
 
   Any cached iterators and dup-check iterators are invalidated, they hold
   references to MERGE_SOURCE_TXN_OPS that txn_reset clears.
@@ -8821,6 +9024,13 @@ int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
             scan_iter_txn_ = NULL;
         }
         free_dup_iter_cache();
+        /* The txn was torn down, so the armed statement savepoint and its lock
+           marker are void; disarm so a later statement rollback falls back to a
+           full rollback rather than a stale partial one. */
+        trx->stmt_savepoint_active = false;
+        trx->stmt_lock_marker = nullptr;
+        trx->stmt_key_state_undo.clear();
+        trx->stmt_fts_snapshot.clear();
         return tdb_rc_to_ha(crc, "bulk_commit");
     }
 
@@ -8857,6 +9067,14 @@ int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
     }
     free_dup_iter_cache();
     scan_txn = trx->txn;
+    /* The mid-statement commit reset the txn and released every row lock, so the
+       armed statement savepoint and its lock marker no longer mean anything.
+       Disarm it -- the remainder of this statement can no longer be rolled back
+       atomically (the committed rows are durable), matching prior behavior. */
+    trx->stmt_savepoint_active = false;
+    trx->stmt_lock_marker = nullptr;
+    trx->stmt_key_state_undo.clear();
+    trx->stmt_fts_snapshot.clear();
     return 0;
 }
 
@@ -9166,7 +9384,20 @@ int ha_tidesdb::info(uint flag)
             tidesdb_stats_t *st = NULL;
             if (tidesdb_get_stats(share->cf, &st) == TDB_SUCCESS && st)
             {
-                share->cached_records.store(st->total_keys, std::memory_order_relaxed);
+                /* Prefer the distinct-key cardinality estimate for the row
+                   count.  Within an SSTable it counts each key once no matter
+                   how many MVCC versions it holds, which total_keys counts
+                   separately, so it is a tighter row estimate for the optimizer
+                   (it still upper-bounds a key spread across several SSTables).
+                   Fall back to total_keys when the library cannot supply it. */
+                uint64_t rows = st->total_keys;
+                uint64_t est = 0;
+                /* The aggregate is always a real sum -- the per-SSTable
+                   TDB_DISTINCT_KEYS_UNKNOWN sentinel is resolved to that
+                   SSTable's entry count inside the library -- so success alone
+                   means the value is usable. */
+                if (tidesdb_cf_estimate_cardinality(share->cf, &est) == TDB_SUCCESS) rows = est;
+                share->cached_records.store(rows, std::memory_order_relaxed);
 
                 /* total_data_size only counts SSTable klog+vlog; memtable_size
                    holds the active memtable footprint.  Sum both so that
@@ -9885,7 +10116,18 @@ ulong ha_tidesdb::index_flags(uint idx, uint part, bool all_parts) const
     if (table_share && table_share->primary_key != MAX_KEY && idx == table_share->primary_key)
         flags |= HA_CLUSTERED_INDEX;
     else
-        flags |= HA_KEYREAD_ONLY;
+    {
+        /* The server builds field->part_of_key (the covering-index bitmap) by
+           calling index_flags(idx, part, 0) once per key part, so advertise
+           HA_KEYREAD_ONLY for a part only when that part's field reconstructs
+           from its sort key via decode_sort_key_part.  A query that reads only
+           decodable columns of a mixed-type index still gets an index-only
+           plan; a read of an undecodable column (VARCHAR, DECIMAL, floating
+           point, multi-byte CHAR) leaves part_of_key clear so the optimizer
+           prices the primary-key row fetch instead of a phantom covering scan
+           that try_keyread_from_index would fall back on at runtime. */
+        if (index_part_is_decodable(table_share, idx, part)) flags |= HA_KEYREAD_ONLY;
+    }
     return flags;
 }
 
@@ -10525,6 +10767,16 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
         trans_register_ha(thd, false, ht, 0);
 
         if (!is_autocommit) trans_register_ha(thd, true, ht, 0);
+
+        /* Arm a statement savepoint so a statement error inside BEGIN...COMMIT
+           rolls back only this statement, not the whole transaction.  Only for
+           real multi-statement transactions -- autocommit and DDL statements
+           are their own transaction, where statement rollback is already a full
+           rollback.  external_lock fires once per table per statement, so the
+           !stmt_savepoint_active guard arms it exactly once, at the first table,
+           before any of the statement's row writes. */
+        if (!is_autocommit && !is_ddl && trx->txn && !trx->stmt_savepoint_active)
+            stmt_savepoint_arm(trx);
     }
     else
     {
@@ -11169,6 +11421,7 @@ bool ha_tidesdb::commit_inplace_alter_table(TABLE *altered_table, Alter_inplace_
             }
         }
     }
+
     share->num_secondary_indexes = 0;
     for (uint i = 0; i < share->idx_cfs.size(); i++)
         if (share->idx_cfs[i]) share->num_secondary_indexes++;
@@ -11178,12 +11431,14 @@ bool ha_tidesdb::commit_inplace_alter_table(TABLE *altered_table, Alter_inplace_
        of only being persisted in the .frm. */
     if (ha_alter_info->handler_flags & ALTER_CHANGE_CREATE_OPTION)
     {
-        tidesdb_column_family_config_t cfg = build_cf_config(TDB_TABLE_OPTIONS(altered_table));
+        const ha_table_option_struct *a_opts = TDB_TABLE_OPTIONS(altered_table);
+        tidesdb_column_family_config_t cfg = build_cf_config(a_opts);
+        tidesdb_column_family_config_t data_cfg = data_cf_config(cfg, a_opts && a_opts->encrypted);
 
         /* Main data CF */
         if (share->cf)
         {
-            int rc = tidesdb_cf_update_runtime_config(share->cf, &cfg, 1);
+            int rc = tidesdb_cf_update_runtime_config(share->cf, &data_cfg, 1);
             if (rc != TDB_SUCCESS)
                 sql_print_warning(
                     "[TIDESDB] ALTER: failed to update runtime config for "
@@ -11557,8 +11812,8 @@ static long long srv_stat_compaction_count;
    tidesdb_show_status can read them directly.  Their definitions live up
    there. */
 
-#define TIDESQL_VERSION_STR "4.5.8"
-#define TIDESQL_VERSION_HEX 0x40508
+#define TIDESQL_VERSION_STR "4.5.9"
+#define TIDESQL_VERSION_HEX 0x40509
 
 static const char *srv_stat_version = TIDESQL_VERSION_STR;
 static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;

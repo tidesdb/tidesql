@@ -1,0 +1,162 @@
+#
+# ============================================
+# TEST 1: failed statement leaves earlier ones intact (PRIMARY KEY)
+# ============================================
+#
+CREATE TABLE t1 (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+START TRANSACTION;
+INSERT INTO t1 VALUES (1, 10);
+INSERT INTO t1 VALUES (2, 20);
+# row 3 inserts, then row 1 duplicates -> whole statement rolls back
+INSERT INTO t1 VALUES (3, 30), (1, 99);
+ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+# inside the txn: 1 and 2 survive, 3 is gone, 1 is unchanged (v=10)
+SELECT * FROM t1 ORDER BY id;
+id	v
+1	10
+2	20
+COMMIT;
+# after commit: same result persisted
+SELECT * FROM t1 ORDER BY id;
+id	v
+1	10
+2	20
+#
+# ============================================
+# TEST 2: re-insert of a rolled-back key succeeds (txn_key_state revert)
+# ============================================
+#
+START TRANSACTION;
+INSERT INTO t1 VALUES (5, 50);
+# row 6 inserts, then row 5 duplicates -> statement rolls back, 6 undone
+INSERT INTO t1 VALUES (6, 60), (5, 999);
+ERROR 23000: Duplicate entry '5' for key 'PRIMARY'
+# 6 was rolled back, so re-inserting it must NOT report a false duplicate
+INSERT INTO t1 VALUES (6, 66);
+COMMIT;
+SELECT * FROM t1 ORDER BY id;
+id	v
+1	10
+2	20
+5	50
+6	66
+#
+# ============================================
+# TEST 3: UNIQUE secondary index revert + re-insert
+# ============================================
+#
+CREATE TABLE t2 (id INT PRIMARY KEY, u INT UNIQUE, v INT) ENGINE=TIDESDB;
+START TRANSACTION;
+INSERT INTO t2 VALUES (1, 100, 1);
+# row (2,200) inserts, then u=100 duplicates -> statement rolls back
+INSERT INTO t2 VALUES (2, 200, 2), (3, 100, 3);
+ERROR 23000: Duplicate entry '100' for key 'u'
+# the rolled-back unique value 200 must be free to insert again
+INSERT INTO t2 VALUES (2, 200, 2);
+COMMIT;
+SELECT * FROM t2 ORDER BY id;
+id	u	v
+1	100	1
+2	200	2
+#
+# ============================================
+# TEST 4: failed UPDATE leaves earlier UPDATE intact
+# ============================================
+#
+START TRANSACTION;
+UPDATE t1 SET v = v + 1;
+# moving id 2 onto existing id 1 duplicates the PK -> statement rolls back
+UPDATE t1 SET id = 1 WHERE id = 2;
+ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+# first UPDATE's increment survives; row 2 keeps its id
+SELECT * FROM t1 ORDER BY id;
+id	v
+1	11
+2	21
+5	51
+6	67
+COMMIT;
+SELECT * FROM t1 ORDER BY id;
+id	v
+1	11
+2	21
+5	51
+6	67
+#
+# ============================================
+# TEST 5: statement rollback preserves the transaction snapshot
+# ============================================
+#
+CREATE TABLE t3 (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO t3 VALUES (1, 1);
+connect  con1, localhost, root,,;
+connection con1;
+BEGIN;
+# pin con1's snapshot
+SELECT * FROM t3 ORDER BY id;
+id	v
+1	1
+connection default;
+INSERT INTO t3 VALUES (2, 2);
+connection con1;
+# a failed statement inside con1's txn must roll back only itself...
+INSERT INTO t3 VALUES (3, 3), (1, 3);
+ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+# ...and must NOT shift the snapshot: con1 still must not see row 2
+SELECT * FROM t3 ORDER BY id;
+id	v
+1	1
+COMMIT;
+# after commit the snapshot is released, row 2 becomes visible
+SELECT * FROM t3 ORDER BY id;
+id	v
+1	1
+2	2
+disconnect con1;
+connection default;
+#
+# ============================================
+# TEST 6: FULLTEXT index stays consistent after a statement rollback
+# ============================================
+#
+CREATE TABLE ft (id INT PRIMARY KEY, body TEXT, FULLTEXT(body)) ENGINE=TIDESDB;
+START TRANSACTION;
+INSERT INTO ft VALUES (1, 'alpha beta');
+# row 2 (gamma delta) inserts, then id 1 duplicates -> statement rolls back
+INSERT INTO ft VALUES (2, 'gamma delta'), (1, 'dup');
+ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+COMMIT;
+# gamma was rolled back -> no match; alpha (committed row 1) still matches
+SELECT id FROM ft WHERE MATCH(body) AGAINST('gamma');
+id
+SELECT id FROM ft WHERE MATCH(body) AGAINST('alpha');
+id
+1
+# a fresh insert of the rolled-back term indexes cleanly
+INSERT INTO ft VALUES (2, 'gamma delta');
+SELECT id FROM ft WHERE MATCH(body) AGAINST('gamma');
+id
+2
+#
+# ============================================
+# TEST 7: user SAVEPOINT still works alongside statement savepoints
+# ============================================
+#
+START TRANSACTION;
+INSERT INTO t1 VALUES (40, 400);
+SAVEPOINT a;
+INSERT INTO t1 VALUES (41, 410);
+ROLLBACK TO SAVEPOINT a;
+# 40 survives, 41 undone by the user rollback
+INSERT INTO t1 VALUES (42, 420);
+COMMIT;
+SELECT id FROM t1 WHERE id >= 40 ORDER BY id;
+id
+40
+42
+DROP TABLE ft;
+DROP TABLE t3;
+DROP TABLE t2;
+DROP TABLE t1;
+#
+# Done.

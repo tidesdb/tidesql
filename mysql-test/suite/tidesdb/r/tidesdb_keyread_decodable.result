@@ -1,0 +1,111 @@
+#
+# ============================================
+# Decodable column types: covering (Using index) IS offered
+# ============================================
+#
+CREATE TABLE cov_ok (
+id INT PRIMARY KEY,
+i  INT,
+b  BIGINT,
+d  DATE,
+ts DATETIME,
+c  CHAR(8) CHARACTER SET binary,
+KEY k_i  (i),
+KEY k_b  (b),
+KEY k_d  (d),
+KEY k_ts (ts),
+KEY k_c  (c)
+) ENGINE=TIDESDB;
+INSERT INTO cov_ok VALUES
+(1, 10, 100, '2020-01-01', '2020-01-01 10:00:00', 'aaa'),
+(2, 20, 200, '2021-02-02', '2021-02-02 11:00:00', 'bbb'),
+(3, 30, 300, '2022-03-03', '2022-03-03 12:00:00', 'ccc');
+EXPLAIN SELECT i  FROM cov_ok FORCE INDEX (k_i)  WHERE i  = 20;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_ok	ref	k_i	k_i	5	const	#	Using index
+EXPLAIN SELECT b  FROM cov_ok FORCE INDEX (k_b)  WHERE b  = 200;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_ok	ref	k_b	k_b	9	const	#	Using index
+EXPLAIN SELECT d  FROM cov_ok FORCE INDEX (k_d)  WHERE d  = '2021-02-02';
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_ok	ref	k_d	k_d	4	const	#	Using index
+EXPLAIN SELECT ts FROM cov_ok FORCE INDEX (k_ts) WHERE ts = '2021-02-02 11:00:00';
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_ok	ref	k_ts	k_ts	6	const	#	Using index
+EXPLAIN SELECT c  FROM cov_ok FORCE INDEX (k_c)  WHERE c  = 'bbb';
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_ok	ref	k_c	k_c	9	const	#	Using where; Using index
+#
+# ============================================
+# Undecodable column types: covering is NOT offered (no Using index)
+# ============================================
+#
+CREATE TABLE cov_no (
+id INT PRIMARY KEY,
+s  VARCHAR(50),
+u  CHAR(8) CHARACTER SET utf8mb4,
+m  DECIMAL(10,2),
+f  DOUBLE,
+KEY k_s (s),
+KEY k_u (u),
+KEY k_m (m),
+KEY k_f (f)
+) ENGINE=TIDESDB;
+INSERT INTO cov_no VALUES
+(1, 'alpha', 'x1', 1.50, 1.5),
+(2, 'beta',  'x2', 2.50, 2.5),
+(3, 'gamma', 'x3', 3.50, 3.5);
+EXPLAIN SELECT s FROM cov_no FORCE INDEX (k_s) WHERE s = 'beta';
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_no	ref	k_s	k_s	203	const	#	Using where
+EXPLAIN SELECT u FROM cov_no FORCE INDEX (k_u) WHERE u = 'x2';
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_no	ref	k_u	k_u	33	const	#	Using where
+EXPLAIN SELECT m FROM cov_no FORCE INDEX (k_m) WHERE m = 2.50;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_no	ref	k_m	k_m	6	const	#	
+EXPLAIN SELECT f FROM cov_no FORCE INDEX (k_f) WHERE f = 2.5;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_no	ref	k_f	k_f	9	const	#	
+# results are still correct on the non-covering (PK fetch) path
+SELECT s FROM cov_no FORCE INDEX (k_s) WHERE s = 'beta';
+s
+beta
+SELECT m FROM cov_no FORCE INDEX (k_m) WHERE m = 2.50;
+m
+2.50
+#
+# ============================================
+# Composite index: covering decided per key part, not per whole index
+# ============================================
+#
+CREATE TABLE cov_mix (
+id INT PRIMARY KEY,
+a  INT,
+b  INT,
+s  VARCHAR(50),
+KEY k_ab (a, b),
+KEY k_as (a, s)
+) ENGINE=TIDESDB;
+INSERT INTO cov_mix VALUES (1, 1, 10, 'x'), (2, 2, 20, 'y'), (3, 3, 30, 'z');
+# (a INT, b INT): both decodable -> Using index
+EXPLAIN SELECT a, b FROM cov_mix FORCE INDEX (k_ab) WHERE a = 2;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_mix	ref	k_ab	k_ab	5	const	#	Using index
+# (a INT, s VARCHAR), reading only the decodable a -> still Using index
+EXPLAIN SELECT a FROM cov_mix FORCE INDEX (k_as) WHERE a = 2;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_mix	ref	k_as	k_as	5	const	#	Using index
+# (a INT, s VARCHAR), reading the undecodable s -> no Using index
+EXPLAIN SELECT a, s FROM cov_mix FORCE INDEX (k_as) WHERE a = 2;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	cov_mix	ref	k_as	k_as	5	const	#	
+# result on the s (non-covering) path is still correct
+SELECT a, s FROM cov_mix FORCE INDEX (k_as) WHERE a = 2;
+a	s
+2	y
+DROP TABLE cov_ok;
+DROP TABLE cov_no;
+DROP TABLE cov_mix;
+#
+# Done.

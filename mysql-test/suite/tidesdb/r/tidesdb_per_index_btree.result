@@ -12,9 +12,9 @@ INSERT INTO t1 VALUES (1,10,100),(2,20,200),(3,30,300);
 # idx_a should show BTREE, idx_b should show LSM
 SHOW KEYS FROM t1;
 Table	Non_unique	Key_name	Seq_in_index	Column_name	Collation	Cardinality	Sub_part	Packed	Null	Index_type	Comment	Index_comment	Ignored
-t1	0	PRIMARY	1	id	A	2	NULL	NULL		LSM			NO
-t1	1	idx_a	1	a	A	2	NULL	NULL	YES	BTREE			NO
-t1	1	idx_b	1	b	A	2	NULL	NULL	YES	LSM			NO
+t1	0	PRIMARY	1	id	A	3	NULL	NULL		LSM			NO
+t1	1	idx_a	1	a	A	3	NULL	NULL	YES	BTREE			NO
+t1	1	idx_b	1	b	A	3	NULL	NULL	YES	LSM			NO
 SELECT * FROM t1 WHERE a = 20;
 id	a	b
 2	20	200
