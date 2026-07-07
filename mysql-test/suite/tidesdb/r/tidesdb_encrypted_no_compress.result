@@ -1,0 +1,64 @@
+#
+# ============================================
+# Encrypted table: data CF compression forced off, index CF keeps it
+# ============================================
+#
+CREATE TABLE enc_lz4 (
+id INT PRIMARY KEY,
+u  INT,
+v  VARCHAR(200),
+KEY k_u (u)
+) ENGINE=TIDESDB `ENCRYPTED`=YES COMPRESSION='LZ4';
+# the table still reports the requested COMPRESSION option to the user
+SHOW CREATE TABLE enc_lz4;
+Table	Create Table
+enc_lz4	CREATE TABLE `enc_lz4` (
+  `id` int(11) NOT NULL,
+  `u` int(11) DEFAULT NULL,
+  `v` varchar(200) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `k_u` (`u`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `ENCRYPTED`=YES `COMPRESSION`='LZ4'
+# data CF: compression_algorithm = NONE (ciphertext is incompressible)
+compression_algorithm = NONE
+# index CF: compression_algorithm = LZ4 (unencrypted keys keep compression)
+compression_algorithm = LZ4
+#
+# ============================================
+# Control: non-encrypted table keeps the selected compression on its data CF
+# ============================================
+#
+CREATE TABLE plain_lz4 (
+id INT PRIMARY KEY,
+v  VARCHAR(200)
+) ENGINE=TIDESDB COMPRESSION='LZ4';
+# data CF: compression_algorithm = LZ4 (not encrypted, so compression stays)
+compression_algorithm = LZ4
+#
+# ============================================
+# Data still round-trips under an encrypted, compression-disabled CF
+# ============================================
+#
+INSERT INTO enc_lz4 VALUES (1, 10, 'alpha'), (2, 20, 'beta'), (3, 30, 'gamma');
+UPDATE enc_lz4 SET v = 'delta' WHERE id = 2;
+DELETE FROM enc_lz4 WHERE id = 3;
+SELECT * FROM enc_lz4 ORDER BY id;
+id	u	v
+1	10	alpha
+2	20	delta
+# covering index scan on the still-compressed index CF
+SELECT id FROM enc_lz4 WHERE u = 10;
+id
+1
+#
+# ============================================
+# TRUNCATE recreates the data CF with compression still off
+# ============================================
+#
+TRUNCATE TABLE enc_lz4;
+compression_algorithm = NONE
+compression_algorithm = LZ4
+DROP TABLE enc_lz4;
+DROP TABLE plain_lz4;
+#
+# Done.

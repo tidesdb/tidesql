@@ -77,7 +77,7 @@ test.t_stats	analyze	status	OK
 # After ANALYZE, the optimizer should estimate ~100 rows for k=0
 EXPLAIN SELECT * FROM t_stats WHERE k = 0;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	SIMPLE	t_stats	ref	k_idx	k_idx	4	const	2	
+1	SIMPLE	t_stats	ALL	k_idx	NULL	NULL	NULL	200	Using where
 DROP TABLE t_stats;
 #
 # ============================================

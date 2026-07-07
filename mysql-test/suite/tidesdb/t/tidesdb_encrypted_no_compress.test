@@ -1,0 +1,74 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# An encrypted table stores ciphertext in its data column family.  Ciphertext
+# does not compress, so the engine forces the data CF's compression off even
+# when the table selects a compression algorithm, avoiding wasted CPU on every
+# flush and compaction.  Secondary-index CFs hold unencrypted comparable keys
+# and must keep the selected compression.
+#
+# We verify by reading the per-CF config.ini the library writes at create time.
+# The data home is the sibling "tidesdb_data" directory of the server datadir.
+#
+
+--echo #
+--echo # ============================================
+--echo # Encrypted table: data CF compression forced off, index CF keeps it
+--echo # ============================================
+--echo #
+CREATE TABLE enc_lz4 (
+  id INT PRIMARY KEY,
+  u  INT,
+  v  VARCHAR(200),
+  KEY k_u (u)
+) ENGINE=TIDESDB `ENCRYPTED`=YES COMPRESSION='LZ4';
+
+--echo # the table still reports the requested COMPRESSION option to the user
+SHOW CREATE TABLE enc_lz4;
+
+--echo # data CF: compression_algorithm = NONE (ciphertext is incompressible)
+--exec grep '^compression_algorithm' $MYSQLTEST_VARDIR/mysqld.1/tidesdb_data/test__enc_lz4/config.ini
+--echo # index CF: compression_algorithm = LZ4 (unencrypted keys keep compression)
+--exec grep '^compression_algorithm' $MYSQLTEST_VARDIR/mysqld.1/tidesdb_data/test__enc_lz4__idx_k_u/config.ini
+
+--echo #
+--echo # ============================================
+--echo # Control: non-encrypted table keeps the selected compression on its data CF
+--echo # ============================================
+--echo #
+CREATE TABLE plain_lz4 (
+  id INT PRIMARY KEY,
+  v  VARCHAR(200)
+) ENGINE=TIDESDB COMPRESSION='LZ4';
+
+--echo # data CF: compression_algorithm = LZ4 (not encrypted, so compression stays)
+--exec grep '^compression_algorithm' $MYSQLTEST_VARDIR/mysqld.1/tidesdb_data/test__plain_lz4/config.ini
+
+--echo #
+--echo # ============================================
+--echo # Data still round-trips under an encrypted, compression-disabled CF
+--echo # ============================================
+--echo #
+INSERT INTO enc_lz4 VALUES (1, 10, 'alpha'), (2, 20, 'beta'), (3, 30, 'gamma');
+UPDATE enc_lz4 SET v = 'delta' WHERE id = 2;
+DELETE FROM enc_lz4 WHERE id = 3;
+SELECT * FROM enc_lz4 ORDER BY id;
+--echo # covering index scan on the still-compressed index CF
+SELECT id FROM enc_lz4 WHERE u = 10;
+
+--echo #
+--echo # ============================================
+--echo # TRUNCATE recreates the data CF with compression still off
+--echo # ============================================
+--echo #
+TRUNCATE TABLE enc_lz4;
+--exec grep '^compression_algorithm' $MYSQLTEST_VARDIR/mysqld.1/tidesdb_data/test__enc_lz4/config.ini
+--exec grep '^compression_algorithm' $MYSQLTEST_VARDIR/mysqld.1/tidesdb_data/test__enc_lz4__idx_k_u/config.ini
+
+DROP TABLE enc_lz4;
+DROP TABLE plain_lz4;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.
