@@ -205,7 +205,6 @@ jobs:
     - name: Install TidesDB library (macOS)
       if: runner.os == 'macOS'
       run: |
-        sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
         export SDKROOT=$(xcrun --show-sdk-path)
         
         rm -rf tidesdb-lib
@@ -296,7 +295,6 @@ jobs:
       if: runner.os == 'macOS'
       working-directory: mariadb-server
       run: |
-        sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
         
         sudo rm -rf /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk
         
