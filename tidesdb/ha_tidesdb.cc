@@ -9384,19 +9384,11 @@ int ha_tidesdb::info(uint flag)
             tidesdb_stats_t *st = NULL;
             if (tidesdb_get_stats(share->cf, &st) == TDB_SUCCESS && st)
             {
-                /* Prefer the distinct-key cardinality estimate for the row
-                   count.  Within an SSTable it counts each key once no matter
-                   how many MVCC versions it holds, which total_keys counts
-                   separately, so it is a tighter row estimate for the optimizer
-                   (it still upper-bounds a key spread across several SSTables).
-                   Fall back to total_keys when the library cannot supply it. */
+                /* Row estimate comes from this single get_stats pass.  total_keys
+                   counts every entry including MVCC versions, an upper bound the
+                   optimizer treats as conservative, and it avoids a second
+                   memtable-walking cardinality pass on the planning path. */
                 uint64_t rows = st->total_keys;
-                uint64_t est = 0;
-                /* The aggregate is always a real sum -- the per-SSTable
-                   TDB_DISTINCT_KEYS_UNKNOWN sentinel is resolved to that
-                   SSTable's entry count inside the library -- so success alone
-                   means the value is usable. */
-                if (tidesdb_cf_estimate_cardinality(share->cf, &est) == TDB_SUCCESS) rows = est;
                 share->cached_records.store(rows, std::memory_order_relaxed);
 
                 /* total_data_size only counts SSTable klog+vlog; memtable_size
@@ -9434,9 +9426,6 @@ int ha_tidesdb::info(uint flag)
 
                 tidesdb_free_stats(st);
             }
-
-            /* Also refresh SHOW GLOBAL STATUS variables while we're updating stats */
-            tidesdb_refresh_status_vars();
         }
 
         stats.records = share->cached_records.load(std::memory_order_relaxed);
@@ -11812,8 +11801,8 @@ static long long srv_stat_compaction_count;
    tidesdb_show_status can read them directly.  Their definitions live up
    there. */
 
-#define TIDESQL_VERSION_STR "4.5.9"
-#define TIDESQL_VERSION_HEX 0x40509
+#define TIDESQL_VERSION_STR "4.6.0"
+#define TIDESQL_VERSION_HEX 0x40600
 
 static const char *srv_stat_version = TIDESQL_VERSION_STR;
 static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;
@@ -11822,6 +11811,87 @@ static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;
    against (TIDESQL_VERSION above is the plugin/handler version, which is
    independent of the underlying library release). */
 static const char *srv_stat_library_version = TIDESDB_VERSION;
+
+/* Tombstone and density figures are diagnostics that only SHOW ENGINE TIDESDB
+   STATUS and the SHOW GLOBAL STATUS vars below read, never query planning.  Each
+   needs a per column family stats pass that walks the shared unified memtable, so
+   they are computed on demand when queried rather than kept warm by the background
+   refresher.  A short TTL folds the four reads of one SHOW STATUS statement into a
+   single pass. */
+static long long srv_tombstone_stats_last_us = 0;
+static void tidesdb_compute_tombstone_stats()
+{
+    if (!tdb_global) return;
+    long long now = (long long)microsecond_interval_timer();
+    if (srv_tombstone_stats_last_us != 0 && now - srv_tombstone_stats_last_us < 500000) return;
+    srv_tombstone_stats_last_us = now;
+
+    char **cf_names = NULL;
+    int cf_count = 0;
+    if (tidesdb_list_column_families(tdb_global, &cf_names, &cf_count) == TDB_SUCCESS && cf_names)
+    {
+        uint64_t total_tomb = 0, total_keys = 0;
+        double max_density = 0.0;
+        int max_density_level = 0;
+        for (int i = 0; i < cf_count; i++)
+        {
+            if (!cf_names[i]) continue;
+            tidesdb_column_family_t *cf = tidesdb_get_column_family(tdb_global, cf_names[i]);
+            if (!cf) continue;
+            tidesdb_stats_t *st = NULL;
+            if (tidesdb_get_stats(cf, &st) == TDB_SUCCESS && st)
+            {
+                total_tomb += st->total_tombstones;
+                total_keys += st->total_keys;
+                if (st->max_sst_density > max_density)
+                {
+                    max_density = st->max_sst_density;
+                    max_density_level = st->max_sst_density_level;
+                }
+                tidesdb_free_stats(st);
+            }
+        }
+        for (int i = 0; i < cf_count; i++) tidesdb_free(cf_names[i]);
+        tidesdb_free(cf_names);
+
+        srv_stat_total_tombstones = (long long)total_tomb;
+        srv_stat_tombstone_ratio = total_keys > 0 ? (double)total_tomb / (double)total_keys : 0.0;
+        srv_stat_max_sst_density = max_density;
+        srv_stat_max_sst_density_level = (long long)max_density_level;
+    }
+}
+static int tdb_show_total_tombstones(MYSQL_THD, struct st_mysql_show_var *var, void *,
+                                     struct system_status_var *, enum enum_var_type)
+{
+    tidesdb_compute_tombstone_stats();
+    var->type = SHOW_LONGLONG;
+    var->value = (char *)&srv_stat_total_tombstones;
+    return 0;
+}
+static int tdb_show_tombstone_ratio(MYSQL_THD, struct st_mysql_show_var *var, void *,
+                                    struct system_status_var *, enum enum_var_type)
+{
+    tidesdb_compute_tombstone_stats();
+    var->type = SHOW_DOUBLE;
+    var->value = (char *)&srv_stat_tombstone_ratio;
+    return 0;
+}
+static int tdb_show_max_sst_density(MYSQL_THD, struct st_mysql_show_var *var, void *,
+                                    struct system_status_var *, enum enum_var_type)
+{
+    tidesdb_compute_tombstone_stats();
+    var->type = SHOW_DOUBLE;
+    var->value = (char *)&srv_stat_max_sst_density;
+    return 0;
+}
+static int tdb_show_max_sst_density_level(MYSQL_THD, struct st_mysql_show_var *var, void *,
+                                          struct system_status_var *, enum enum_var_type)
+{
+    tidesdb_compute_tombstone_stats();
+    var->type = SHOW_LONGLONG;
+    var->value = (char *)&srv_stat_max_sst_density_level;
+    return 0;
+}
 
 static struct st_mysql_show_var tidesdb_status_variables[] = {
     {"tidesdb_version", (char *)&srv_stat_version, SHOW_CHAR_PTR},
@@ -11846,11 +11916,10 @@ static struct st_mysql_show_var tidesdb_status_variables[] = {
     {"tidesdb_cache_misses", (char *)&srv_stat_cache_misses, SHOW_LONGLONG},
     {"tidesdb_cache_hit_rate", (char *)&srv_stat_cache_hit_rate, SHOW_DOUBLE},
     {"tidesdb_cache_partitions", (char *)&srv_stat_cache_partitions, SHOW_LONGLONG},
-    {"tidesdb_total_tombstones", (char *)&srv_stat_total_tombstones, SHOW_LONGLONG},
-    {"tidesdb_tombstone_ratio", (char *)&srv_stat_tombstone_ratio, SHOW_DOUBLE},
-    {"tidesdb_max_sst_tombstone_density", (char *)&srv_stat_max_sst_density, SHOW_DOUBLE},
-    {"tidesdb_max_sst_tombstone_density_level", (char *)&srv_stat_max_sst_density_level,
-     SHOW_LONGLONG},
+    SHOW_FUNC_ENTRY("tidesdb_total_tombstones", &tdb_show_total_tombstones),
+    SHOW_FUNC_ENTRY("tidesdb_tombstone_ratio", &tdb_show_tombstone_ratio),
+    SHOW_FUNC_ENTRY("tidesdb_max_sst_tombstone_density", &tdb_show_max_sst_density),
+    SHOW_FUNC_ENTRY("tidesdb_max_sst_tombstone_density_level", &tdb_show_max_sst_density_level),
     {"tidesdb_backpressure_waits", (char *)&srv_stat_backpressure_waits, SHOW_LONGLONG},
     {"tidesdb_backpressure_wait_us", (char *)&srv_stat_backpressure_wait_us, SHOW_LONGLONG},
     {"tidesdb_lock_waits", (char *)&srv_stat_lock_waits, SHOW_LONGLONG},
@@ -11959,44 +12028,8 @@ static void tidesdb_refresh_status_vars()
     srv_stat_flush_count = (long long)db_st.flush_count;
     srv_stat_compaction_count = (long long)db_st.compaction_count;
 
-    /* Tombstone aggregates -- we walk every CF once, summing total_tombstones
-       and tracking the worst single-SSTable density.
-       tidesdb_db_stats_t does not surface tombstone counters, so the CF
-       list is iterated here.  SHOW GLOBAL STATUS reads the resulting
-       statics. */
-    char **cf_names = NULL;
-    int cf_count = 0;
-    if (tidesdb_list_column_families(tdb_global, &cf_names, &cf_count) == TDB_SUCCESS && cf_names)
-    {
-        uint64_t total_tomb = 0, total_keys = 0;
-        double max_density = 0.0;
-        int max_density_level = 0;
-        for (int i = 0; i < cf_count; i++)
-        {
-            if (!cf_names[i]) continue;
-            tidesdb_column_family_t *cf = tidesdb_get_column_family(tdb_global, cf_names[i]);
-            if (!cf) continue;
-            tidesdb_stats_t *st = NULL;
-            if (tidesdb_get_stats(cf, &st) == TDB_SUCCESS && st)
-            {
-                total_tomb += st->total_tombstones;
-                total_keys += st->total_keys;
-                if (st->max_sst_density > max_density)
-                {
-                    max_density = st->max_sst_density;
-                    max_density_level = st->max_sst_density_level;
-                }
-                tidesdb_free_stats(st);
-            }
-        }
-        for (int i = 0; i < cf_count; i++) tidesdb_free(cf_names[i]);
-        tidesdb_free(cf_names);
-
-        srv_stat_total_tombstones = (long long)total_tomb;
-        srv_stat_tombstone_ratio = total_keys > 0 ? (double)total_tomb / (double)total_keys : 0.0;
-        srv_stat_max_sst_density = max_density;
-        srv_stat_max_sst_density_level = (long long)max_density_level;
-    }
+    /* Tombstone and density figures are computed on demand in their SHOW_FUNC
+       callbacks, keeping this per second refresher clear of the per CF stats pass. */
 }
 
 /* ******************** Plugin declaration ******************** */
