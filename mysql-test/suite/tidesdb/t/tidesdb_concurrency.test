@@ -435,7 +435,12 @@ while ($i <= 200)
 
 --enable_query_log
 
-# Commit both
+# Commit both concurrently.  Under optimistic MVCC two transactions committing
+# at the same moment can lose to a retryable conflict (1180/1213) even on
+# disjoint keys, so the commit is allowed to return one of those and the losing
+# transaction is replayed -- exactly the deadlock-retry an application must do,
+# and what the sibling concurrency tests already codify.  The replay is
+# uncontended, so the 200-row set is preserved either way.
 connection bulk1;
 send COMMIT;
 
@@ -443,10 +448,44 @@ connection bulk2;
 send COMMIT;
 
 connection bulk1;
+--error 0,ER_LOCK_DEADLOCK,ER_ERROR_DURING_COMMIT
 reap;
+let $err1= $mysql_errno;
 
 connection bulk2;
+--error 0,ER_LOCK_DEADLOCK,ER_ERROR_DURING_COMMIT
 reap;
+let $err2= $mysql_errno;
+
+if ($err1)
+{
+  connection bulk1;
+  BEGIN;
+  --disable_query_log
+  let $i= 1;
+  while ($i <= 100)
+  {
+    eval INSERT INTO stress_bulk VALUES ($i, CONCAT('b1_', $i));
+    inc $i;
+  }
+  --enable_query_log
+  COMMIT;
+}
+
+if ($err2)
+{
+  connection bulk2;
+  BEGIN;
+  --disable_query_log
+  let $i= 101;
+  while ($i <= 200)
+  {
+    eval INSERT INTO stress_bulk VALUES ($i, CONCAT('b2_', $i));
+    inc $i;
+  }
+  --enable_query_log
+  COMMIT;
+}
 
 # Bulk3: read while data settles
 connection bulk3;

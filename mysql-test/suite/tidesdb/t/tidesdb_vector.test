@@ -23,9 +23,16 @@ CREATE TABLE docs (
   VECTOR INDEX (v)
 ) ENGINE=TidesDB;
 
+# origin-y and origin-z are deliberately at different distances from the query
+# point [1,0,0,0]: a plain unit-y and unit-z would both sit at exactly sqrt(2),
+# an exact tie whose order in a LIMIT-k result is not defined and resolves
+# differently run to run and across platforms.  origin-z carries a small fourth
+# component so it is unambiguously farther, keeping every kNN result below
+# deterministic without a secondary sort key (which would disable the vector
+# index).
 INSERT INTO docs VALUES (1, 'origin-x', Vec_FromText('[1.0, 0.0, 0.0, 0.0]'));
 INSERT INTO docs VALUES (2, 'origin-y', Vec_FromText('[0.0, 1.0, 0.0, 0.0]'));
-INSERT INTO docs VALUES (3, 'origin-z', Vec_FromText('[0.0, 0.0, 1.0, 0.0]'));
+INSERT INTO docs VALUES (3, 'origin-z', Vec_FromText('[0.0, 0.0, 1.0, 0.4]'));
 INSERT INTO docs VALUES (4, 'near-x',   Vec_FromText('[0.9, 0.1, 0.0, 0.0]'));
 INSERT INTO docs VALUES (5, 'center',   Vec_FromText('[0.5, 0.5, 0.5, 0.5]'));
 
