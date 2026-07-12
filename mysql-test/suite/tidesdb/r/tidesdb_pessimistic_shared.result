@@ -8,8 +8,8 @@ connect  s1, localhost, root,,;
 connect  s2, localhost, root,,;
 connect  s3, localhost, root,,;
 #
-# TEST 1: S / S compatible under REPEATABLE-READ
-#         Both s1 and s2 acquire S on the same row, neither blocks.
+# TEST 1: two plain reads under REPEATABLE-READ run concurrently,
+#         neither takes a lock and neither blocks.
 #
 connection s1;
 SET SESSION transaction_isolation = 'REPEATABLE-READ';
@@ -23,7 +23,7 @@ BEGIN;
 SELECT bal FROM acct WHERE id = 1;
 bal
 100
-# Both holders of S read successfully -- no deadlock, no block.
+# Both read successfully -- no lock, no block.
 connection default;
 SELECT bal FROM acct WHERE id = 1;
 bal
@@ -33,17 +33,11 @@ COMMIT;
 connection s2;
 COMMIT;
 #
-# TEST 2: X waits for S readers, then proceeds
-#         s1 + s2 hold S; s3 fires UPDATE that must wait until
-#         both readers release.
+# TEST 2: a plain read does NOT block a writer.  s1 keeps an open
+#         REPEATABLE-READ snapshot on the row while s3 updates it and
+#         commits immediately -- no lock wait.
 #
 connection s1;
-SET SESSION transaction_isolation = 'REPEATABLE-READ';
-BEGIN;
-SELECT bal FROM acct WHERE id = 1;
-bal
-100
-connection s2;
 SET SESSION transaction_isolation = 'REPEATABLE-READ';
 BEGIN;
 SELECT bal FROM acct WHERE id = 1;
@@ -52,11 +46,8 @@ bal
 connection s3;
 BEGIN;
 UPDATE acct SET bal = bal + 50 WHERE id = 1;
+COMMIT;
 connection s1;
-COMMIT;
-connection s2;
-COMMIT;
-connection s3;
 COMMIT;
 connection default;
 # 100 + 50 = 150
@@ -64,44 +55,33 @@ SELECT bal FROM acct WHERE id = 1;
 bal
 150
 #
-# TEST 3: writer fairness -- new S blocks behind a waiting X
-#         s1 holds S; s2 fires UPDATE (X-waiting); s3 fires a
-#         SELECT under REPEATABLE-READ that wants S.  s3 must
-#         NOT jump ahead of s2's queued X.
+# TEST 3: write-intent still locks.  s1 holds SELECT ... FOR UPDATE
+#         (X on the row); s3's UPDATE must wait until s1 commits.
 #
-UPDATE acct SET bal = 200 WHERE id = 1;
-connection s1;
-SET SESSION transaction_isolation = 'REPEATABLE-READ';
-BEGIN;
-SELECT bal FROM acct WHERE id = 1;
-bal
-200
 connection default;
-connection s2;
+connection s1;
+BEGIN;
+SELECT bal FROM acct WHERE id = 1 FOR UPDATE;
+bal
+150
+connection s3;
 BEGIN;
 UPDATE acct SET bal = bal + 1 WHERE id = 1;
 connection default;
-connection s3;
-SET SESSION transaction_isolation = 'REPEATABLE-READ';
-BEGIN;
-SELECT bal FROM acct WHERE id = 1;
 connection s1;
-COMMIT;
-connection s2;
 COMMIT;
 connection s3;
 COMMIT;
 connection default;
-# s2 incremented 200 -> 201; s3 then read either 200 or 201 (both valid)
+# 150 + 1 = 151
 SELECT bal FROM acct WHERE id = 1;
 bal
-201
+151
 #
-# TEST 4: READ-COMMITTED reads take no lock
-#         s1 holds an uncommitted X via UPDATE; s2 under RC reads
-#         the latest committed value without blocking.
+# TEST 4: reads take no lock even with an uncommitted X held.  s1 holds
+#         an uncommitted UPDATE (X); s2 under READ-COMMITTED reads the
+#         latest committed value without blocking.
 #
-UPDATE acct SET bal = 300 WHERE id = 1;
 connection s1;
 BEGIN;
 UPDATE acct SET bal = bal + 100 WHERE id = 1;
@@ -110,15 +90,15 @@ SET SESSION transaction_isolation = 'READ-COMMITTED';
 BEGIN;
 SELECT bal FROM acct WHERE id = 1;
 bal
-300
+151
 COMMIT;
 connection s1;
 COMMIT;
 connection default;
-# 300 + 100 = 400
+# 151 + 100 = 251
 SELECT bal FROM acct WHERE id = 1;
 bal
-400
+251
 #
 # Cleanup
 #
