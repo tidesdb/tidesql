@@ -1,10 +1,11 @@
 --source include/have_tidesdb.inc
 #
-# S to X upgrade behaviour.  The lock manager allows a sole S holder to
-# upgrade in place.  When another trx also holds S the upgrade cannot
-# succeed without blocking on the trx's own S grant, so the manager
-# rejects the request with HA_ERR_LOCK_DEADLOCK rather than create a
-# self-deadlock.  Two scenarios verify both branches.
+# Read-then-write within a transaction (InnoDB parity).
+#
+# Plain reads take no lock, so a transaction that reads a row and then updates
+# it just acquires an X lock at the write -- there is no shared lock to upgrade
+# and no self-deadlock.  Concurrent plain readers on the same row hold nothing,
+# so a writer among them acquires X and proceeds without a deadlock.
 #
 
 call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
@@ -20,7 +21,7 @@ connect (a, localhost, root,,);
 connect (b, localhost, root,,);
 
 --echo #
---echo # Scenario 1, sole holder upgrades cleanly.
+--echo # Scenario 1, a single transaction reads then writes the same row.
 --echo #
 connection a;
 SET SESSION transaction_isolation = 'REPEATABLE-READ';
@@ -30,10 +31,13 @@ UPDATE u SET v = v + 10 WHERE id = 1;
 COMMIT;
 
 connection default;
+--echo # 100 + 10 = 110
 SELECT * FROM u WHERE id = 1;
 
 --echo #
---echo # Scenario 2, two S holders, one tries to upgrade, must be rejected.
+--echo # Scenario 2, two transactions read the row, then one writes it.  The
+--echo #         plain reads take no lock, so the write acquires X and commits
+--echo #         -- no upgrade, no deadlock.
 --echo #
 connection a;
 SET SESSION transaction_isolation = 'REPEATABLE-READ';
@@ -45,18 +49,15 @@ SET SESSION transaction_isolation = 'REPEATABLE-READ';
 BEGIN;
 SELECT v FROM u WHERE id = 1;
 
-# a holds S, b holds S.  a tries to upgrade to X.  Allowed-when-sole
-# rule fails, manager returns HA_ERR_LOCK_DEADLOCK.
 connection a;
---error ER_LOCK_DEADLOCK
 UPDATE u SET v = v + 1 WHERE id = 1;
-ROLLBACK;
+COMMIT;
 
 connection b;
 COMMIT;
 
 connection default;
---echo # Row 1 unchanged from scenario 2.
+--echo # 110 + 1 = 111
 SELECT * FROM u WHERE id = 1;
 
 disconnect a;

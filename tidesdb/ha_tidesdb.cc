@@ -1170,24 +1170,22 @@ static bool stmt_savepoint_rollback(tidesdb_trx_t *trx)
     return true;
 }
 
-/* Pick the lock mode for a row materialised on a read path, or report
-   that no lock is needed.
-     - write_intent ........ X (covers SELECT FOR UPDATE / UPDATE / DELETE)
-     - REPEATABLE_READ / SERIALIZABLE ... S (prevents concurrent modification
-       of read rows within the txn; phantom prevention is incomplete
-       because we have no range/gap locks, only row locks)
-     - READ_COMMITTED / SNAPSHOT ... no lock (MVCC snapshot suffices) */
+/* Pick the lock mode for a row materialised on a read path, or report that no
+   lock is needed.  Only write-intent statements lock, and they take X.  That
+   covers UPDATE, DELETE, SELECT FOR UPDATE and SELECT IN SHARE MODE, all of
+   which reach this path with write_intent already set by store_lock.  Plain
+   reads never lock at any isolation level.  The library enforces the level from
+   its MVCC snapshot on its own, tracking the read set under REPEATABLE_READ and
+   SERIALIZABLE and aborting a conflicting transaction at commit, which the
+   plugin surfaces as HA_ERR_LOCK_DEADLOCK for MariaDB to retry.  A shared lock
+   on every read row would only duplicate that guarantee while charging an
+   allocation for each row a scan walks past. */
 static inline bool tdb_lock_mode_for_read(THD *thd, bool write_intent, tdb_lock_mode_t *mode)
 {
+    (void)thd;
     if (write_intent)
     {
         *mode = TDB_LOCK_MODE_X;
-        return true;
-    }
-    int iso = thd ? thd_tx_isolation(thd) : ISO_READ_COMMITTED;
-    if (iso == ISO_REPEATABLE_READ || iso == ISO_SERIALIZABLE)
-    {
-        *mode = TDB_LOCK_MODE_S;
         return true;
     }
     return false;
@@ -2820,22 +2818,24 @@ static MYSQL_SYSVAR_BOOL(print_all_conflicts, srv_print_all_conflicts, PLUGIN_VA
                          "(similar to innodb_print_all_deadlocks)",
                          NULL, NULL, 0);
 
-static MYSQL_SYSVAR_BOOL(pessimistic_locking, srv_pessimistic_locking, PLUGIN_VAR_RQCMDARG,
-                         "Enable plugin-level row locks for SELECT ... FOR UPDATE, "
-                         "UPDATE, DELETE, and INSERT on user-defined primary keys. "
-                         "ON (default): write-intent statements acquire per-row X locks "
-                         "and plain reads under REPEATABLE_READ / SERIALIZABLE acquire "
-                         "S locks; multiple S holders coexist, S blocks while an X is "
-                         "waiting (writer fairness).  Deadlock detection via wait-for "
-                         "graph traversal; bounded by tidesdb_lock_wait_timeout_ms.  "
-                         "Locks held until COMMIT or ROLLBACK.  Both explicit and "
-                         "autocommit transactions participate.  Locks can be acquired "
-                         "on non-existing keys (e.g. SFU on a missing row blocks INSERT "
-                         "of that key). "
-                         "OFF: pure optimistic MVCC -- concurrent writers on the same "
-                         "row are detected at COMMIT time (TDB_ERR_CONFLICT) and the "
-                         "application must retry",
-                         NULL, NULL, 1);
+static MYSQL_SYSVAR_BOOL(
+    pessimistic_locking, srv_pessimistic_locking, PLUGIN_VAR_RQCMDARG,
+    "Enable plugin-level row locks for SELECT ... FOR UPDATE, "
+    "UPDATE, DELETE, and INSERT on user-defined primary keys. "
+    "ON (default): write-intent statements acquire per-row X locks "
+    "so concurrent writers on the same key wait rather than aborting "
+    "at commit.  Plain reads never lock; their isolation comes from "
+    "the library's MVCC snapshot and commit-time conflict detection.  "
+    "Multiple X waiters queue with writer fairness.  Deadlock detection via wait-for "
+    "graph traversal; bounded by tidesdb_lock_wait_timeout_ms.  "
+    "Locks held until COMMIT or ROLLBACK.  Both explicit and "
+    "autocommit transactions participate.  Locks can be acquired "
+    "on non-existing keys (e.g. SFU on a missing row blocks INSERT "
+    "of that key). "
+    "OFF: pure optimistic MVCC -- concurrent writers on the same "
+    "row are detected at COMMIT time (TDB_ERR_CONFLICT) and the "
+    "application must retry",
+    NULL, NULL, 1);
 
 static MYSQL_SYSVAR_ULONG(fts_min_word_len, srv_fts_min_word_len, PLUGIN_VAR_RQCMDARG,
                           "Minimum word length (in characters) for full-text indexing. "
@@ -6747,9 +6747,11 @@ int ha_tidesdb::fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len
     /* Pessimistic row lock for point reads.  Covers both the direct PK
        lookup path (HA_READ_KEY_EXACT) and the secondary-index resolved-PK
        path (sec idx returns [prefix][pk]; caller passes the suffix here).
-       Mode is X for write-intent, S under RR/SR for plain reads; RC/SI
-       reads take no lock (snapshot suffices).  Re-entrant -- a no-op when
-       the caller already holds the lock in a compatible-or-stronger mode. */
+       Only write-intent statements lock here, taking X.  Plain reads take no
+       lock at any isolation level because the library's MVCC snapshot and
+       commit-time conflict detection already enforce it.  Re-entrant -- a
+       no-op when the caller already holds the lock in a compatible-or-stronger
+       mode. */
     if (unlikely(srv_pessimistic_locking) && cached_trx_)
     {
         tdb_lock_mode_t mode;
@@ -6872,9 +6874,10 @@ int ha_tidesdb::iter_read_current(uchar *buf)
         current_pk_len_ = (uint)(key_size - KEY_NAMESPACE_LEN);
         memcpy(current_pk_buf_, key + KEY_NAMESPACE_LEN, current_pk_len_);
 
-        /* Pessimistic row lock for range/prefix scans.  Mode chosen by
-           write-intent + session isolation; covers SELECT ... FOR UPDATE
-           plus plain SELECT under RR/SR.
+        /* Pessimistic row lock for range/prefix scans.  Only write-intent
+           statements lock, so this covers SELECT ... FOR UPDATE and SELECT
+           ... IN SHARE MODE; plain SELECT walks the scan without locking and
+           relies on the library's snapshot isolation.
 
            Under UPDATE/DELETE we deliberately skip the lock here so a
            secondary-index scan with ICP does not X-lock every PK it walks
@@ -11801,8 +11804,8 @@ static long long srv_stat_compaction_count;
    tidesdb_show_status can read them directly.  Their definitions live up
    there. */
 
-#define TIDESQL_VERSION_STR "4.6.0"
-#define TIDESQL_VERSION_HEX 0x40600
+#define TIDESQL_VERSION_STR "4.6.1"
+#define TIDESQL_VERSION_HEX 0x40601
 
 static const char *srv_stat_version = TIDESQL_VERSION_STR;
 static long long srv_stat_version_hex = TIDESQL_VERSION_HEX;

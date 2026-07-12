@@ -7,7 +7,7 @@ INSERT INTO u VALUES (1, 100);
 connect  a, localhost, root,,;
 connect  b, localhost, root,,;
 #
-# Scenario 1, sole holder upgrades cleanly.
+# Scenario 1, a single transaction reads then writes the same row.
 #
 connection a;
 SET SESSION transaction_isolation = 'REPEATABLE-READ';
@@ -18,11 +18,14 @@ v
 UPDATE u SET v = v + 10 WHERE id = 1;
 COMMIT;
 connection default;
+# 100 + 10 = 110
 SELECT * FROM u WHERE id = 1;
 id	v
 1	110
 #
-# Scenario 2, two S holders, one tries to upgrade, must be rejected.
+# Scenario 2, two transactions read the row, then one writes it.  The
+#         plain reads take no lock, so the write acquires X and commits
+#         -- no upgrade, no deadlock.
 #
 connection a;
 SET SESSION transaction_isolation = 'REPEATABLE-READ';
@@ -38,15 +41,14 @@ v
 110
 connection a;
 UPDATE u SET v = v + 1 WHERE id = 1;
-ERROR 40001: Deadlock found when trying to get lock; try restarting transaction
-ROLLBACK;
+COMMIT;
 connection b;
 COMMIT;
 connection default;
-# Row 1 unchanged from scenario 2.
+# 110 + 1 = 111
 SELECT * FROM u WHERE id = 1;
 id	v
-1	110
+1	111
 disconnect a;
 disconnect b;
 connection default;
