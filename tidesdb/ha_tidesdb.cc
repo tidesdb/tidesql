@@ -1091,14 +1091,13 @@ static struct st_mysql_storage_engine tidesdb_storage_engine = {MYSQL_HANDLERTON
 maria_declare_plugin(tidesdb){MYSQL_STORAGE_ENGINE_PLUGIN,
                               &tidesdb_storage_engine,
                               "TidesDB",
-                              "TidesDB",
-                              "LSM-tree engine with ACID transactions, MVCC concurrency, "
-                              "secondary/spatial/full-text/vector indexes, and encryption",
-                              PLUGIN_LICENSE_GPL,
+                              PLUGIN_AUTHOR,
+                              PLUGIN_DESCRIPTION,
+                              PLUGIN_LICENSE,
                               tidesdb_init_func,
                               tidesdb_deinit_func,
-                              TIDESQL_VERSION_HEX,
+                              PLUGIN_HEX_VERSION,
                               tidesdb_status_variables,
                               tidesdb_system_variables,
-                              TIDESQL_VERSION_STR,
-                              MariaDB_PLUGIN_MATURITY_GAMMA} maria_declare_plugin_end;
+                              PLUGIN_VERSION,
+                              MariaDB_PLUGIN_MATURITY_BETA} maria_declare_plugin_end;

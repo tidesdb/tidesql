@@ -678,7 +678,7 @@ int ha_tidesdb::get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_
     return 0;
 }
 
-#if MYSQL_VERSION_ID >= 110700
+#if MYSQL_VERSION_ID >= 110400
 bool ha_tidesdb::referenced_by_foreign_key() const noexcept
 {
     return share && !share->fk_parent.empty();
