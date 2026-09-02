@@ -23,13 +23,14 @@
    merge all live in the library iterator; this unit sets the cursor up and materializes each hit
    back into a server row. */
 
+#include "ha_tidesdb.h"
+
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
 #include <cstring>
 #include <string>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

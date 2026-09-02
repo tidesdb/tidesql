@@ -22,11 +22,12 @@
    reads these while planning; none touch stored data, they only translate table statistics and
    index metadata into the handler's cost model. */
 
+#include "ha_tidesdb.h"
+
 #include <mysql/plugin.h>
 
 #include <cstring>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

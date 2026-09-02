@@ -20,10 +20,11 @@
    data-at-rest encryption envelope wrapped around it. serialize_row builds it from a server record,
    deserialize_row rebuilds a record from any prior schema's bytes. */
 
+#include "ha_tidesdb.h"
+
 #include <cstring>
 #include <string>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

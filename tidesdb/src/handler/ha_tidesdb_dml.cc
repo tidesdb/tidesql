@@ -21,6 +21,8 @@
    batches. update_row lives in ha_tidesdb_dml_update.cc; the TRUNCATE path delete_all_rows stays
    in ha_tidesdb.cc with the column-family config builders it depends on. */
 
+#include "ha_tidesdb.h"
+
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
@@ -29,7 +31,6 @@
 #include <string>
 #include <vector>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

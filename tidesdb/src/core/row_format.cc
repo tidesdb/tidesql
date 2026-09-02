@@ -10,9 +10,9 @@
  * GNU General Public License for more details.
  */
 
-#include "row_format.h"
-
 #include <cstring>
+
+#include "row_format.h"
 
 namespace tidesdb
 {

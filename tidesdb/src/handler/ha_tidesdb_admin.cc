@@ -22,11 +22,12 @@
    these sit on a hot path; they translate an admin request into the matching library operation and
    report the outcome back through the handler admin-status codes. */
 
+#include "ha_tidesdb.h"
+
 #include <mysql/plugin.h>
 
 #include <string>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

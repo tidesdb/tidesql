@@ -21,13 +21,14 @@
    auto-increment and row-count state from the stored rows.  the column-family configuration these
    build from comes from the shared config builders. */
 
+#include "ha_tidesdb.h"
+
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
 #include <string>
 #include <vector>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

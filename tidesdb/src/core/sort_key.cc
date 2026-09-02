@@ -10,9 +10,9 @@
  * GNU General Public License for more details.
  */
 
-#include "sort_key.h"
-
 #include <cstring>
+
+#include "sort_key.h"
 
 namespace tidesdb
 {

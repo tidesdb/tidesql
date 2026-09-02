@@ -20,7 +20,7 @@
    context. the pure tokenizer and scorer math live in tidesdb::fts and tidesdb::fts_score; this
    unit is the server-coupled glue and the index/query paths. */
 
-#include "src/handler/ha_tidesdb_fts.h"
+#include "ha_tidesdb.h"
 
 #include <ft_global.h>
 #include <mysql/plugin.h>
@@ -32,12 +32,12 @@
 #include <unordered_set>
 #include <vector>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"
 #include "src/core/fts_score.h"
 #include "src/core/fts_text.h"
+#include "src/handler/ha_tidesdb_fts.h"
 #include "src/handler/ha_tidesdb_fts_internal.h"
 #include "src/handler/ha_tidesdb_internal.h"
 

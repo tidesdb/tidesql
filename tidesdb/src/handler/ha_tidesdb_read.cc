@@ -21,11 +21,12 @@
    the row into the transaction read set.  the decode itself is deserialize_row; this unit only
    drives the library get or iterator and hands the bytes off. */
 
+#include "ha_tidesdb.h"
+
 #include <mysql/plugin.h>
 
 #include <cstring>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

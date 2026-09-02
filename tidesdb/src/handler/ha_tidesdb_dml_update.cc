@@ -20,6 +20,8 @@
    UNIQUE secondary constraints and folding fts meta deltas into the transaction.  the per-concern
    steps are split into helpers so the driver stays a readable sequence. */
 
+#include "ha_tidesdb.h"
+
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
@@ -28,7 +30,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

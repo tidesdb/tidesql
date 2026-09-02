@@ -15,7 +15,7 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
-#include "src/handler/ha_tidesdb_txn.h"
+#include "ha_tidesdb.h"
 
 #include <mysql/plugin.h>
 
@@ -24,13 +24,13 @@
 #include <string>
 #include <vector>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"
 #include "src/engine/ha_tidesdb_config.h"
 #include "src/handler/ha_tidesdb_fts.h"
 #include "src/handler/ha_tidesdb_internal.h"
+#include "src/handler/ha_tidesdb_txn.h"
 
 /* Prepared transactions awaiting their phase-two decision, keyed by the serialized XID.  An
    external XA PREPARE hands its library transaction here and detaches it from the connection, and

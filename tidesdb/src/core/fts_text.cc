@@ -10,9 +10,9 @@
  * GNU General Public License for more details.
  */
 
-#include "fts_text.h"
-
 #include <cstring>
+
+#include "fts_text.h"
 
 namespace tidesdb
 {

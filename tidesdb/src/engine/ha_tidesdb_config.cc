@@ -20,14 +20,14 @@
    all build from.  keeping the mapping here means a new per-cf knob is wired in one place rather
    than duplicated across every path that opens a column family. */
 
-#include "src/engine/ha_tidesdb_config.h"
+#include "ha_tidesdb.h"
 
 #include <mysql/plugin.h>
 
 #include <string>
 
-#include "ha_tidesdb.h"
 #include "sql_class.h"
+#include "src/engine/ha_tidesdb_config.h"
 
 /* enum-index to library-constant maps for the COMPRESSION, ISOLATION_LEVEL, and db-level sync-mode
    options; the option list stores the small enum index and these translate it at build time. */

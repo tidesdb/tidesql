@@ -21,16 +21,16 @@
    per-part decode math lives in the server-free tidesdb::sort_key core; this unit is the
    server-coupled glue plus the pk/secondary key builders and the index-condition-pushdown check. */
 
-#include "src/handler/ha_tidesdb_keycodec.h"
+#include "ha_tidesdb.h"
 
 #include <cstring>
 #include <string>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"
 #include "src/core/sort_key.h"
+#include "src/handler/ha_tidesdb_keycodec.h"
 #include "src/handler/ha_tidesdb_spatial.h"
 
 /* ******************** PK / Index key helpers ******************** */

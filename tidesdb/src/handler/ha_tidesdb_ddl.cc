@@ -22,13 +22,14 @@
    reports when a metadata-only change can skip a table rebuild.  the column-family config the new
    indexes are built from comes from the shared config builders. */
 
+#include "ha_tidesdb.h"
+
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
 #include <string>
 #include <vector>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

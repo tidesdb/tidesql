@@ -15,11 +15,12 @@
   until the follow-up increment wires the child-handler rewrite path.
 */
 
+#include "ha_tidesdb.h"
+
 #include <cstring>
 #include <string>
 #include <vector>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

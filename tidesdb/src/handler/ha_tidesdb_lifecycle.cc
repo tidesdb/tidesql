@@ -22,19 +22,19 @@
    column-family directory removal and translate a server path into the base names the library keys
    its column families by. */
 
-#include "src/handler/ha_tidesdb_lifecycle.h"
+#include "ha_tidesdb.h"
 
 #include <mysql/plugin.h>
 
 #include <string>
 #include <vector>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"
 #include "src/engine/ha_tidesdb_config.h"
 #include "src/handler/ha_tidesdb_internal.h"
+#include "src/handler/ha_tidesdb_lifecycle.h"
 int ha_tidesdb::rename_table(const char *from, const char *to)
 {
     DBUG_ENTER("ha_tidesdb::rename_table");

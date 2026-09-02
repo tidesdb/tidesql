@@ -22,13 +22,14 @@
    live in the library iterator; this unit builds the seek keys and materializes each hit into a
    row. */
 
+#include "ha_tidesdb.h"
+
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
 #include <cstring>
 #include <string>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"

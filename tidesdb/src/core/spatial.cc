@@ -10,13 +10,13 @@
  * GNU General Public License for more details.
  */
 
-#include "spatial.h"
-
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
 #include <cmath>
 #include <cstring>
+
+#include "spatial.h"
 
 namespace tidesdb
 {

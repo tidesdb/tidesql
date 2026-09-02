@@ -10,9 +10,9 @@
  * GNU General Public License for more details.
  */
 
-#include "fts_score.h"
-
 #include <cmath>
+
+#include "fts_score.h"
 
 namespace tidesdb
 {

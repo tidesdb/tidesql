@@ -19,7 +19,7 @@
    the counters are refreshed on demand behind a short ttl (no background thread); tombstone and
    density figures are aggregated lazily in their SHOW_FUNC callbacks. */
 
-#include "src/engine/ha_tidesdb_status.h"
+#include "ha_tidesdb.h"
 
 #include <mysql/plugin.h>
 #include <tidesdb/tidesdb_version.h>
@@ -28,10 +28,10 @@
 #include <cstring>
 #include <string>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"
+#include "src/engine/ha_tidesdb_status.h"
 #include "src/handler/ha_tidesdb_internal.h"
 
 static void tidesdb_refresh_status_vars();

@@ -20,6 +20,8 @@
    tokenizer, boolean parser, and inverted-index maintenance it leans on live in ha_tidesdb_fts.cc.
  */
 
+#include "ha_tidesdb.h"
+
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
@@ -30,7 +32,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"
