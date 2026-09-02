@@ -8,14 +8,13 @@
 /* unit tests for the server-free fts text core. the tests bring their own tiny charsets in
  * place of CHARSET_INFO, an ascii one and a minimal utf-8 one, which is enough to drive the
  * tokenizer's multibyte path and the boolean parser. */
-#include "../src/core/fts_text.h"
-
 #include <cctype>
 #include <cstring>
 #include <string>
 #include <unordered_set>
 #include <vector>
 
+#include "../src/core/fts_text.h"
 #include "test_utils.h"
 
 using namespace tidesdb::fts;
@@ -26,8 +25,14 @@ static int tests_failed = 0;
 /* ascii charset, every byte single width. */
 struct ascii_charset : charset
 {
-    unsigned mbchar_len(const char *, const char *) const override { return 0; }
-    bool is_alnum(unsigned char c) const override { return std::isalnum(c) != 0; }
+    unsigned mbchar_len(const char *, const char *) const override
+    {
+        return 0;
+    }
+    bool is_alnum(unsigned char c) const override
+    {
+        return std::isalnum(c) != 0;
+    }
     std::string casedn(const char *s, size_t len) const override
     {
         std::string r(s, len);
@@ -57,7 +62,10 @@ struct utf8_charset : charset
             if (((unsigned char)p[i] & 0xC0) != 0x80) return 0;
         return n;
     }
-    bool is_alnum(unsigned char c) const override { return c < 0x80 && std::isalnum(c) != 0; }
+    bool is_alnum(unsigned char c) const override
+    {
+        return c < 0x80 && std::isalnum(c) != 0;
+    }
     std::string casedn(const char *s, size_t len) const override
     {
         std::string r(s, len);
@@ -75,7 +83,10 @@ static bool contains(const std::vector<std::string> &v, const std::string &w)
 }
 
 /* local little-endian read so the test does not reach into the module's internals. */
-static uint16_t load_test_u16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+static uint16_t load_test_u16(const uint8_t *p)
+{
+    return (uint16_t)(p[0] | (p[1] << 8));
+}
 
 void test_entry_value_roundtrip(void)
 {
@@ -101,7 +112,8 @@ void test_meta_value_roundtrip(void)
     ASSERT_TRUE(decode_meta_value(buf, META_VALUE_LEN, &docs, &words));
     ASSERT_EQ(docs, 9000000000LL);
     ASSERT_EQ(words, 42LL);
-    for (size_t l = 0; l < META_VALUE_LEN; l++) ASSERT_FALSE(decode_meta_value(buf, l, &docs, &words));
+    for (size_t l = 0; l < META_VALUE_LEN; l++)
+        ASSERT_FALSE(decode_meta_value(buf, l, &docs, &words));
 }
 
 void test_build_key_layout_and_truncation(void)
@@ -137,13 +149,13 @@ void test_build_blend_map(void)
 void test_phrase_in_tokens(void)
 {
     std::vector<std::string> doc = {"the", "quick", "brown", "fox", "jumps"};
-    ASSERT_TRUE(phrase_in_tokens(doc, {}));                        /* empty phrase */
-    ASSERT_TRUE(phrase_in_tokens(doc, {"quick", "brown"}));        /* middle */
-    ASSERT_TRUE(phrase_in_tokens(doc, {"the", "quick"}));          /* start */
-    ASSERT_TRUE(phrase_in_tokens(doc, {"fox", "jumps"}));          /* end */
-    ASSERT_FALSE(phrase_in_tokens(doc, {"brown", "quick"}));       /* wrong order */
-    ASSERT_FALSE(phrase_in_tokens(doc, {"quick", "fox"}));         /* not consecutive */
-    ASSERT_FALSE(phrase_in_tokens({"a"}, {"a", "b"}));             /* phrase longer than doc */
+    ASSERT_TRUE(phrase_in_tokens(doc, {}));                  /* empty phrase */
+    ASSERT_TRUE(phrase_in_tokens(doc, {"quick", "brown"}));  /* middle */
+    ASSERT_TRUE(phrase_in_tokens(doc, {"the", "quick"}));    /* start */
+    ASSERT_TRUE(phrase_in_tokens(doc, {"fox", "jumps"}));    /* end */
+    ASSERT_FALSE(phrase_in_tokens(doc, {"brown", "quick"})); /* wrong order */
+    ASSERT_FALSE(phrase_in_tokens(doc, {"quick", "fox"}));   /* not consecutive */
+    ASSERT_FALSE(phrase_in_tokens({"a"}, {"a", "b"}));       /* phrase longer than doc */
 }
 
 void test_tokenize_basic(void)

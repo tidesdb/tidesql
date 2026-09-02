@@ -6,10 +6,9 @@
  */
 
 /* unit tests for the server-free path parsing, the column-family name and schema key. */
-#include "../src/core/cf_name.h"
-
 #include <string>
 
+#include "../src/core/cf_name.h"
 #include "test_utils.h"
 
 using namespace tidesdb::cf_name;

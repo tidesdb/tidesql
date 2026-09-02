@@ -19,9 +19,9 @@
 #define HA_TIDESDB_STATUS_H
 
 /* the engine's status reporting, extracted from the monolith: SHOW ENGINE TIDESDB STATUS and the
-   SHOW STATUS LIKE 'tidesdb%' counters, all computed on demand (no background thread).  Only the two
-   registration surfaces the plugin wires up are exposed here; the counters, the refresh, and the
-   tombstone aggregation stay private to ha_tidesdb_status.cc.  include after ha_tidesdb.h. */
+   SHOW STATUS LIKE 'tidesdb%' counters, all computed on demand (no background thread).  Only the
+   two registration surfaces the plugin wires up are exposed here; the counters, the refresh, and
+   the tombstone aggregation stay private to ha_tidesdb_status.cc.  include after ha_tidesdb.h. */
 
 /**
  * tidesdb_show_status

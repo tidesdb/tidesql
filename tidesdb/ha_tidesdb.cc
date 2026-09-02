@@ -53,14 +53,14 @@ extern "C"
 #include "src/core/row_format.h"
 #include "src/core/sort_key.h"
 #include "src/core/spatial.h"
-#include "src/handler/ha_tidesdb_spatial.h"
-#include "src/handler/ha_tidesdb_fts.h"
-#include "src/handler/ha_tidesdb_internal.h"
-#include "src/handler/ha_tidesdb_lifecycle.h"
-#include "src/handler/ha_tidesdb_txn.h"
 #include "src/engine/ha_tidesdb_config.h"
 #include "src/engine/ha_tidesdb_status.h"
+#include "src/handler/ha_tidesdb_fts.h"
+#include "src/handler/ha_tidesdb_internal.h"
 #include "src/handler/ha_tidesdb_keycodec.h"
+#include "src/handler/ha_tidesdb_lifecycle.h"
+#include "src/handler/ha_tidesdb_spatial.h"
+#include "src/handler/ha_tidesdb_txn.h"
 
 /*
   Map TidesDB library error codes to MariaDB handler error codes.
@@ -89,8 +89,8 @@ int tdb_rc_to_ha(int rc, const char *ctx)
         case TDB_ERR_TXN_ABORTED:
             return HA_ERR_LOCK_DEADLOCK;
 
-        /* The transaction outlived its timeout and the library aborted it; a lock-wait timeout is the
-           closest server error and drives the same statement-level retry. */
+        /* The transaction outlived its timeout and the library aborted it; a lock-wait timeout is
+           the closest server error and drives the same statement-level retry. */
         case TDB_ERR_TXN_EXPIRED:
             return HA_ERR_LOCK_WAIT_TIMEOUT;
 
@@ -183,7 +183,7 @@ static ulong srv_compaction_threads = 4;
 static ulong srv_log_level = 0;                                      /* TDB_LOG_TRACE */
 static ulonglong srv_block_cache_size = TIDESDB_DEFAULT_BLOCK_CACHE; /* 256M */
 static ulong srv_max_open_sstables = 256;
-static my_bool srv_log_to_file = 1;        /* write TidesDB logs to file (default is yes) */
+static my_bool srv_log_to_file = 1; /* write TidesDB logs to file (default is yes) */
 static ulonglong srv_log_truncation_at = 24ULL * 1024 * 1024; /* log file truncation size (24MB) */
 static ulonglong srv_memtable_write_buffer_size = 256ULL * 1024 * 1024; /* 256MB */
 
@@ -281,8 +281,8 @@ static MYSQL_THDVAR_ULONGLONG(default_btree_klog_block_size, PLUGIN_VAR_RQCMDARG
                               "A node sized just above the block manager first-read window "
                               "costs a second read on every access, so the library default "
                               "of 4096 matches that window",
-                              NULL, NULL, TIDESQL_DEFAULT_BTREE_KLOG_BLOCK_SIZE, 512,
-                              ULONGLONG_MAX, 1);
+                              NULL, NULL, TIDESQL_DEFAULT_BTREE_KLOG_BLOCK_SIZE, 512, ULONGLONG_MAX,
+                              1);
 
 static MYSQL_THDVAR_ULONGLONG(default_l1_file_count_trigger, PLUGIN_VAR_RQCMDARG,
                               "Default L1 file count compaction trigger for new tables", NULL, NULL,
@@ -415,8 +415,7 @@ static MYSQL_SYSVAR_ULONGLONG(log_truncation_at, srv_log_truncation_at,
                               "(0 disables truncation)",
                               NULL, NULL, 24ULL * 1024 * 1024, 0, ULONGLONG_MAX, 0);
 
-static MYSQL_SYSVAR_ULONGLONG(memtable_write_buffer_size,
-                              srv_memtable_write_buffer_size,
+static MYSQL_SYSVAR_ULONGLONG(memtable_write_buffer_size, srv_memtable_write_buffer_size,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                               "Write buffer size in bytes for the memtable. "
                               "0 lets the library auto-size it",
@@ -445,18 +444,17 @@ static MYSQL_SYSVAR_ULONGLONG(memtable_sync_interval, srv_memtable_sync_interval
    across the whole database, so its shape is a global knob rather than a per-table
    one.  Default 0 / 0.0 keeps the library default. */
 static ulong srv_memtable_skip_list_max_level = 0;
-static MYSQL_SYSVAR_ULONG(
-    memtable_skip_list_max_level, srv_memtable_skip_list_max_level,
-    PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-    "Skip-list max level for the memtable; 0 keeps the library default", NULL, NULL, 0, 0,
-    32, 0);
+static MYSQL_SYSVAR_ULONG(memtable_skip_list_max_level, srv_memtable_skip_list_max_level,
+                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+                          "Skip-list max level for the memtable; 0 keeps the library default", NULL,
+                          NULL, 0, 0, 32, 0);
 
 static double srv_memtable_skip_list_probability = 0.0;
 static MYSQL_SYSVAR_DOUBLE(
     memtable_skip_list_probability, srv_memtable_skip_list_probability,
     PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-    "Skip-list level promotion probability for the memtable; 0.0 keeps the library default",
-    NULL, NULL, 0.0, 0.0, 1.0, 0);
+    "Skip-list level promotion probability for the memtable; 0.0 keeps the library default", NULL,
+    NULL, 0.0, 0.0, 1.0, 0);
 
 /* Value-log segment size.  The value log seals its active segment at this size
    and opens a fresh one, which sets what a reclaim costs rather than the space
@@ -623,13 +621,14 @@ static void tidesdb_checkpoint_dir_update(THD *thd, struct st_mysql_sys_var *, v
         return;
     }
 
-    /* A checkpoint is a durability barrier followed by a copy of the database to the requested path,
-       so the checkpoint directory holds a self-contained snapshot with its own manifest and sstables
-       that a restart or an external tool can open, not just an in-place fsync of the live database. */
+    /* A checkpoint is a durability barrier followed by a copy of the database to the requested
+       path, so the checkpoint directory holds a self-contained snapshot with its own manifest and
+       sstables that a restart or an external tool can open, not just an in-place fsync of the live
+       database. */
 
-    /* Free the calling connection's own transaction first, the same way the backup path does, because
-       both the barrier and the copy drain open transactions and would otherwise wait on this
-       connection's still-open txn. */
+    /* Free the calling connection's own transaction first, the same way the backup path does,
+       because both the barrier and the copy drain open transactions and would otherwise wait on
+       this connection's still-open txn. */
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
         if (trx && trx->txn)
@@ -647,8 +646,8 @@ static void tidesdb_checkpoint_dir_update(THD *thd, struct st_mysql_sys_var *, v
     std::string checkpoint_path(new_dir);
 
     /* Both calls block on flush completion, and the library's flush threads log through
-       sql_print_information which takes LOCK_global_system_variables, the mutex this update callback
-       already holds, so release it around the blocking work to avoid a deadlock. */
+       sql_print_information which takes LOCK_global_system_variables, the mutex this update
+       callback already holds, so release it around the blocking work to avoid a deadlock. */
     mysql_mutex_unlock(&LOCK_global_system_variables);
 
     int rc = tidesdb_checkpoint(tdb_global);
@@ -659,7 +658,8 @@ static void tidesdb_checkpoint_dir_update(THD *thd, struct st_mysql_sys_var *, v
 
     if (rc != TDB_SUCCESS)
     {
-        sql_print_error("[TIDESDB] Checkpoint to '%s' failed (err=%d)", checkpoint_path.c_str(), rc);
+        sql_print_error("[TIDESDB] Checkpoint to '%s' failed (err=%d)", checkpoint_path.c_str(),
+                        rc);
         my_printf_error(ER_UNKNOWN_ERROR, "[TIDESDB] Checkpoint to '%s' failed (err=%d)", MYF(0),
                         checkpoint_path.c_str(), rc);
         return;
@@ -723,13 +723,13 @@ static struct st_mysql_sys_var *tidesdb_system_variables[] = {
 
 /* ******************** Table options (per-table CF config) ******************** */
 
-
 ha_create_table_option tidesdb_table_option_list[] = {
     /* Options with SYSVAR defaults inherit from session variables
        (e.g. SET SESSION tidesdb_default_bloom_filter=OFF).
        When not explicitly set in CREATE TABLE, the session default is used. */
     HA_TOPTION_SYSVAR("KEEP_VALUES_INLINE", keep_values_inline, default_keep_values_inline),
-    HA_TOPTION_SYSVAR("BTREE_KLOG_BLOCK_SIZE", btree_klog_block_size, default_btree_klog_block_size),
+    HA_TOPTION_SYSVAR("BTREE_KLOG_BLOCK_SIZE", btree_klog_block_size,
+                      default_btree_klog_block_size),
     HA_TOPTION_SYSVAR("LEVEL_SIZE_RATIO", level_size_ratio, default_level_size_ratio),
     HA_TOPTION_SYSVAR("MIN_LEVELS", min_levels, default_min_levels),
     HA_TOPTION_SYSVAR("DIVIDING_LEVEL_OFFSET", dividing_level_offset,
@@ -753,10 +753,6 @@ ha_create_table_option tidesdb_table_option_list[] = {
 
 ha_create_table_option tidesdb_field_option_list[] = {HA_FOPTION_BOOL("TTL", ttl, 0),
                                                       HA_FOPTION_END};
-
-
-
-
 
 /* ******************** TidesDB_share ******************** */
 
@@ -785,7 +781,6 @@ TidesDB_share::TidesDB_share()
 TidesDB_share::~TidesDB_share()
 {
 }
-
 
 /* ******************** Plugin init / deinit ******************** */
 
@@ -823,7 +818,6 @@ static int tidesdb_init_func(void *p)
        hooks so a table created with ENGINE=TIDESDB participates in a wsrep cluster. */
     tidesdb_wsrep_register(tidesdb_hton);
 #endif
-
 
     /* Arm the full-text locks, seed the default stop words, and build the blend map. */
     fts_init();
@@ -875,7 +869,6 @@ static int tidesdb_init_func(void *p)
         cfg.memtable_idle_flush_seconds = (int)srv_memtable_idle_flush_seconds;
     if (srv_txn_timeout_seconds >= 0) cfg.txn_timeout_seconds = (int64_t)srv_txn_timeout_seconds;
 
-
     int rc = tidesdb_open(&cfg, &tdb_global);
     if (rc != TDB_SUCCESS)
     {
@@ -884,7 +877,6 @@ static int tidesdb_init_func(void *p)
     }
 
     sql_print_information("[TIDESDB] TidesDB opened at %s", tdb_path.c_str());
-
 
     DBUG_RETURN(0);
 }
@@ -989,7 +981,6 @@ void ha_tidesdb::cache_stmt_thdvars()
     cached_thdvars_valid_ = true;
 }
 
-
 /* ******************** AUTO_INCREMENT (O(1) atomic counter) ******************** */
 
 /*
@@ -1083,7 +1074,6 @@ int ha_tidesdb::extra(enum ha_extra_function operation)
     }
     return 0;
 }
-
 
 static struct st_mysql_storage_engine tidesdb_storage_engine = {MYSQL_HANDLERTON_INTERFACE_VERSION};
 

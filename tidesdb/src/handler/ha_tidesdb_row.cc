@@ -20,14 +20,13 @@
    data-at-rest encryption envelope wrapped around it. serialize_row builds it from a server record,
    deserialize_row rebuilds a record from any prior schema's bytes. */
 
-#include "ha_tidesdb.h"
+#include <cstring>
+#include <string>
 
+#include "ha_tidesdb.h"
 #include "key.h"
 #include "sql_class.h"
 #include "sql_priv.h"
-
-#include <cstring>
-#include <string>
 
 /* ******************** Data-at-rest encryption helpers ******************** */
 
@@ -188,7 +187,8 @@ const std::string &ha_tidesdb::serialize_encrypt_row()
        row_buf_'s heap capacity is preserved across calls.
        Writing directly into enc_buf_ reuses its heap capacity across rows,
        avoiding a per-row allocation when the encrypted size is stable. */
-    if (!tidesdb_encrypt_row_into(row_buf_, share->encryption_key_id, cached_enc_key_ver_, enc_buf_))
+    if (!tidesdb_encrypt_row_into(row_buf_, share->encryption_key_id, cached_enc_key_ver_,
+                                  enc_buf_))
     {
         enc_buf_.clear(); /* signal failure */
     }

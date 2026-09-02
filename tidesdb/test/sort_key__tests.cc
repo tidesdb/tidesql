@@ -8,11 +8,10 @@
 /* unit tests for the server-free sort-key decoder. the tests carry a local encoder for the
  * memory-comparable format that the server's Field::sort_string produces, then check that
  * decode inverts it and that the format orders correctly under memcmp. */
-#include "../src/core/sort_key.h"
-
 #include <cstdint>
 #include <cstring>
 
+#include "../src/core/sort_key.h"
 #include "test_utils.h"
 
 using namespace tidesdb::sort_key;
@@ -23,7 +22,9 @@ static int tests_failed = 0;
 struct lcg
 {
     uint64_t state;
-    explicit lcg(uint64_t s) : state(s) {}
+    explicit lcg(uint64_t s) : state(s)
+    {
+    }
     uint64_t next()
     {
         state = state * 6364136223846793005ULL + 1442695040888963407ULL;

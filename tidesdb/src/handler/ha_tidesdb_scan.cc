@@ -19,21 +19,20 @@
    column-family sweep, position/rnd_pos stash a row id and re-fetch that exact row later,
    index_init/index_end open and close the ordered index cursor that the index-read methods in
    ha_tidesdb_scan's sibling ha_tidesdb_index unit then walk, and spatial_scan_next advances a
-   hilbert-ordered spatial range scan.  ordering, snapshot visibility, and read-your-own-writes merge all live in the
-   library iterator; this unit sets the cursor up and materializes each hit back into a server row. */
-
-#include "ha_tidesdb.h"
+   hilbert-ordered spatial range scan.  ordering, snapshot visibility, and read-your-own-writes
+   merge all live in the library iterator; this unit sets the cursor up and materializes each hit
+   back into a server row. */
 
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
-
 #include <cstring>
 #include <string>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/core/rir.h"
 #include "src/handler/ha_tidesdb_internal.h"
 #include "src/handler/ha_tidesdb_keycodec.h"

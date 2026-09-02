@@ -21,18 +21,16 @@
    auto-increment and row-count state from the stored rows.  the column-family configuration these
    build from comes from the shared config builders. */
 
-#include "ha_tidesdb.h"
-
 #include <ft_global.h>
 #include <mysql/plugin.h>
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
 
 #include <string>
 #include <vector>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/engine/ha_tidesdb_config.h"
 #include "src/handler/ha_tidesdb_fts.h"
 #include "src/handler/ha_tidesdb_internal.h"
@@ -220,7 +218,8 @@ void ha_tidesdb::apply_auto_inc_start_meta(tidesdb_txn_t *txn)
 
     uint64_t start = decode_be64(mv);
     ulonglong cur = share->auto_inc_val.load(std::memory_order_relaxed);
-    if (start > 1 && start - 1 > cur) share->auto_inc_val.store(start - 1, std::memory_order_relaxed);
+    if (start > 1 && start - 1 > cur)
+        share->auto_inc_val.store(start - 1, std::memory_order_relaxed);
 }
 
 void ha_tidesdb::write_auto_inc_meta(tidesdb_column_family_t *cf, ulonglong next_value)
@@ -250,7 +249,8 @@ void ha_tidesdb::recover_auto_inc_secondary()
     const KEY *pk = &table->key_info[share->pk_index];
     if (pk->user_defined_key_parts > 0 && pk->key_part[0].field == ai) return;
 
-    /* Find the index whose first part is the auto-increment column; its last entry is the maximum. */
+    /* Find the index whose first part is the auto-increment column; its last entry is the maximum.
+     */
     uint ai_key = MAX_KEY;
     for (uint i = 0; i < table->s->keys; i++)
     {
@@ -556,17 +556,18 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
         record1_hi_ = NULL;
     }
 
-    /* Populate the row-count estimate and per-index rec_per_key now, at open, so the very first query
-       planned against this table sees real selectivity.  The server does not call info(HA_STATUS_CONST)
-       until later, a SHOW INDEX or ANALYZE, and until then rec_per_key sits at the default the optimizer
-       reads as one row per key value, which mis-drives a join on a composite key whose leading part is
-       low-cardinality into a full-scan BNL instead of an eq_ref. */
+    /* Populate the row-count estimate and per-index rec_per_key now, at open, so the very first
+       query planned against this table sees real selectivity.  The server does not call
+       info(HA_STATUS_CONST) until later, a SHOW INDEX or ANALYZE, and until then rec_per_key sits
+       at the default the optimizer reads as one row per key value, which mis-drives a join on a
+       composite key whose leading part is low-cardinality into a full-scan BNL instead of an
+       eq_ref. */
     info(HA_STATUS_VARIABLE | HA_STATUS_CONST);
 
-    /* That priming pass stamped the refresh throttle with this open-time snapshot.  A table opened while
-       still empty and then populated, as a freshly created table is, would otherwise keep serving the
-       empty snapshot until the throttle window elapsed, so clear the stamp and let the first real query
-       after rows land recompute against the actual contents. */
+    /* That priming pass stamped the refresh throttle with this open-time snapshot.  A table opened
+       while still empty and then populated, as a freshly created table is, would otherwise keep
+       serving the empty snapshot until the throttle window elapsed, so clear the stamp and let the
+       first real query after rows land recompute against the actual contents. */
     share->stats_refresh_us.store(0, std::memory_order_relaxed);
 
     DBUG_RETURN(0);

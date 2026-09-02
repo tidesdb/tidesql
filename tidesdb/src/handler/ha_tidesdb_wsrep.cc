@@ -19,14 +19,13 @@
 
 #ifdef WITH_WSREP
 
-#include "key.h"
-#include "sql_class.h"
-#include "sql_show.h"
-
 #include <cstdint>
 #include <cstring>
 #include <string>
 
+#include "key.h"
+#include "sql_class.h"
+#include "sql_show.h"
 #include "src/handler/ha_tidesdb_internal.h"
 
 /* WSREP_ON, the cheap global gate the wsrep_on() service macro folds in front of
@@ -56,8 +55,8 @@ static int tdb_wsrep_append(THD *thd, const uchar *cache_key, size_t cache_key_l
     wsrep_buf_t wkey_part[3];
     wsrep_key_t wkey = {wkey_part, 3};
 
-    if (!wsrep_prepare_key_for_innodb(thd, cache_key, cache_key_len, row_key, row_key_len, wkey_part,
-                                      &wkey.key_parts_num))
+    if (!wsrep_prepare_key_for_innodb(thd, cache_key, cache_key_len, row_key, row_key_len,
+                                      wkey_part, &wkey.key_parts_num))
         return HA_ERR_INTERNAL_ERROR;
 
     if (wsrep_thd_append_key(thd, &wkey, 1, key_type)) return HA_ERR_INTERNAL_ERROR;
@@ -143,8 +142,8 @@ int ha_tidesdb::wsrep_certify_row(THD *thd, const uchar *rec0, const uchar *rec1
 
             if (changed && !null1)
             {
-                if (int rc = tdb_wsrep_append(thd, cache_key, cache_key_len, kb1, len1 + 1,
-                                              this_type))
+                if (int rc =
+                        tdb_wsrep_append(thd, cache_key, cache_key_len, kb1, len1 + 1, this_type))
                     return rc;
                 appended_any = true;
             }

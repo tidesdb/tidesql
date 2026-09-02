@@ -9,8 +9,6 @@
  * decompose_ranges leans on, that a coarse cell corner is the base of a contiguous
  * hilbert interval and that a decomposition never drops a point whose centroid sits
  * inside the query box. */
-#include "../src/core/spatial.h"
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -18,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "../src/core/spatial.h"
 #include "test_utils.h"
 
 using namespace tidesdb::spatial;
@@ -29,13 +28,18 @@ static int tests_failed = 0;
 struct lcg
 {
     uint64_t state;
-    explicit lcg(uint64_t seed) : state(seed) {}
+    explicit lcg(uint64_t seed) : state(seed)
+    {
+    }
     uint64_t next()
     {
         state = state * 6364136223846793005ULL + 1442695040888963407ULL;
         return state >> 11;
     }
-    uint32_t u32() { return (uint32_t)next(); }
+    uint32_t u32()
+    {
+        return (uint32_t)next();
+    }
     /* a finite double in roughly [-1e6, 1e6] for coordinate sampling. */
     double coord()
     {

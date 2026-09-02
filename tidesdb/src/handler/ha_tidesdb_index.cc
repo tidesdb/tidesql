@@ -18,21 +18,20 @@
 /* the ordered index-read handler surface: index_read_map seeks the cursor to the first key matching
    a lookup and its find-flag, index_next/prev/first/last walk the index in either direction,
    index_next_same continues a same-key group scan, and multi_range_read_next drives a batch of
-   ranges through one cursor.  key comparison, snapshot visibility, and read-your-own-writes all live
-   in the library iterator; this unit builds the seek keys and materializes each hit into a row. */
-
-#include "ha_tidesdb.h"
+   ranges through one cursor.  key comparison, snapshot visibility, and read-your-own-writes all
+   live in the library iterator; this unit builds the seek keys and materializes each hit into a
+   row. */
 
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
-
 #include <cstring>
 #include <string>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/handler/ha_tidesdb_internal.h"
 #include "src/handler/ha_tidesdb_keycodec.h"
 #include "src/handler/ha_tidesdb_spatial.h"
@@ -62,8 +61,7 @@ int ha_tidesdb::index_read_map(uchar *buf, const uchar *key, key_part_map keypar
 
     if (is_pk_) DBUG_RETURN(index_read_pk(buf, idx_search_comp_, comp_len, find_flag));
 
-    if (is_spatial_index(ki) && find_flag >= HA_READ_MBR_CONTAIN &&
-        find_flag <= HA_READ_MBR_EQUAL)
+    if (is_spatial_index(ki) && find_flag >= HA_READ_MBR_CONTAIN && find_flag <= HA_READ_MBR_EQUAL)
         DBUG_RETURN(index_read_spatial(buf, key, find_flag));
 
     DBUG_RETURN(index_read_secondary(buf, idx_search_comp_, comp_len, find_flag));
@@ -257,8 +255,9 @@ int ha_tidesdb::index_read_secondary(uchar *buf, const uchar *comp_key, uint com
        ICP loop, we evaluate pushed index condition before the expensive
        PK point-lookup.  Entries that fail the condition are skipped
        without touching the data CF (same pattern as InnoDB). */
-    bool is_backward = (find_flag == HA_READ_KEY_OR_PREV || find_flag == HA_READ_BEFORE_KEY ||
-                        find_flag == HA_READ_PREFIX_LAST || find_flag == HA_READ_PREFIX_LAST_OR_PREV);
+    bool is_backward =
+        (find_flag == HA_READ_KEY_OR_PREV || find_flag == HA_READ_BEFORE_KEY ||
+         find_flag == HA_READ_PREFIX_LAST || find_flag == HA_READ_PREFIX_LAST_OR_PREV);
 
     uint idx_col_len = share->idx_comp_key_len[active_index];
 
@@ -649,8 +648,6 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
     }
 }
 
-
-
 /*
   Deliver the next row from the sorted list of point lookups.  PK lookups
   bypass the iterator entirely via fetch_row_by_pk; secondary index lookups
@@ -718,4 +715,3 @@ int ha_tidesdb::multi_range_read_next(range_id_t *range_info)
 
     DBUG_RETURN(HA_ERR_END_OF_FILE);
 }
-

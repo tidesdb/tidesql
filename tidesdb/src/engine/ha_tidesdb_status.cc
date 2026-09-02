@@ -19,20 +19,19 @@
    the counters are refreshed on demand behind a short ttl (no background thread); tombstone and
    density figures are aggregated lazily in their SHOW_FUNC callbacks. */
 
-#include "ha_tidesdb.h"
+#include "src/engine/ha_tidesdb_status.h"
 
 #include <mysql/plugin.h>
 #include <tidesdb/tidesdb_version.h>
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
 
 #include <atomic>
 #include <cstring>
 #include <string>
 
-#include "src/engine/ha_tidesdb_status.h"
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/handler/ha_tidesdb_internal.h"
 
 static void tidesdb_refresh_status_vars();
@@ -209,8 +208,8 @@ static int tdb_show_max_sst_density_level(MYSQL_THD, struct st_mysql_show_var *v
 /* The db-level and cache counters.  Names carry no tidesdb_ prefix; the SHOW_ARRAY export below is
    registered under the outer name "tidesdb", and SHOW joins the two with an underscore, so each
    surfaces as tidesdb_<name>.  The write-amplification counters are lifetime-since-open; divide a
-   byte counter by user_bytes_written for its per-domain WA ratio, and flush_count / compaction_count
-   count output sstables, not logical runs. */
+   byte counter by user_bytes_written for its per-domain WA ratio, and flush_count /
+   compaction_count count output sstables, not logical runs. */
 static struct st_mysql_show_var tidesdb_status_vars_inner[] = {
     {"version", (char *)&srv_stat_version, SHOW_CHAR_PTR},
     {"version_hex", (char *)&srv_stat_version_hex, SHOW_LONGLONG},
@@ -370,14 +369,16 @@ static int status_format_db_stats(char *buf, size_t sz, int pos, const tidesdb_d
     pos += snprintf(buf + pos, sz - pos, "Open SSTable handles: %d\n", db_st.num_open_sstables);
     pos += snprintf(buf + pos, sz - pos, "Total data size: %lu bytes\n",
                     (unsigned long)db_st.total_data_size_bytes);
-    pos += snprintf(buf + pos, sz - pos, "Immutable memtables: %d\n", db_st.immutable_memtable_count);
+    pos +=
+        snprintf(buf + pos, sz - pos, "Immutable memtables: %d\n", db_st.immutable_memtable_count);
     pos += snprintf(buf + pos, sz - pos, "\n=+=+= Background =+=+=\n");
     pos += snprintf(buf + pos, sz - pos, "Flush pending: %d\n", db_st.immutable_memtable_count);
-    pos += snprintf(buf + pos, sz - pos, "Compaction pending: %d\n", db_st.compaction_pending_count);
-    pos += snprintf(buf + pos, sz - pos, "Currently flushing: %s\n",
-                    db_st.is_flushing ? "YES" : "NO");
-    pos += snprintf(buf + pos, sz - pos, "WAL generation: %lu\n",
-                    (unsigned long)db_st.wal_generation);
+    pos +=
+        snprintf(buf + pos, sz - pos, "Compaction pending: %d\n", db_st.compaction_pending_count);
+    pos +=
+        snprintf(buf + pos, sz - pos, "Currently flushing: %s\n", db_st.is_flushing ? "YES" : "NO");
+    pos +=
+        snprintf(buf + pos, sz - pos, "WAL generation: %lu\n", (unsigned long)db_st.wal_generation);
     pos += snprintf(buf + pos, sz - pos, "Next CF index: %u\n", db_st.next_cf_index);
 
     /* Write amplification counters, lifetime since open.  Value-log appends are
@@ -416,17 +417,17 @@ static int status_format_db_stats(char *buf, size_t sz, int pos, const tidesdb_d
                     (unsigned long)db_st.vlog_segment_count,
                     (unsigned long)db_st.vlog_segments_drainable,
                     (unsigned long)db_st.vlog_segments_retired);
-    pos += snprintf(buf + pos, sz - pos, "Reclaim: %lu calls, %lu passes\n",
-                    (unsigned long)db_st.vlog_reclaim_calls,
-                    (unsigned long)db_st.vlog_reclaim_passes);
+    pos +=
+        snprintf(buf + pos, sz - pos, "Reclaim: %lu calls, %lu passes\n",
+                 (unsigned long)db_st.vlog_reclaim_calls, (unsigned long)db_st.vlog_reclaim_passes);
 
     pos += snprintf(buf + pos, sz - pos, "\n=+=+= Write Stalls =+=+=\n");
     pos += snprintf(buf + pos, sz - pos, "Writes throttled: %lu\n",
                     (unsigned long)db_st.writes_throttled);
-    pos += snprintf(buf + pos, sz - pos, "Writes blocked: %lu\n",
-                    (unsigned long)db_st.writes_blocked);
-    pos += snprintf(buf + pos, sz - pos, "Stall time: %lu us\n",
-                    (unsigned long)db_st.write_stall_us);
+    pos +=
+        snprintf(buf + pos, sz - pos, "Writes blocked: %lu\n", (unsigned long)db_st.writes_blocked);
+    pos +=
+        snprintf(buf + pos, sz - pos, "Stall time: %lu us\n", (unsigned long)db_st.write_stall_us);
     pos += snprintf(buf + pos, sz - pos, "Admission ceiling hits: %lu\n",
                     (unsigned long)db_st.write_stall_ceiling_hits);
     return pos;
@@ -443,7 +444,8 @@ static int status_format_cache_stats(char *buf, size_t sz, int pos,
     pos += snprintf(buf + pos, sz - pos, "Hits: %lu\n", (unsigned long)cache_st.hits);
     pos += snprintf(buf + pos, sz - pos, "Misses: %lu\n", (unsigned long)cache_st.misses);
     pos += snprintf(buf + pos, sz - pos, "Hit rate: %.1f%%\n", cache_st.hit_rate * PERCENT_SCALE);
-    pos += snprintf(buf + pos, sz - pos, "Partitions: %lu\n", (unsigned long)cache_st.num_partitions);
+    pos +=
+        snprintf(buf + pos, sz - pos, "Partitions: %lu\n", (unsigned long)cache_st.num_partitions);
     return pos;
 }
 
@@ -452,8 +454,8 @@ static int status_format_cache_stats(char *buf, size_t sz, int pos,
 static int status_format_tombstones(char *buf, size_t sz, int pos)
 {
     pos += snprintf(buf + pos, sz - pos, "\n=+=+= Tombstones =+=+=\n");
-    pos += snprintf(buf + pos, sz - pos, "Total tombstones: %ld\n",
-                    (long)srv_stat_total_tombstones);
+    pos +=
+        snprintf(buf + pos, sz - pos, "Total tombstones: %ld\n", (long)srv_stat_total_tombstones);
     pos += snprintf(buf + pos, sz - pos, "Tombstone ratio: %.2f%%\n",
                     srv_stat_tombstone_ratio * PERCENT_SCALE);
     pos += snprintf(buf + pos, sz - pos, "Worst SSTable density: %.2f%% at level %ld\n",
@@ -498,14 +500,14 @@ static int status_format_cf_stats(char *buf, size_t sz, int pos)
         pos += snprintf(buf + pos, sz - pos,
                         "%s: %d levels, %lu keys (%lu unflushed), %lu bytes, read amp %.2f\n",
                         cf_names[i], st.num_levels, (unsigned long)st.total_keys,
-                        (unsigned long)st.unflushed_key_count,
-                        (unsigned long)st.total_data_size, st.read_amp);
-        pos += snprintf(buf + pos, sz - pos,
-                        "  avg key %.0f, avg value %.0f, btree height %.1f/%u over %lu nodes, "
-                        "tombstone ratio %.2f%%\n",
-                        st.avg_key_size, st.avg_value_size, st.btree_avg_height,
-                        st.btree_max_height, (unsigned long)st.btree_total_nodes,
-                        st.tombstone_ratio * PERCENT_SCALE);
+                        (unsigned long)st.unflushed_key_count, (unsigned long)st.total_data_size,
+                        st.read_amp);
+        pos +=
+            snprintf(buf + pos, sz - pos,
+                     "  avg key %.0f, avg value %.0f, btree height %.1f/%u over %lu nodes, "
+                     "tombstone ratio %.2f%%\n",
+                     st.avg_key_size, st.avg_value_size, st.btree_avg_height, st.btree_max_height,
+                     (unsigned long)st.btree_total_nodes, st.tombstone_ratio * PERCENT_SCALE);
         pos += snprintf(buf + pos, sz - pos, "  levels [sstables/keys/tombstones/bytes]:");
         for (int l = 0; l < st.num_levels && l < TDB_MAX_LEVELS; l++)
             pos += snprintf(buf + pos, sz - pos, " L%d[%d/%lu/%lu/%lu]", l + 1,
@@ -521,8 +523,7 @@ static int status_format_cf_stats(char *buf, size_t sz, int pos)
     return pos;
 }
 
-bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print,
-                                enum ha_stat_type stat)
+bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print, enum ha_stat_type stat)
 {
     if (stat != HA_ENGINE_STATUS) return false;
     if (!tdb_global) return false;

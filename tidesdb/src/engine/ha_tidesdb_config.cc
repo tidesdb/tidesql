@@ -20,15 +20,14 @@
    all build from.  keeping the mapping here means a new per-cf knob is wired in one place rather
    than duplicated across every path that opens a column family. */
 
-#include "ha_tidesdb.h"
+#include "src/engine/ha_tidesdb_config.h"
 
 #include <mysql/plugin.h>
 
-#include "sql_class.h"
-
 #include <string>
 
-#include "src/engine/ha_tidesdb_config.h"
+#include "ha_tidesdb.h"
+#include "sql_class.h"
 
 /* enum-index to library-constant maps for the COMPRESSION, ISOLATION_LEVEL, and db-level sync-mode
    options; the option list stores the small enum index and these translate it at build time. */
@@ -60,8 +59,7 @@ const int tdb_sync_mode_map[TDB_SYNC_MODE_CHOICE_COUNT] = {TDB_SYNC_NONE, TDB_SY
   that sets SNAPSHOT, SERIALIZABLE, READ COMMITTED or READ UNCOMMITTED is
   honored as written.
 */
-tidesdb_isolation_level_t resolve_effective_isolation(THD *thd,
-                                                      tidesdb_isolation_level_t table_iso)
+tidesdb_isolation_level_t resolve_effective_isolation(THD *thd, tidesdb_isolation_level_t table_iso)
 {
     int session_iso = thd_tx_isolation(thd);
 

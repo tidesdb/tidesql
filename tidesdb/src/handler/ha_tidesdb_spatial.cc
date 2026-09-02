@@ -18,8 +18,9 @@
 /* server-coupled spatial adapters. each one bridges a server type onto the server-free
    tidesdb::spatial core so the curve, wkb walk, and predicates have a single implementation. */
 
-#include "ha_tidesdb.h"
 #include "src/handler/ha_tidesdb_spatial.h"
+
+#include "ha_tidesdb.h"
 
 bool spatial_compute_mbr(const uchar *data, size_t len, double *xmin, double *ymin, double *xmax,
                          double *ymax)

@@ -15,17 +15,15 @@
   until the follow-up increment wires the child-handler rewrite path.
 */
 
-#include "ha_tidesdb.h"
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
-#include "sql_table.h"
-
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
+#include "sql_table.h"
 #include "src/handler/ha_tidesdb_internal.h"
 
 /* The engine keeps every table's foreign keys in one internal column family.
@@ -320,7 +318,8 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
         List_iterator_fast<Key_part_spec> cc(fk->columns);
         Key_part_spec *kp;
         while ((kp = cc++))
-            if (kp->field_name.str) e.child_columns.emplace_back(kp->field_name.str, kp->field_name.length);
+            if (kp->field_name.str)
+                e.child_columns.emplace_back(kp->field_name.str, kp->field_name.length);
 
         /* Record whether each referencing column is nullable so the parent side
            can rebuild the child index prefix, whose encoding carries a null
@@ -333,13 +332,15 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
 
         List_iterator_fast<Key_part_spec> rc(fk->ref_columns);
         while ((kp = rc++))
-            if (kp->field_name.str) e.ref_columns.emplace_back(kp->field_name.str, kp->field_name.length);
+            if (kp->field_name.str)
+                e.ref_columns.emplace_back(kp->field_name.str, kp->field_name.length);
 
         if (fk->ref_db.str && fk->ref_db.length)
             e.ref_db.assign(fk->ref_db.str, fk->ref_db.length);
         else
-            e.ref_db = table_arg->s->db.str ? std::string(table_arg->s->db.str, table_arg->s->db.length)
-                                            : std::string();
+            e.ref_db = table_arg->s->db.str
+                           ? std::string(table_arg->s->db.str, table_arg->s->db.length)
+                           : std::string();
         e.ref_table.assign(fk->ref_table.str ? fk->ref_table.str : "",
                            fk->ref_table.str ? fk->ref_table.length : 0);
 
@@ -351,8 +352,8 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
         if (cidx < 0)
         {
             my_printf_error(ER_CANT_CREATE_TABLE,
-                            "TidesDB requires an index on the foreign key columns of %s",
-                            MYF(0), e.name.c_str());
+                            "TidesDB requires an index on the foreign key columns of %s", MYF(0),
+                            e.name.c_str());
             return HA_ERR_UNSUPPORTED;
         }
         e.child_index_name = table_arg->key_info[cidx].name.str;
@@ -363,9 +364,10 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
         for (uint kp = 0; kp < e.child_columns.size(); kp++)
             if (table_arg->key_info[cidx].key_part[kp].key_part_flag & HA_REVERSE_SORT)
             {
-                my_printf_error(ER_CANT_CREATE_TABLE,
-                                "TidesDB does not support a descending column in the foreign key %s",
-                                MYF(0), e.name.c_str());
+                my_printf_error(
+                    ER_CANT_CREATE_TABLE,
+                    "TidesDB does not support a descending column in the foreign key %s", MYF(0),
+                    e.name.c_str());
                 return HA_ERR_UNSUPPORTED;
             }
 
@@ -386,10 +388,11 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
                that rare shape rather than enforce it incorrectly. */
             if (!p_is_pk && p_has_nullable)
             {
-                my_printf_error(ER_CANT_CREATE_TABLE,
-                                "TidesDB foreign key %s must reference a NOT NULL unique key or the "
-                                "primary key",
-                                MYF(0), e.name.c_str());
+                my_printf_error(
+                    ER_CANT_CREATE_TABLE,
+                    "TidesDB foreign key %s must reference a NOT NULL unique key or the "
+                    "primary key",
+                    MYF(0), e.name.c_str());
                 return HA_ERR_UNSUPPORTED;
             }
         }
@@ -462,8 +465,7 @@ int ha_tidesdb::fk_purge_catalog(const char *child_cf_name)
         tidesdb_iter_free(it);
     }
 
-    for (auto &k : to_delete)
-        tidesdb_txn_delete(txn, cf, (const uint8_t *)k.data(), k.size());
+    for (auto &k : to_delete) tidesdb_txn_delete(txn, cf, (const uint8_t *)k.data(), k.size());
 
     if (tidesdb_txn_commit(txn) != TDB_SUCCESS) tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
@@ -600,7 +602,8 @@ static void fk_fill_info(THD *thd, const tdb_fk_def &d, TABLE *table, FOREIGN_KE
         fki->foreign_db = thd_make_lex_string(thd, NULL, d.child_db.c_str(), d.child_db.size(), 1);
         fki->foreign_table =
             thd_make_lex_string(thd, NULL, d.child_table.c_str(), d.child_table.size(), 1);
-        fki->referenced_db = thd_make_lex_string(thd, NULL, table->s->db.str, table->s->db.length, 1);
+        fki->referenced_db =
+            thd_make_lex_string(thd, NULL, table->s->db.str, table->s->db.length, 1);
         fki->referenced_table = thd_make_lex_string(thd, NULL, table->s->table_name.str,
                                                     table->s->table_name.length, 1);
     }
@@ -707,10 +710,14 @@ char *ha_tidesdb::get_foreign_key_create_info()
             s += "`";
         }
         s += ")";
-        if (fk_opt(d.on_delete) == FK_OPTION_CASCADE) s += " ON DELETE CASCADE";
-        else if (fk_opt(d.on_delete) == FK_OPTION_SET_NULL) s += " ON DELETE SET NULL";
-        if (fk_opt(d.on_update) == FK_OPTION_CASCADE) s += " ON UPDATE CASCADE";
-        else if (fk_opt(d.on_update) == FK_OPTION_SET_NULL) s += " ON UPDATE SET NULL";
+        if (fk_opt(d.on_delete) == FK_OPTION_CASCADE)
+            s += " ON DELETE CASCADE";
+        else if (fk_opt(d.on_delete) == FK_OPTION_SET_NULL)
+            s += " ON DELETE SET NULL";
+        if (fk_opt(d.on_update) == FK_OPTION_CASCADE)
+            s += " ON UPDATE CASCADE";
+        else if (fk_opt(d.on_update) == FK_OPTION_SET_NULL)
+            s += " ON UPDATE SET NULL";
     }
 
     char *out = (char *)my_malloc(PSI_NOT_INSTRUMENTED, s.size() + 1, MYF(MY_WME));
@@ -995,8 +1002,7 @@ int ha_tidesdb::fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, c
     int result = 0;
     /* Suppress the child's parent-existence check while we rewrite its rows, and
        restore it after.  The cascade only ever writes a valid parent value. */
-    ha_tidesdb *child_ha =
-        (ct->file->ht == ht) ? static_cast<ha_tidesdb *>(ct->file) : NULL;
+    ha_tidesdb *child_ha = (ct->file->ht == ht) ? static_cast<ha_tidesdb *>(ct->file) : NULL;
     if (child_ha) child_ha->fk_in_cascade_ = true;
     if (!refs.empty() && ct->file->ha_rnd_init(false) == 0)
     {

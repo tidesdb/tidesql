@@ -43,7 +43,8 @@ static constexpr uint8_t KEY_NS_META = 0x00;
 /* Auto-increment start value persisted in the data column family under the meta namespace so a
    CREATE/ALTER ... AUTO_INCREMENT=N survives a restart even when the table has no rows to recover
    the counter from.  Key is [KEY_NS_META]["AINC"]; value is the next value as an 8-byte big-endian
-   unsigned integer.  Sorts before every data key (KEY_NS_DATA), so it never disturbs a last-row seek. */
+   unsigned integer.  Sorts before every data key (KEY_NS_DATA), so it never disturbs a last-row
+   seek. */
 static constexpr uint8_t AUTOINC_META_KEY[] = {KEY_NS_META, 'A', 'I', 'N', 'C'};
 static constexpr uint AUTOINC_META_KEY_LEN = 5;
 static constexpr uint AUTOINC_META_VALUE_LEN = 8;

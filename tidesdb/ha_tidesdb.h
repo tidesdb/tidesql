@@ -66,28 +66,28 @@ extern "C"
 */
 struct tdb_fk_def
 {
-    std::string name;                   /* constraint name                        */
-    std::string child_cf;               /* referencing table's data cf            */
-    std::string child_db;               /* referencing table's database           */
-    std::string child_table;            /* referencing table's name               */
-    std::vector<uint16> child_fields;   /* referencing column field indexes       */
-    std::vector<uint8> child_nullable;  /* whether each child column is nullable   */
-    std::string ref_db;                 /* referenced database, as written        */
-    std::string ref_table;              /* referenced table, as written           */
-    std::string parent_cf;              /* referenced table's data cf             */
-    std::vector<uint16> parent_fields;  /* referenced column field indexes        */
+    std::string name;                          /* constraint name                        */
+    std::string child_cf;                      /* referencing table's data cf            */
+    std::string child_db;                      /* referencing table's database           */
+    std::string child_table;                   /* referencing table's name               */
+    std::vector<uint16> child_fields;          /* referencing column field indexes       */
+    std::vector<uint8> child_nullable;         /* whether each child column is nullable   */
+    std::string ref_db;                        /* referenced database, as written        */
+    std::string ref_table;                     /* referenced table, as written           */
+    std::string parent_cf;                     /* referenced table's data cf             */
+    std::vector<uint16> parent_fields;         /* referenced column field indexes        */
     std::vector<std::string> ref_column_names; /* referenced column names, for display */
-    std::string child_index_name;       /* index on the child fk columns          */
-    std::string parent_index_name;      /* pk or unique index probed on the parent */
-    uint8 on_delete;                    /* enum_fk_option                         */
-    uint8 on_update;                    /* enum_fk_option                         */
+    std::string child_index_name;              /* index on the child fk columns          */
+    std::string parent_index_name;             /* pk or unique index probed on the parent */
+    uint8 on_delete;                           /* enum_fk_option                         */
+    uint8 on_update;                           /* enum_fk_option                         */
     /* Key numbers resolved at load time from the table this side owns, so the
        enforcement path encodes comparable keys without a per-check name lookup.
        child_key_no is set on the child side, parent_key_no on the parent side,
        either stays -1 when this side does not own that end. */
     int child_key_no{-1};
     int parent_key_no{-1};
-    bool parent_is_pk{false};           /* referenced columns are the parent pk    */
+    bool parent_is_pk{false}; /* referenced columns are the parent pk    */
 };
 
 /*
@@ -282,7 +282,8 @@ struct tidesdb_trx_t
 
 #ifdef WITH_WSREP
     /* Galera write-intent keys this transaction registered in the shared intent map, so it can drop
-       its own entries at commit or rollback and truncate them to a savepoint on a savepoint rollback. */
+       its own entries at commit or rollback and truncate them to a savepoint on a savepoint
+       rollback. */
     std::vector<std::string> wsrep_intent_keys;
 #endif
 
@@ -304,7 +305,8 @@ struct tidesdb_trx_t
 
     /* When this connection's transaction has been XA PREPAREd, the serialized XID it was registered
        in the prepared-transaction map under, so a same-connection XA COMMIT/ROLLBACK (resolved
-       through the normal commit/rollback callbacks) can drop that registry entry.  Empty otherwise. */
+       through the normal commit/rollback callbacks) can drop that registry entry.  Empty otherwise.
+     */
     std::string prepared_xid;
 
     /* Group-commit handoff.  When the server drives ordered commit, commit_ordered runs the durable
@@ -339,7 +341,8 @@ struct ha_table_option_struct
     uint compression;
     uint isolation_level;
     bool bloom_filter;
-    bool keep_values_inline; /* hold every value in the klog, ignoring the db value_separation_threshold */
+    bool keep_values_inline;     /* hold every value in the klog, ignoring the db
+                                    value_separation_threshold */
     ulonglong ttl;               /* default TTL in seconds (0 = no expiration) */
     bool encrypted;              /* ENCRYPTED=YES enables data-at-rest encryption */
     ulonglong encryption_key_id; /* ENCRYPTION_KEY_ID (default 1) */
@@ -369,7 +372,9 @@ struct ha_field_option_struct
 struct tdb_owned_buf
 {
     uint8_t *&p;
-    explicit tdb_owned_buf(uint8_t *&ptr) : p(ptr) {}
+    explicit tdb_owned_buf(uint8_t *&ptr) : p(ptr)
+    {
+    }
     ~tdb_owned_buf()
     {
         if (p) tidesdb_free(p);
@@ -407,7 +412,7 @@ class ha_tidesdb : public handler
     uint scan_range_hi_len_;
     uchar scan_range_lo_[DATA_KEY_BUF_LEN];
     uchar scan_range_hi_[DATA_KEY_BUF_LEN];
-    bool idx_pk_exact_done_;                /* deferred seek after PK exact */
+    bool idx_pk_exact_done_; /* deferred seek after PK exact */
     enum scan_dir_t
     {
         DIR_NONE,
@@ -568,15 +573,15 @@ class ha_tidesdb : public handler
 
     /* private helpers
      */
-    int ensure_stmt_txn(); /* lazy txn creation on first data access */
+    int ensure_stmt_txn();     /* lazy txn creation on first data access */
     void cache_stmt_thdvars(); /* populate the per-statement session-var cache once */
     TidesDB_share *get_share();
     const std::string &serialize_row(const uchar *buf);
     /* upper-bound packed size of the row at buf, ptrdiff its offset from record[0], adding real
        blob lengths for a blob table on top of the cached constant estimate. */
     size_t serialize_estimate_size(const uchar *buf, my_ptrdiff_t ptrdiff);
-    /* encrypt the plaintext already packed into row_buf_ into enc_buf_ and return it, refreshing the
-       per-statement cached key version on first use. */
+    /* encrypt the plaintext already packed into row_buf_ into enc_buf_ and return it, refreshing
+       the per-statement cached key version on first use. */
     const std::string &serialize_encrypt_row();
     void deserialize_row(uchar *buf, const uchar *data, size_t len);
     /* unpack unpack_count packed fields from [from, from_end) into buf using the field plan. */
@@ -650,15 +655,15 @@ class ha_tidesdb : public handler
     /* Encode a records_in_range key range into comparable lo_buf/hi_buf bytes,
        substituting the natural key-space boundary for a missing bound.  inx is
        the index, is_pk true when it is the clustered primary key. */
-    void rir_encode_bounds(uint inx, bool is_pk, const key_range *min_key,
-                           const key_range *max_key, uchar *lo_buf, uint &lo_len, uchar *hi_buf,
-                           uint &hi_len);
+    void rir_encode_bounds(uint inx, bool is_pk, const key_range *min_key, const key_range *max_key,
+                           uchar *lo_buf, uint &lo_len, uchar *hi_buf, uint &hi_len);
 
     /* Try to decode record from secondary index key (keyread-only) */
     bool try_keyread_from_index(const uint8_t *ik, size_t iks, uint idx, uchar *buf);
     /* Decode the read-set columns of one key's parts from a comparable key at pos into buf, setting
-       null bits at ptrdiff and un-inverting descending parts.  Advances pos; returns false if a part
-       runs past end or is undecodable.  Shared by the index-part and pk-suffix passes above. */
+       null bits at ptrdiff and un-inverting descending parts.  Advances pos; returns false if a
+       part runs past end or is undecodable.  Shared by the index-part and pk-suffix passes above.
+     */
     bool keyread_decode_key_parts(KEY *key, const uint8_t *&pos, const uint8_t *end, uchar *buf,
                                   my_ptrdiff_t ptrdiff);
 
@@ -690,9 +695,10 @@ class ha_tidesdb : public handler
     /* Recover hidden-PK counter by scanning the CF */
     void recover_counters();
 
-    /* When the auto-increment column is not the leftmost primary-key part, seed its counter from the
-       last entry of the index whose first part is that column (that entry holds the maximum), so a
-       restart does not restart the counter low and hand out colliding ids.  No-op otherwise. */
+    /* When the auto-increment column is not the leftmost primary-key part, seed its counter from
+       the last entry of the index whose first part is that column (that entry holds the maximum),
+       so a restart does not restart the counter low and hand out colliding ids.  No-op otherwise.
+     */
     void recover_auto_inc_secondary();
 
     /* Persist the CREATE/ALTER ... AUTO_INCREMENT=N start value (next_value) as a meta key in the
@@ -700,9 +706,9 @@ class ha_tidesdb : public handler
        are no rows to recover it from. */
     void write_auto_inc_meta(tidesdb_column_family_t *cf, ulonglong next_value);
 
-    /* Read the persisted AUTO_INCREMENT=N start value under the txn and raise the counter to it when
-       it exceeds the value already recovered from the rows.  No-op when the table has no auto-inc
-       column or no meta key. */
+    /* Read the persisted AUTO_INCREMENT=N start value under the txn and raise the counter to it
+       when it exceeds the value already recovered from the rows.  No-op when the table has no
+       auto-inc column or no meta key. */
     void apply_auto_inc_start_meta(tidesdb_txn_t *txn);
 
     /* First-open share initialization, split from open() so each phase stays small.  These run once
@@ -851,8 +857,8 @@ class ha_tidesdb : public handler
     int delete_row(const uchar *buf) override;
 
     /* write_row helpers, one cohesive step each (defined in ha_tidesdb_dml.cc).  Each returns 0 /
-       TDB_SUCCESS on success or an error code to surface, and none touches the caller's saved column
-       map -- write_row owns the tmp_use_all_columns/restore pairing. */
+       TDB_SUCCESS on success or an error code to surface, and none touches the caller's saved
+       column map -- write_row owns the tmp_use_all_columns/restore pairing. */
 
     /* run the server auto-increment step for an INSERT and report through pk_auto_generated whether
        the value was engine-generated (and thus known unique).  returns 0 or a handler error. */
@@ -860,8 +866,8 @@ class ha_tidesdb : public handler
     /* build the primary key bytes for a row into pk, using the user PK columns or a freshly minted
        hidden row id, and return the key length. */
     uint write_build_pk(const uchar *buf, uchar *pk);
-    /* account weight buffered operations against the bulk-DML batch and, when the batch threshold is
-       reached, commit it mid-statement.  returns 0 or the commit error to surface. */
+    /* account weight buffered operations against the bulk-DML batch and, when the batch threshold
+       is reached, commit it mid-statement.  returns 0 or the commit error to surface. */
     int bulk_flush_if_threshold(tidesdb_trx_t *trx, ha_rows weight);
     /* reject an INSERT whose primary key already exists, unless skip_pk_unique lets it overwrite.
        returns 0 to proceed or the handler error to surface. */
@@ -898,7 +904,7 @@ class ha_tidesdb : public handler
     /* Does one constraint have a referencing child row for the key in old_row?
        Returns 1 referenced, 0 none, or a negative handler error. */
     int fk_child_ref_exists(const tdb_fk_def &d, const uchar *old_row);
-    /* write every secondary index entry (regular, fts, spatial) for a freshly inserted row.  returns
+    /* write every secondary index entry (regular, fts, spatial) for a freshly inserted row. returns
        TDB_SUCCESS or the first library error. */
     int write_maintain_indexes(const uchar *buf, tidesdb_txn_t *txn, tidesdb_trx_t *trx,
                                const uchar *pk, uint pk_len, time_t row_ttl);
@@ -908,10 +914,11 @@ class ha_tidesdb : public handler
 
 #ifdef WITH_WSREP
     /* Galera participation, implemented in ha_tidesdb_wsrep.cc.  wsrep_certify_row appends a
-       certification key for every unique or, on a table with no unique key, every ordinary index of a
-       changed row, taking the before image too for an update.  The wsrep_intent_* pair records a local
-       write in the shared write-intent map and, on the applier side, brute-force aborts a local holder
-       of the same key so a cross-node conflict resolves the way InnoDB's row lock would. */
+       certification key for every unique or, on a table with no unique key, every ordinary index of
+       a changed row, taking the before image too for an update.  The wsrep_intent_* pair records a
+       local write in the shared write-intent map and, on the applier side, brute-force aborts a
+       local holder of the same key so a cross-node conflict resolves the way InnoDB's row lock
+       would. */
     int wsrep_certify_row(THD *thd, const uchar *rec0, const uchar *rec1,
                           enum Wsrep_service_key_type key_type);
     /* whether secondary index i constrains this row by a unique value, so its comparable value is a
@@ -936,8 +943,8 @@ class ha_tidesdb : public handler
     int update_fts_index(uint i, const uchar *old_data, const uchar *new_data, const uchar *old_pk,
                          uint old_pk_len, const uchar *new_pk, uint new_pk_len, bool pk_changed,
                          time_t row_ttl);
-    /* apply the term-level fts diff for an UPDATE that kept the same pk, deleting terms that vanished
-       and rewriting terms whose frequency or the document length changed. */
+    /* apply the term-level fts diff for an UPDATE that kept the same pk, deleting terms that
+       vanished and rewriting terms whose frequency or the document length changed. */
     int update_fts_index_diff(uint i, const std::unordered_map<std::string, uint16> &old_tf,
                               const std::unordered_map<std::string, uint16> &new_tf,
                               const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
@@ -948,13 +955,13 @@ class ha_tidesdb : public handler
     int update_regular_index(uint i, const uchar *old_data, const uchar *new_data,
                              const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
                              uint new_pk_len, bool pk_changed, time_t row_ttl);
-    /* rewrite the primary row for an UPDATE, deleting the old data key first when the pk changed and
-       writing the new serialized row.  returns TDB_SUCCESS or the library error. */
+    /* rewrite the primary row for an UPDATE, deleting the old data key first when the pk changed
+       and writing the new serialized row.  returns TDB_SUCCESS or the library error. */
     int update_rewrite_primary(const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
                                uint new_pk_len, const uint8_t *row_ptr, size_t row_len,
                                time_t row_ttl, bool pk_changed);
-    /* walk every secondary index for an UPDATE, dispatching each to its per-type maintainer.  returns
-       TDB_SUCCESS or the first library error. */
+    /* walk every secondary index for an UPDATE, dispatching each to its per-type maintainer.
+       returns TDB_SUCCESS or the first library error. */
     int update_maintain_indexes(const uchar *old_data, const uchar *new_data, const uchar *old_pk,
                                 uint old_pk_len, const uchar *new_pk, uint new_pk_len,
                                 bool pk_changed, time_t row_ttl);
@@ -1025,10 +1032,11 @@ class ha_tidesdb : public handler
     }
     int external_lock(THD *thd, int lock_type) override;
     /* statement-start half of external_lock: resolve and cache the per-statement shape, join or
-       create the connection transaction, and arm the statement savepoint.  returns 0 or an error. */
+       create the connection transaction, and arm the statement savepoint.  returns 0 or an error.
+     */
     int external_lock_acquire(THD *thd);
-    /* statement-end half of external_lock: free the scan iterator when the writeset moved, stamp the
-       update time, and invalidate the per-statement caches. */
+    /* statement-end half of external_lock: free the scan iterator when the writeset moved, stamp
+       the update time, and invalidate the per-statement caches. */
     void external_lock_release(THD *thd);
     THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to, enum thr_lock_type lock_type) override;
 
@@ -1046,9 +1054,9 @@ class ha_tidesdb : public handler
                                 size_t val_size, tidesdb_txn_t *txn,
                                 std::vector<std::unordered_set<std::string>> &idx_seen,
                                 const std::vector<bool> &idx_is_unique, uint &fail_key_num);
-    /* build the comparable sort key for one index of the row currently in table->record[0] during an
-       inplace ADD INDEX; ptdiff rebases the altered-table field pointers, row_has_null reports a NULL
-       part (which exempts a UNIQUE index).  returns the key length written to ik. */
+    /* build the comparable sort key for one index of the row currently in table->record[0] during
+       an inplace ADD INDEX; ptdiff rebases the altered-table field pointers, row_has_null reports a
+       NULL part (which exempts a UNIQUE index).  returns the key length written to ik. */
     uint inplace_build_index_key(KEY *ki, my_ptrdiff_t ptdiff, uchar *ik, bool &row_has_null);
     /* commit the current index-build batch and reopen the scan cursor positioned just past the last
        processed data key.  txn and iter are updated in place.  returns 0 to continue the scan, 1 to
@@ -1057,11 +1065,13 @@ class ha_tidesdb : public handler
                                     const uchar *last_data_key, size_t last_data_key_len);
     /* scan the base table and populate every newly added secondary index, committing in batches.
        txn and iter are the already-opened build cursor.  returns true when the ALTER must abort
-       (the helper has freed the cursor, restored old_map, and raised the error), false on success. */
+       (the helper has freed the cursor, restored old_map, and raised the error), false on success.
+     */
     bool inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *altered_table,
                                 tidesdb_txn_t *&txn, tidesdb_iter_t *&iter, MY_BITMAP *old_map);
     /* release an aborting index build's cursor and transaction and restore the column map; the
-       caller raises the specific error first.  always returns true for `return inplace_abort_build`. */
+       caller raises the specific error first.  always returns true for `return
+       inplace_abort_build`. */
     bool inplace_abort_build(tidesdb_iter_t *iter, tidesdb_txn_t *txn, TABLE *altered_table,
                              MY_BITMAP *old_map);
     /* one flag per newly added index marking whether it is UNIQUE, so the build can reject a
@@ -1071,7 +1081,8 @@ class ha_tidesdb : public handler
        coverage bitmaps) for the altered table's new key layout after an inplace ALTER commits. */
     void commit_rebuild_index_meta(TABLE *altered_table);
     /* push changed table options (compression, sync mode, bloom, isolation, ttl, encryption) onto
-       the live data and index column families so an ALTER..OPTIONS takes effect without a reopen. */
+       the live data and index column families so an ALTER..OPTIONS takes effect without a reopen.
+     */
     void commit_apply_runtime_config(TABLE *altered_table, Alter_inplace_info *ha_alter_info);
     bool commit_inplace_alter_table(TABLE *altered_table, Alter_inplace_info *ha_alter_info,
                                     bool commit) override;
@@ -1081,8 +1092,8 @@ class ha_tidesdb : public handler
 #ifdef WITH_WSREP
 /* Galera free functions implemented in ha_tidesdb_wsrep.cc.  tidesdb_wsrep_register wires the
    handlerton's wsrep replication flag and its cluster-position and brute-force-abort hooks.  The
-   intent helpers drop or truncate a transaction's write-intent entries from the shared map at commit,
-   rollback, or a savepoint rollback. */
+   intent helpers drop or truncate a transaction's write-intent entries from the shared map at
+   commit, rollback, or a savepoint rollback. */
 void tidesdb_wsrep_register(handlerton *hton);
 void tidesdb_wsrep_intent_clear(tidesdb_trx_t *trx);
 void tidesdb_wsrep_intent_truncate(tidesdb_trx_t *trx, size_t keep);

@@ -22,16 +22,14 @@
    these sit on a hot path; they translate an admin request into the matching library operation and
    report the outcome back through the handler admin-status codes. */
 
-#include "ha_tidesdb.h"
-
 #include <mysql/plugin.h>
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
 
 #include <string>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/handler/ha_tidesdb_internal.h"
 /* ******************** info ******************** */
 
@@ -143,10 +141,10 @@ void ha_tidesdb::info_fill_rec_per_key()
                    Geometrically interpolate between stats.records
                    (single leading column) and the last-part rec_per_key.
                    Formula is total / (total/last_rpk)^((j+1)/N) */
-                ulong last_rpk = (cached_rpk > 0)
-                                     ? cached_rpk
-                                     : (ulong)(stats.records / STATS_REC_PER_KEY_FALLBACK_DIVISOR +
-                                               1);
+                ulong last_rpk =
+                    (cached_rpk > 0)
+                        ? cached_rpk
+                        : (ulong)(stats.records / STATS_REC_PER_KEY_FALLBACK_DIVISOR + 1);
                 uint N = key->user_defined_key_parts;
                 double base = (last_rpk > 0) ? (double)stats.records / (double)last_rpk
                                              : (double)stats.records;
@@ -197,7 +195,8 @@ int ha_tidesdb::info(uint flag)
     /* HA_STATUS_AUTO -- report the next auto-increment value.  get_auto_increment hands out
        values from share->auto_inc_val (the last one used), so the next is one past it.  SHOW TABLE
        STATUS reads this, and the partition wrapper seeds its shared counter from each partition's
-       value here, so leaving it unset makes AUTO_INCREMENT on a partitioned table go out of range. */
+       value here, so leaving it unset makes AUTO_INCREMENT on a partitioned table go out of range.
+     */
     if ((flag & HA_STATUS_AUTO) && share && table->found_next_number_field)
         stats.auto_increment_value = share->auto_inc_val.load(std::memory_order_relaxed) + 1;
 
@@ -266,16 +265,16 @@ void ha_tidesdb::analyze_report_cf_stats(THD *thd, const tidesdb_cf_stats_t &st)
         const uint64_t out_bytes =
             st.wal_bytes_written + st.flush_bytes_written + st.compaction_bytes_written;
         const double wa = (double)out_bytes / (double)st.user_bytes_written;
-        push_warning_printf(
-            thd, Sql_condition::WARN_LEVEL_NOTE, ER_UNKNOWN_ERROR,
-            "[TIDESDB] WA  user=%llu  wal=%llu  flush=%llu"
-            "  compact_write=%llu (%llu ssts)  compact_read=%llu"
-            "  ratio=%.2fx",
-            (unsigned long long)st.user_bytes_written, (unsigned long long)st.wal_bytes_written,
-            (unsigned long long)st.flush_bytes_written,
-            (unsigned long long)st.compaction_bytes_written,
-            (unsigned long long)st.compaction_count, (unsigned long long)st.compaction_bytes_read,
-            wa);
+        push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE, ER_UNKNOWN_ERROR,
+                            "[TIDESDB] WA  user=%llu  wal=%llu  flush=%llu"
+                            "  compact_write=%llu (%llu ssts)  compact_read=%llu"
+                            "  ratio=%.2fx",
+                            (unsigned long long)st.user_bytes_written,
+                            (unsigned long long)st.wal_bytes_written,
+                            (unsigned long long)st.flush_bytes_written,
+                            (unsigned long long)st.compaction_bytes_written,
+                            (unsigned long long)st.compaction_count,
+                            (unsigned long long)st.compaction_bytes_read, wa);
     }
 }
 

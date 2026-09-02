@@ -21,19 +21,18 @@
    batches. update_row lives in ha_tidesdb_dml_update.cc; the TRUNCATE path delete_all_rows stays
    in ha_tidesdb.cc with the column-family config builders it depends on. */
 
-#include "ha_tidesdb.h"
-
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
-
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/core/fts_text.h"
 #include "src/handler/ha_tidesdb_fts.h"
 #include "src/handler/ha_tidesdb_internal.h"
@@ -110,7 +109,8 @@ int ha_tidesdb::write_check_secondary_unique(const uchar *buf, tidesdb_txn_t *tx
 
         /* SQL gives NULL no identity, so a UNIQUE index never constrains a row whose indexed value
            is NULL in any part.  Skip the check in that case, matching InnoDB and the update path;
-           without this a second row with a NULL indexed value is wrongly rejected as a duplicate. */
+           without this a second row with a NULL indexed value is wrongly rejected as a duplicate.
+         */
         const my_ptrdiff_t ins_ptrdiff = (my_ptrdiff_t)(buf - table->record[0]);
         bool any_null = false;
         for (uint p = 0; p < table->key_info[i].user_defined_key_parts; p++)
@@ -371,10 +371,11 @@ int ha_tidesdb::write_row(const uchar *buf)
     }
 
 #ifdef WITH_WSREP
-    /* Galera.  A local insert appends the new row's certification keys and records its write intent so
-       an applier that later replays a conflicting cluster write brute-force aborts this transaction.
-       An applier replaying the insert here instead aborts any local holder of the same identity first,
-       the lock-free analogue of the row lock InnoDB would have blocked the applier on. */
+    /* Galera.  A local insert appends the new row's certification keys and records its write intent
+       so an applier that later replays a conflicting cluster write brute-force aborts this
+       transaction. An applier replaying the insert here instead aborts any local holder of the same
+       identity first, the lock-free analogue of the row lock InnoDB would have blocked the applier
+       on. */
     if (wsrep_on(cached_thd_))
     {
         if (wsrep_thd_is_local(cached_thd_))

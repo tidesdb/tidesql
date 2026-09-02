@@ -7,11 +7,10 @@
 
 /* unit tests for the server-free on-disk framing core, the row header, the big-endian
  * hidden primary key, and the key-namespace helpers. */
-#include "../src/core/row_format.h"
-
 #include <cstdint>
 #include <cstring>
 
+#include "../src/core/row_format.h"
 #include "test_utils.h"
 
 using namespace tidesdb::row_format;
@@ -22,7 +21,9 @@ static int tests_failed = 0;
 struct lcg
 {
     uint64_t state;
-    explicit lcg(uint64_t s) : state(s) {}
+    explicit lcg(uint64_t s) : state(s)
+    {
+    }
     uint64_t next()
     {
         state = state * 6364136223846793005ULL + 1442695040888963407ULL;

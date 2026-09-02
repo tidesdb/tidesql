@@ -15,29 +15,28 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
-#include "ha_tidesdb.h"
+#include "src/handler/ha_tidesdb_txn.h"
 
 #include <mysql/plugin.h>
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
 
 #include <map>
 #include <mutex>
 #include <string>
 #include <vector>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/engine/ha_tidesdb_config.h"
 #include "src/handler/ha_tidesdb_fts.h"
 #include "src/handler/ha_tidesdb_internal.h"
-#include "src/handler/ha_tidesdb_txn.h"
 
-/* Prepared transactions awaiting their phase-two decision, keyed by the serialized XID.  An external
-   XA PREPARE hands its library transaction here and detaches it from the connection, and crash
-   recovery repopulates it from tidesdb_recover_prepared at startup, so commit_by_xid / rollback_by_xid
-   can resolve a transaction from any connection or after a restart.  The map owns each transaction
-   until it is resolved (then freed) -- guarded by tdb_prepared_mtx. */
+/* Prepared transactions awaiting their phase-two decision, keyed by the serialized XID.  An
+   external XA PREPARE hands its library transaction here and detaches it from the connection, and
+   crash recovery repopulates it from tidesdb_recover_prepared at startup, so commit_by_xid /
+   rollback_by_xid can resolve a transaction from any connection or after a restart.  The map owns
+   each transaction until it is resolved (then freed) -- guarded by tdb_prepared_mtx. */
 static std::mutex tdb_prepared_mtx;
 static std::map<std::string, tidesdb_txn_t *> tdb_prepared_txns;
 
@@ -420,7 +419,8 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
     if (!trx) return 0;
 
     /* commit_ordered already ran the durable commit in binlog order.  Report its outcome and skip a
-       second commit.  Checked before the txn-null guard because a failed ordered commit frees txn. */
+       second commit.  Checked before the txn-null guard because a failed ordered commit frees txn.
+     */
     if (trx->commit_ordered_done)
     {
         trx->commit_ordered_done = false;
@@ -478,8 +478,9 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (!trx) return 0;
 
-    /* If commit_ordered already committed this transaction in binlog order, the decision was commit,
-       so honor it and clear the handoff rather than rolling back a committed transaction. */
+    /* If commit_ordered already committed this transaction in binlog order, the decision was
+       commit, so honor it and clear the handoff rather than rolling back a committed transaction.
+     */
     if (trx->commit_ordered_done)
     {
         trx->commit_ordered_done = false;
@@ -661,10 +662,10 @@ int ha_tidesdb::external_lock_acquire(THD *thd)
        reads the cache instead of re-calling thd_sql_command() and
        thd_test_options(). */
     int sql_cmd = thd_sql_command(thd);
-    bool is_ddl = (sql_cmd == SQLCOM_ALTER_TABLE || sql_cmd == SQLCOM_CREATE_INDEX ||
-                   sql_cmd == SQLCOM_DROP_INDEX || sql_cmd == SQLCOM_TRUNCATE ||
-                   sql_cmd == SQLCOM_OPTIMIZE || sql_cmd == SQLCOM_CREATE_TABLE ||
-                   sql_cmd == SQLCOM_DROP_TABLE);
+    bool is_ddl =
+        (sql_cmd == SQLCOM_ALTER_TABLE || sql_cmd == SQLCOM_CREATE_INDEX ||
+         sql_cmd == SQLCOM_DROP_INDEX || sql_cmd == SQLCOM_TRUNCATE || sql_cmd == SQLCOM_OPTIMIZE ||
+         sql_cmd == SQLCOM_CREATE_TABLE || sql_cmd == SQLCOM_DROP_TABLE);
     bool is_autocommit = !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
 
     cached_sql_cmd_ = sql_cmd;
@@ -755,8 +756,7 @@ int ha_tidesdb::external_lock(THD *thd, int lock_type)
 {
     DBUG_ENTER("ha_tidesdb::external_lock");
 
-    if (lock_type != F_UNLCK)
-        DBUG_RETURN(external_lock_acquire(thd));
+    if (lock_type != F_UNLCK) DBUG_RETURN(external_lock_acquire(thd));
 
     external_lock_release(thd);
     DBUG_RETURN(0);
@@ -832,7 +832,8 @@ static int tidesdb_prepare(handlerton *, THD *thd, bool all)
         /* Publish the prepared transaction so it can also be resolved by XID -- from another
            connection, or after a restart via recover().  The transaction stays attached to this
            connection: a same-connection XA COMMIT/ROLLBACK runs through commit()/rollback(), which
-           drop this registry entry, while a disconnect leaves it in-doubt for the registry to own. */
+           drop this registry entry, while a disconnect leaves it in-doubt for the registry to own.
+         */
         std::lock_guard<std::mutex> lk(tdb_prepared_mtx);
         tdb_prepared_txns[key] = trx->txn;
         trx->prepared_xid = std::move(key);

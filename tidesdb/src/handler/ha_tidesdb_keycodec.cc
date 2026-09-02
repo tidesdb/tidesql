@@ -15,23 +15,22 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
-/* the key codec: memcmp-comparable key bytes built from record fields (via Field::make_sort_key_part
-   so numeric types sort correctly under memcmp), and the inverse sort-key decoders that let a
-   covering index read reconstruct columns straight from the index bytes. the per-part decode math
-   lives in the server-free tidesdb::sort_key core; this unit is the server-coupled glue plus the
-   pk/secondary key builders and the index-condition-pushdown check. */
+/* the key codec: memcmp-comparable key bytes built from record fields (via
+   Field::make_sort_key_part so numeric types sort correctly under memcmp), and the inverse sort-key
+   decoders that let a covering index read reconstruct columns straight from the index bytes. the
+   per-part decode math lives in the server-free tidesdb::sort_key core; this unit is the
+   server-coupled glue plus the pk/secondary key builders and the index-condition-pushdown check. */
 
-#include "ha_tidesdb.h"
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
+#include "src/handler/ha_tidesdb_keycodec.h"
 
 #include <cstring>
 #include <string>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/core/sort_key.h"
-#include "src/handler/ha_tidesdb_keycodec.h"
 #include "src/handler/ha_tidesdb_spatial.h"
 
 /* ******************** PK / Index key helpers ******************** */
@@ -305,7 +304,7 @@ bool ha_tidesdb::keyread_decode_key_parts(KEY *key, const uint8_t *&pos, const u
         {
             if (pos >= end) return false;
             /* A descending part's null indicator is stored inverted. */
-            uchar nb = desc ? (uchar)~(*pos) : *pos;
+            uchar nb = desc ? (uchar) ~(*pos) : *pos;
             if (nb == 0)
             {
                 f->set_null(ptrdiff);
@@ -500,7 +499,7 @@ bool ha_tidesdb::icp_decode_key_parts(KEY *key, const uint8_t *&pos, const uint8
         if (f->real_maybe_null())
         {
             if (pos >= end) return false;
-            uchar nb = desc ? (uchar)~(*pos) : *pos;
+            uchar nb = desc ? (uchar) ~(*pos) : *pos;
             if (nb == 0)
             {
                 /* decode_sort_key_part writes the value into buf at the field's

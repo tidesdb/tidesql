@@ -20,14 +20,10 @@
    context. the pure tokenizer and scorer math live in tidesdb::fts and tidesdb::fts_score; this
    unit is the server-coupled glue and the index/query paths. */
 
-#include "ha_tidesdb.h"
+#include "src/handler/ha_tidesdb_fts.h"
 
 #include <ft_global.h>
 #include <mysql/plugin.h>
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
 
 #include <algorithm>
 #include <cmath>
@@ -36,25 +32,27 @@
 #include <unordered_set>
 #include <vector>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/core/fts_score.h"
 #include "src/core/fts_text.h"
-#include "src/handler/ha_tidesdb_fts.h"
 #include "src/handler/ha_tidesdb_fts_internal.h"
 #include "src/handler/ha_tidesdb_internal.h"
 
 /* ******************** Full-Text Search helpers ******************** */
 
-
 /* assemble the inverted-index entry key, the little-endian term length then the term bytes then the
-   comparable primary key, by delegating the framing to the server-free core so the on-disk layout has
-   one authority; the term is truncated there to the shared maximum. */
+   comparable primary key, by delegating the framing to the server-free core so the on-disk layout
+   has one authority; the term is truncated there to the shared maximum. */
 uint fts_build_key(const char *term, uint term_len, const uchar *pk, uint pk_len, uchar *out)
 {
     return tidesdb::fts::build_key(term, term_len, (const uint8_t *)pk, pk_len, (uint8_t *)out);
 }
 
-/* write the entry value, the little-endian term frequency then document length, through the same core
-   codec the reader agrees with, and report the fixed value length. */
+/* write the entry value, the little-endian term frequency then document length, through the same
+   core codec the reader agrees with, and report the fixed value length. */
 uint fts_build_value(uint16 tf, uint32 doc_len, uchar *out)
 {
     tidesdb::fts::encode_entry_value(tf, doc_len, (uint8_t *)out);
@@ -68,7 +66,7 @@ uint fts_build_value(uint16 tf, uint32 doc_len, uchar *out)
    not write back a zeroed total derived from a transient read failure --
    that would clobber the real counters and degrade BM25 IDF. */
 int fts_load_meta(tidesdb_txn_t *txn, tidesdb_column_family_t *data_cf, uint keynr,
-                         int64_t *total_docs, int64_t *total_words)
+                  int64_t *total_docs, int64_t *total_words)
 {
     uchar mk[FTS_META_KEY_LEN];
     mk[0] = KEY_NS_META;
@@ -131,8 +129,8 @@ static int fts_update_meta(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t
    matching (data_cf, keynr) entry and combine, or append a new one.  The
    list is typically tiny (one or two FTS indexes per touched table), so
    linear scan beats a hash. */
-void trx_fts_meta_accumulate(tidesdb_trx_t *trx, tidesdb_column_family_t *cf,
-                                           uint keynr, int64_t doc_delta, int64_t word_delta)
+void trx_fts_meta_accumulate(tidesdb_trx_t *trx, tidesdb_column_family_t *cf, uint keynr,
+                             int64_t doc_delta, int64_t word_delta)
 {
     if (!trx) return;
     for (auto &e : trx->fts_meta_pending)
@@ -176,7 +174,6 @@ int flush_trx_fts_meta_pending(THD *thd, tidesdb_trx_t *trx)
     return rc;
 }
 
-
 /* Minimum and maximum word length for FTS indexing (in characters).
    These mirror InnoDB's innodb_ft_min_token_size / innodb_ft_max_token_size
    defaults.  Exposed as session variables below for tuning. */
@@ -210,7 +207,7 @@ static void tdb_rebuild_blend_map(const char *chars)
 }
 
 void tdb_fts_blend_chars_update(MYSQL_THD thd, struct st_mysql_sys_var *var, void *var_ptr,
-                                       const void *save)
+                                const void *save)
 {
     const char *new_val = *static_cast<const char *const *>(save);
     mysql_rwlock_wrlock(&tdb_blend_lock);
@@ -373,7 +370,7 @@ static bool tdb_load_stopwords_from_table_spec(const char *table_spec)
 
 /* Sysvar update callback for tidesdb_ft_stopword_table */
 void tdb_ft_stopword_table_update(MYSQL_THD thd, struct st_mysql_sys_var *var, void *var_ptr,
-                                         const void *save)
+                                  const void *save)
 {
     const char *new_val = *static_cast<const char *const *>(save);
     mysql_rwlock_wrlock(&tdb_stopword_lock);
@@ -409,12 +406,17 @@ double srv_fts_bm25_b = 0.75;
 struct fts_mariadb_charset : tidesdb::fts::charset
 {
     CHARSET_INFO *cs;
-    explicit fts_mariadb_charset(CHARSET_INFO *c) : cs(c) {}
+    explicit fts_mariadb_charset(CHARSET_INFO *c) : cs(c)
+    {
+    }
     unsigned mbchar_len(const char *p, const char *end) const override
     {
         return my_ismbchar(cs, p, end);
     }
-    bool is_alnum(unsigned char c) const override { return my_isalnum(cs, c) != 0; }
+    bool is_alnum(unsigned char c) const override
+    {
+        return my_isalnum(cs, c) != 0;
+    }
     std::string casedn(const char *s, size_t len) const override
     {
         std::string r(s, len);
@@ -427,9 +429,9 @@ struct fts_mariadb_charset : tidesdb::fts::charset
     }
 };
 
-/* snapshot the tunable length bounds, blend map, and stop-word set into a core tokenize_opts, taking
-   each read lock once so the server-free core never reaches into a global or a lock. the blend-map and
-   stop-word snapshots live in caller storage so they outlast the returned opts. */
+/* snapshot the tunable length bounds, blend map, and stop-word set into a core tokenize_opts,
+   taking each read lock once so the server-free core never reaches into a global or a lock. the
+   blend-map and stop-word snapshots live in caller storage so they outlast the returned opts. */
 static void fts_snapshot_opts(tidesdb::fts::tokenize_opts &opts,
                               bool (&blend_snap)[tidesdb::fts::BLEND_MAP_SIZE],
                               std::unordered_set<std::string> &stop_snap)
@@ -451,7 +453,8 @@ static void fts_snapshot_opts(tidesdb::fts::tokenize_opts &opts,
 /* charset-aware tokenizer that snapshots the tunable dictionaries and delegates splitting, case
    folding, and blend handling to the server-free fts core, which measures blend sub-part length in
    characters rather than bytes. */
-void fts_tokenize(const char *text, size_t text_len, CHARSET_INFO *cs, std::vector<std::string> &out)
+void fts_tokenize(const char *text, size_t text_len, CHARSET_INFO *cs,
+                  std::vector<std::string> &out)
 {
     fts_mariadb_charset mcs(cs);
     tidesdb::fts::tokenize_opts opts;
@@ -465,7 +468,7 @@ void fts_tokenize(const char *text, size_t text_len, CHARSET_INFO *cs, std::vect
 /* Extract and tokenize the document from all FULLTEXT key_part fields.
    Returns the token list and word count. */
 void fts_extract_and_tokenize(TABLE *table, const KEY *key_info, const uchar *record,
-                                     CHARSET_INFO *cs, std::vector<std::string> &out_tokens)
+                              CHARSET_INFO *cs, std::vector<std::string> &out_tokens)
 {
     std::string doc;
     my_ptrdiff_t ptrdiff = (my_ptrdiff_t)(record - table->record[0]);
@@ -487,12 +490,12 @@ void fts_extract_and_tokenize(TABLE *table, const KEY *key_info, const uchar *re
     fts_tokenize(doc.data(), doc.size(), cs, out_tokens);
 }
 
-/* boolean-mode query parser that snapshots the tunable dictionaries and delegates the whole grammar,
-   the required and excluded operators, truncation, quoted phrases, and plain terms, to the server-free
-   core parser, which expands a phrase into a phrase term plus its words as required terms and folds
-   case through the charset adapter. */
+/* boolean-mode query parser that snapshots the tunable dictionaries and delegates the whole
+   grammar, the required and excluded operators, truncation, quoted phrases, and plain terms, to the
+   server-free core parser, which expands a phrase into a phrase term plus its words as required
+   terms and folds case through the charset adapter. */
 void fts_parse_boolean(const char *query, size_t len, CHARSET_INFO *cs,
-                              std::vector<tidesdb::fts::query_term> &out)
+                       std::vector<tidesdb::fts::query_term> &out)
 {
     fts_mariadb_charset mcs(cs);
     tidesdb::fts::tokenize_opts opts;

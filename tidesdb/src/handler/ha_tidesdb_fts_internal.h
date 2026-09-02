@@ -19,8 +19,8 @@
 #define HA_TIDESDB_FTS_INTERNAL_H
 
 /* module-private surface shared between the two full-text translation units, the index and
-   maintenance side (ha_tidesdb_fts.cc) and the search side (ha_tidesdb_fts_search.cc). these are not
-   part of the handler's public full-text api; nothing outside the module includes this header.
+   maintenance side (ha_tidesdb_fts.cc) and the search side (ha_tidesdb_fts_search.cc). these are
+   not part of the handler's public full-text api; nothing outside the module includes this header.
    include after ha_tidesdb.h so the server types and the full-text core types are visible. */
 
 #include <string>
@@ -30,8 +30,8 @@
 #include "src/handler/ha_tidesdb_fts.h"
 
 /* the module leans on the server-free core for the parsed-term type, the tokenizer, the boolean
-   parser, and the phrase matcher, so a boolean query term is tidesdb::fts::query_term and a token is
-   a plain lowercased std::string, the same representation the core tests exercise. */
+   parser, and the phrase matcher, so a boolean query term is tidesdb::fts::query_term and a token
+   is a plain lowercased std::string, the same representation the core tests exercise. */
 
 /**
  * fts_load_meta
@@ -55,7 +55,8 @@ int fts_load_meta(tidesdb_txn_t *txn, tidesdb_column_family_t *data_cf, uint key
  * @param cs the charset driving multi-byte folding and word boundaries
  * @param out appended with the surviving tokens in document order
  */
-void fts_tokenize(const char *text, size_t text_len, CHARSET_INFO *cs, std::vector<std::string> &out);
+void fts_tokenize(const char *text, size_t text_len, CHARSET_INFO *cs,
+                  std::vector<std::string> &out);
 
 /**
  * fts_parse_boolean

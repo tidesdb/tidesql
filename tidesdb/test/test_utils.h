@@ -49,16 +49,16 @@ static int tests_skipped = 0;
         (tests_passed)++;                                    \
     } while (0)
 
-#define PRINT_TEST_RESULTS(tests_passed, tests_failed)                                      \
-    do                                                                                      \
-    {                                                                                       \
-        printf("\n");                                                                       \
-        printf("*=======================================*\n");                              \
-        printf("Test Results\n");                                                           \
-        printf("  " BOLDGREEN "PASSED %d" RESET "\n", (tests_passed));                      \
-        printf("  " BOLDRED "FAILED %d" RESET "\n", (tests_failed));                        \
-        if (tests_skipped > 0) printf("  " YELLOW "SKIPPED %d" RESET "\n", tests_skipped);  \
-        printf("*=======================================*\n");                              \
+#define PRINT_TEST_RESULTS(tests_passed, tests_failed)                                     \
+    do                                                                                     \
+    {                                                                                      \
+        printf("\n");                                                                      \
+        printf("*=======================================*\n");                             \
+        printf("Test Results\n");                                                          \
+        printf("  " BOLDGREEN "PASSED %d" RESET "\n", (tests_passed));                     \
+        printf("  " BOLDRED "FAILED %d" RESET "\n", (tests_failed));                       \
+        if (tests_skipped > 0) printf("  " YELLOW "SKIPPED %d" RESET "\n", tests_skipped); \
+        printf("*=======================================*\n");                             \
     } while (0)
 
 #endif /* __TIDESQL_TEST_UTILS_H__ */

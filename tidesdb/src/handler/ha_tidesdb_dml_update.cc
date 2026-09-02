@@ -20,20 +20,18 @@
    UNIQUE secondary constraints and folding fts meta deltas into the transaction.  the per-concern
    steps are split into helpers so the driver stays a readable sequence. */
 
-#include "ha_tidesdb.h"
-
 #include <ft_global.h>
 #include <mysql/plugin.h>
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
 
 #include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/core/fts_text.h"
 #include "src/handler/ha_tidesdb_fts.h"
 #include "src/handler/ha_tidesdb_internal.h"
@@ -42,9 +40,10 @@
 /* ******************** update_row helpers ******************** */
 
 /* Enforce PK and UNIQUE-secondary uniqueness before any txn mutation.  A TidesDB put silently
-   overwrites, so an UPDATE that moves a row onto an existing primary key would destroy the colliding
-   row, and one that moves it onto an existing UNIQUE secondary value would create a duplicate.  On a
-   violation we set errkey/dup_ref and return the HA_ERR_* the caller surfaces; 0 means clear. */
+   overwrites, so an UPDATE that moves a row onto an existing primary key would destroy the
+   colliding row, and one that moves it onto an existing UNIQUE secondary value would create a
+   duplicate.  On a violation we set errkey/dup_ref and return the HA_ERR_* the caller surfaces; 0
+   means clear. */
 int ha_tidesdb::update_check_unique(const uchar *old_data, const uchar *new_data,
                                     const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
                                     uint new_pk_len, bool pk_changed)
@@ -104,13 +103,12 @@ int ha_tidesdb::update_check_unique(const uchar *old_data, const uchar *new_data
             make_comparable_key(ki, old_data, ki->user_defined_key_parts, old_prefix);
         uint new_prefix_len =
             make_comparable_key(ki, new_data, ki->user_defined_key_parts, new_prefix);
-        if (old_prefix_len == new_prefix_len &&
-            memcmp(old_prefix, new_prefix, new_prefix_len) == 0)
+        if (old_prefix_len == new_prefix_len && memcmp(old_prefix, new_prefix, new_prefix_len) == 0)
             continue;
 
         /* Read the index cf through a fresh iterator: it merges the txn's buffered writes when
-           created, so it sees earlier same-statement rows and committed data alike, whereas a reused
-           iterator would carry a stale writeset snapshot. */
+           created, so it sees earlier same-statement rows and committed data alike, whereas a
+           reused iterator would carry a stale writeset snapshot. */
         tidesdb_iter_t *dup_iter = NULL;
         int irc = tdb_iter_new_blocking(ha_thd(), txn, share->idx_cfs[i], &dup_iter);
         if (irc != TDB_SUCCESS || !dup_iter) return tdb_rc_to_ha(irc, "update_row dup_iter_new");
@@ -142,9 +140,9 @@ int ha_tidesdb::update_check_unique(const uchar *old_data, const uchar *new_data
 }
 
 /* Maintain one full-text index across the update: tokenize old and new docs and emit only the
-   minimum set of deletes/puts.  When the PK moves, every old (term, old_pk) is deleted and every new
-   (term, new_pk) inserted; when it is stable, a term-level diff writes only what changed.  Returns
-   TDB_SUCCESS on a no-op skip or success, else the library error. */
+   minimum set of deletes/puts.  When the PK moves, every old (term, old_pk) is deleted and every
+   new (term, new_pk) inserted; when it is stable, a term-level diff writes only what changed.
+   Returns TDB_SUCCESS on a no-op skip or success, else the library error. */
 int ha_tidesdb::update_fts_index(uint i, const uchar *old_data, const uchar *new_data,
                                  const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
                                  uint new_pk_len, bool pk_changed, time_t row_ttl)
@@ -206,8 +204,8 @@ int ha_tidesdb::update_fts_index(uint i, const uchar *old_data, const uchar *new
     else
     {
         bool doc_len_changed = (old_wc != new_wc);
-        rc = update_fts_index_diff(i, old_tf, new_tf, old_pk, old_pk_len, new_pk, new_pk_len, new_wc,
-                                   doc_len_changed, row_ttl);
+        rc = update_fts_index_diff(i, old_tf, new_tf, old_pk, old_pk_len, new_pk, new_pk_len,
+                                   new_wc, doc_len_changed, row_ttl);
         if (rc != TDB_SUCCESS) return rc;
     }
 
@@ -368,8 +366,8 @@ int ha_tidesdb::update_regular_index(uint i, const uchar *old_data, const uchar 
 
     if (old_ik_len == new_ik_len && memcmp(old_ik, new_ik, old_ik_len) == 0) return TDB_SUCCESS;
 
-    int rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], old_ik, old_ik_len,
-                                        true);
+    int rc =
+        tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], old_ik, old_ik_len, true);
     if (rc != TDB_SUCCESS) return rc;
     rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], new_ik, new_ik_len,
                               &tdb_empty_val, sizeof(tdb_empty_val), row_ttl);
@@ -390,8 +388,8 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     tidesdb_trx_t *trx = cached_trx_;
 
     /* We use handler-owned pk buffers for old/new PK to avoid large stack arrays.  old_pk is saved
-       from current_pk_buf_ before the secondary loop overwrites it; new_pk uses its own buffer so it
-       survives that manipulation (avoids overlapping-memcpy UB). */
+       from current_pk_buf_ before the secondary loop overwrites it; new_pk uses its own buffer so
+       it survives that manipulation (avoids overlapping-memcpy UB). */
     uchar old_pk[MAX_KEY_LENGTH];
     uint old_pk_len = current_pk_len_;
     memcpy(old_pk, current_pk_buf_, old_pk_len);
@@ -477,7 +475,8 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
     {
         if (wsrep_thd_is_local(cached_thd_))
         {
-            if (int wrc = wsrep_certify_row(cached_thd_, old_data, new_data, WSREP_SERVICE_KEY_EXCLUSIVE))
+            if (int wrc =
+                    wsrep_certify_row(cached_thd_, old_data, new_data, WSREP_SERVICE_KEY_EXCLUSIVE))
             {
                 tmp_restore_column_map(&table->read_set, old_map);
                 DBUG_RETURN(wrc);

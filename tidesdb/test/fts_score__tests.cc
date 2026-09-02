@@ -6,11 +6,10 @@
  */
 
 /* unit tests for the server-free bm25 scoring core. */
-#include "../src/core/fts_score.h"
-
 #include <cmath>
 #include <cstdint>
 
+#include "../src/core/fts_score.h"
 #include "test_utils.h"
 
 using namespace tidesdb::fts_score;
@@ -18,7 +17,10 @@ using namespace tidesdb::fts_score;
 static int tests_passed = 0;
 static int tests_failed = 0;
 
-static bool approx(double a, double b) { return std::fabs(a - b) < 1e-9; }
+static bool approx(double a, double b)
+{
+    return std::fabs(a - b) < 1e-9;
+}
 
 void test_avgdl(void)
 {

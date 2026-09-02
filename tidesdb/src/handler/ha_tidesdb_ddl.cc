@@ -22,18 +22,16 @@
    reports when a metadata-only change can skip a table rebuild.  the column-family config the new
    indexes are built from comes from the shared config builders. */
 
-#include "ha_tidesdb.h"
-
 #include <ft_global.h>
 #include <mysql/plugin.h>
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
 
 #include <string>
 #include <vector>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/engine/ha_tidesdb_config.h"
 #include "src/handler/ha_tidesdb_fts.h"
 #include "src/handler/ha_tidesdb_internal.h"
@@ -207,7 +205,8 @@ bool ha_tidesdb::prepare_inplace_alter_table(TABLE *altered_table,
   Inplace phase -- we populate newly added indexes by scanning the table.
   Called with no MDL lock blocking (HA_ALTER_INPLACE_NO_LOCK).
 */
-uint ha_tidesdb::inplace_build_index_key(KEY *ki, my_ptrdiff_t ptdiff, uchar *ik, bool &row_has_null)
+uint ha_tidesdb::inplace_build_index_key(KEY *ki, my_ptrdiff_t ptdiff, uchar *ik,
+                                         bool &row_has_null)
 {
     uint pos = 0;
     for (uint p = 0; p < ki->user_defined_key_parts; p++)
@@ -285,8 +284,8 @@ int ha_tidesdb::inplace_add_row_entries(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
         bool row_has_null = false;
         uint pos = inplace_build_index_key(ki, ptdiff, ik, row_has_null);
 
-        /* A UNIQUE index never constrains a row whose indexed value is NULL in any part, so multiple
-           such rows are allowed; only dedup rows whose key is entirely non-NULL. */
+        /* A UNIQUE index never constrains a row whose indexed value is NULL in any part, so
+           multiple such rows are allowed; only dedup rows whose key is entirely non-NULL. */
         if (idx_is_unique[a] && !row_has_null)
         {
             std::string prefix((const char *)ik, pos);
@@ -488,8 +487,8 @@ bool ha_tidesdb::inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
         }
 
         uint fail_key_num = 0;
-        int prc = inplace_add_row_entries(ctx, altered_table, key_data, key_size, val_data, val_size,
-                                          txn, idx_seen, idx_is_unique, fail_key_num);
+        int prc = inplace_add_row_entries(ctx, altered_table, key_data, key_size, val_data,
+                                          val_size, txn, idx_seen, idx_is_unique, fail_key_num);
         if (prc != 0)
         {
             if (prc == 1)
@@ -518,8 +517,8 @@ bool ha_tidesdb::inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
                 my_error(ER_INTERNAL_ERROR, MYF(0), "[TIDESDB] batch failed during index build");
                 return inplace_abort_build(iter, txn, altered_table, old_map);
             }
-            if (brc == 2) break;    /* iter_seek failed -- end scan gracefully */
-            continue;               /* Don't call iter_next again */
+            if (brc == 2) break; /* iter_seek failed -- end scan gracefully */
+            continue;            /* Don't call iter_next again */
         }
 
         tidesdb_iter_next(iter);
@@ -617,8 +616,8 @@ void ha_tidesdb::commit_rebuild_index_meta(TABLE *altered_table)
             continue;
         }
         std::string idx_name;
-        tidesdb_column_family_t *icf =
-            resolve_idx_cf(tdb_global, share->cf_name, altered_table->key_info[i].name.str, idx_name);
+        tidesdb_column_family_t *icf = resolve_idx_cf(
+            tdb_global, share->cf_name, altered_table->key_info[i].name.str, idx_name);
         share->idx_cfs.push_back(icf);
         share->idx_cf_names.push_back(idx_name);
     }
@@ -657,7 +656,8 @@ void ha_tidesdb::commit_rebuild_index_meta(TABLE *altered_table)
         if (share->idx_cfs[i]) share->num_secondary_indexes++;
 }
 
-void ha_tidesdb::commit_apply_runtime_config(TABLE *altered_table, Alter_inplace_info *ha_alter_info)
+void ha_tidesdb::commit_apply_runtime_config(TABLE *altered_table,
+                                             Alter_inplace_info *ha_alter_info)
 {
     /* ALTER TABLE ... AUTO_INCREMENT=N raises the counter to N (never lowers it below the current
        maximum) and persists it so the raised value survives a restart. */

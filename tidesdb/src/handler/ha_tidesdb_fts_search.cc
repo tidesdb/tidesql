@@ -17,16 +17,11 @@
 
 /* the full-text search side: the FT_INFO context and its vtables, and the ha_tidesdb ft_* methods
    that plan a MATCH ... AGAINST, score its postings with okapi bm25, and stream ranked rows. the
-   tokenizer, boolean parser, and inverted-index maintenance it leans on live in ha_tidesdb_fts.cc. */
-
-#include "ha_tidesdb.h"
+   tokenizer, boolean parser, and inverted-index maintenance it leans on live in ha_tidesdb_fts.cc.
+ */
 
 #include <ft_global.h>
 #include <mysql/plugin.h>
-
-#include "key.h"
-#include "sql_class.h"
-#include "sql_priv.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,6 +30,10 @@
 #include <unordered_set>
 #include <vector>
 
+#include "ha_tidesdb.h"
+#include "key.h"
+#include "sql_class.h"
+#include "sql_priv.h"
 #include "src/core/fts_score.h"
 #include "src/core/fts_text.h"
 #include "src/handler/ha_tidesdb_fts.h"
@@ -133,8 +132,6 @@ static void tdb_fts_reinit_search(FT_INFO *fts)
     tdb_ft_info_t *info = reinterpret_cast<tdb_ft_info_t *>(fts);
     info->current_idx = 0;
 }
-
-
 
 /* ******************** Full-Text Search methods ******************** */
 
@@ -385,7 +382,8 @@ static void ft_score_terms(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t
 }
 
 /* copy the scored documents into the result handle, allocating a server-owned copy of each pk. */
-static void ft_fill_results(tdb_ft_info_t *info, std::unordered_map<std::string, double> &doc_scores)
+static void ft_fill_results(tdb_ft_info_t *info,
+                            std::unordered_map<std::string, double> &doc_scores)
 {
     for (auto &kv : doc_scores)
     {
@@ -440,8 +438,7 @@ FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
        than an outright error; debug builds trip Protocol::end_statement's
        DBUG_ASSERT(0).  We return an empty result set instead, which the
        optimizer folds into zero matched rows. */
-    if (query_terms.empty())
-        DBUG_RETURN(reinterpret_cast<FT_INFO *>(ft_new_info(this, inx)));
+    if (query_terms.empty()) DBUG_RETURN(reinterpret_cast<FT_INFO *>(ft_new_info(this, inx)));
 
     int64_t total_docs = 0, total_words = 0;
     fts_load_meta(stmt_txn, share->cf, inx, &total_docs, &total_words);
@@ -535,5 +532,3 @@ int ha_tidesdb::ft_read(uchar *buf)
     table->status = STATUS_NOT_FOUND;
     DBUG_RETURN(HA_ERR_END_OF_FILE);
 }
-
-
