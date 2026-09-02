@@ -41,9 +41,17 @@ and the amplification is low, index lookups are cheap.
 `records_in_range()` takes one of two paths.
 
 For a point equality, where both bounds convert to identical comparable bytes such as
-`WHERE k = 5`, the engine returns the `rec_per_key` estimate directly. It avoids the range-cost path
-there, because that path is an I/O metric rather than a cardinality metric and for memtable-only data
-cannot tell a point range from a full scan.
+`WHERE k = 5`, a unique or primary key matches one row, and a non-unique index that ANALYZE or the
+open-time pass has already sampled carries a trustworthy `rec_per_key`, so both read that cached
+estimate directly. Only a non-unique index with no sample yet needs more. There the value bytes
+encode the index value without its primary-key suffix, so every matching row stores a key with that
+value as a prefix, and the matching rows are exactly the half-open range from the value to its
+successor. The engine probes that span with `tidesdb_range_stats`, which counts a single value from
+metadata and is right for a low- or high-cardinality index alike, so a never-analyzed table gets a
+correct estimate rather than the `records / 10` fallback that reads one row per value and drives a
+full scan. The successor is the value with its last byte below `0xFF` incremented and the trailing
+bytes dropped, and an all-`0xFF` value that has no finite successor falls back to the cached
+estimate.
 
 For a range predicate the engine asks the library for a direct row estimate over the requested range
 through `tidesdb_range_stats`, examining in-memory metadata, block indexes, SSTable min and max keys,

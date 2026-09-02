@@ -144,6 +144,35 @@ void ha_tidesdb::rir_encode_bounds(uint inx, bool is_pk, const key_range *min_ke
     tmp_restore_column_map(&table->read_set, old_map);
 }
 
+/**
+ * rir_prefix_successor
+ * build the smallest key strictly greater than every key that begins with the given prefix, so a
+ * point-equality probe can count exactly the rows carrying one index value as the half-open range
+ * from the value to its successor
+ * @param in the comparable prefix bytes, not NULL
+ * @param in_len the prefix length in bytes, greater than zero
+ * @param out receives the successor bytes, must hold at least in_len bytes
+ * @param out_len receives the successor length, at most in_len
+ * @return true when a finite successor exists, false when the prefix is all 0xFF and none does
+ */
+static bool rir_prefix_successor(const uchar *in, uint in_len, uchar *out, uint &out_len)
+{
+    if (!in || in_len == 0) return false;
+    memcpy(out, in, in_len);
+    /* increment the last byte below the max and drop everything after it; a trailing run of max
+       bytes carries left, and an all-max prefix has no finite successor */
+    for (uint i = in_len; i > 0; i--)
+    {
+        if (out[i - 1] != KEY_INF_HI_BYTE)
+        {
+            out[i - 1]++;
+            out_len = i;
+            return true;
+        }
+    }
+    return false;
+}
+
 ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const key_range *max_key,
                                      page_range *pages)
 {
@@ -166,10 +195,16 @@ ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const k
     uint lo_len = 0, hi_len = 0;
     rir_encode_bounds(inx, is_pk, min_key, max_key, lo_buf, lo_len, hi_buf, hi_len);
 
-    /* We detect point equality, both bounds provided with identical comparable
-       bytes.  tidesdb_range_stats describes a half-open [key_a, key_b) span, so
-       an equality collapses to an empty range it would count as zero.  We return
-       rec_per_key directly instead, which is what an equality probe wants. */
+    /* a point equality gives both bounds as the same comparable value bytes.  a unique
+       or primary key matches one row, and a non-unique index that ANALYZE or the
+       open-time pass has already sampled carries a trustworthy cached rec_per_key, so
+       both read the cheap cached estimate.  only a non-unique index with no sample yet
+       needs more, and there the value bytes encode the index value without its pk
+       suffix, so every matching row stores a key with that value as a prefix and the
+       matches are exactly the half-open range from the value to its successor.  a
+       tidesdb_range_stats probe of that span counts a single value from metadata and is
+       right for a low- or high-cardinality index alike, where the records/10 fallback a
+       never-analyzed table would otherwise use reads one row per value and full-scans. */
     if (min_key && max_key && lo_len > 0 && hi_len > 0 && lo_len == hi_len &&
         memcmp(lo_buf, hi_buf, lo_len) == 0)
     {
@@ -178,6 +213,27 @@ ha_rows ha_tidesdb::records_in_range(uint inx, const key_range *min_key, const k
         ulong rpk = (parts_used > 0 && parts_used <= ki->user_defined_key_parts)
                         ? ki->rec_per_key[parts_used - 1]
                         : 0;
+        bool is_unique = (ki->flags & HA_NOSAME);
+        ulong sampled_rpk =
+            (inx < MAX_KEY) ? share->cached_rec_per_key[inx].load(std::memory_order_relaxed) : 0;
+
+        if (!is_pk && !is_unique && sampled_rpk == 0)
+        {
+            uchar succ_buf[DATA_KEY_BUF_LEN];
+            uint succ_len = 0;
+            if (rir_prefix_successor(lo_buf, lo_len, succ_buf, succ_len))
+            {
+                tidesdb_range_stats_t rs;
+                if (tidesdb_range_stats(tdb_global, cf, lo_buf, lo_len, succ_buf, succ_len, &rs) ==
+                    TDB_SUCCESS)
+                {
+                    ha_rows est = (ha_rows)rs.estimated_keys;
+                    if (est < 1) est = 1;
+                    if (total > 0 && est > total) est = total;
+                    return est;
+                }
+            }
+        }
         return (ha_rows)tidesdb::rir::point_estimate(rpk, total);
     }
 

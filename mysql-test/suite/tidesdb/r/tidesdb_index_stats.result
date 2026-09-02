@@ -31,10 +31,10 @@ KEY k_idx (k)
 SELECT COUNT(*) AS total_rows FROM t_stats;
 total_rows
 200
-# Before ANALYZE, optimizer may not estimate well
+# Before ANALYZE, range metadata already estimates k=0 at ~100 rows
 EXPLAIN SELECT * FROM t_stats WHERE k = 0;
 id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
-1	SIMPLE	t_stats	ref	k_idx	k_idx	4	const	1	
+1	SIMPLE	t_stats	ref	k_idx	k_idx	4	const	100	
 ANALYZE TABLE t_stats;
 Table	Op	Msg_type	Msg_text
 test.t_stats	analyze	status	Engine-independent statistics collected
