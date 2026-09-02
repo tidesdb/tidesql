@@ -5,7 +5,7 @@
 # write_row / update_row / delete_row buffer row writes in the engine txn
 # and call maybe_bulk_commit() once the per-statement op counter crosses
 # TIDESDB_BULK_INSERT_BATCH_OPS.  If the inner tidesdb_txn_commit() fails
-# (e.g. a transient unified-memtable rotation race returning TDB_ERR_UNKNOWN)
+# (e.g. a transient memtable rotation race returning TDB_ERR_UNKNOWN)
 # the buffered ops are gone -- so the failure MUST propagate up so the SQL
 # layer rolls the statement back.  Returning success while ops vanish would
 # silently drop up to TIDESDB_BULK_INSERT_BATCH_OPS rows per failed commit.

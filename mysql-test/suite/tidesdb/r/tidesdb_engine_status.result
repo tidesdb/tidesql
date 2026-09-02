@@ -7,15 +7,13 @@ SHOW ENGINE TIDESDB STATUS;
 Type	Name	Status
 TIDESDB		================== TidesDB Engine Status ==================
 Data directory: TIDESDB_DATA_DIR
-Unified memtable: ON
 Column families: N
 Global sequence: N
+Min snapshot sequence: N
+Active transactions: N
 
 =+=+= Memory =+=+=
-Total system memory: N MB
-Resolved memory limit: N MB
-Memory pressure level: N
-Total memtable bytes: N
+Memtable bytes: N
 Transaction memory bytes: N
 
 =+=+= Storage =+=+=
@@ -26,24 +24,34 @@ Immutable memtables: N
 
 =+=+= Background =+=+=
 Flush pending: N
-Flush queue size: N
-Compaction queue size: N
-
-=+=+= Unified Memtable =+=+=
-Active bytes: N
-Immutable count: N
+Compaction pending: N
 Currently flushing: NO
 WAL generation: N
 Next CF index: N
 
 =+=+= Write Amplification =+=+=
 User bytes written: N
-Unified WAL bytes: N
-Per-CF WAL bytes: N
 Flush bytes written: N (N sstables)
 Compaction bytes written: N (N sstables)
 Compaction bytes read: N
+Vlog bytes written: N
 Total WA ratio: N.Nx
+
+=+=+= Value Log =+=+=
+File size: N bytes
+Indexed values: N
+Used bytes: N
+Stored bytes: N
+Live bytes: N
+Dead bytes: N
+Segments: N (drainable N, retired N)
+Reclaim: N calls, N passes
+
+=+=+= Write Stalls =+=+=
+Writes throttled: N
+Writes blocked: N
+Stall time: N us
+Admission ceiling hits: N
 
 =+=+= Block Cache =+=+=
 Enabled: YES
@@ -58,6 +66,12 @@ Partitions: N
 Total tombstones: N
 Tombstone ratio: N.N%
 Worst SSTable density: N.N% at level N
+
+=+=+= Column Families =+=+=
+test__tN: N levels, N keys (N unflushed), N bytes, read amp N.N
+  avg key N, avg value N, btree height N.N/N over N nodes, tombstone ratio N.N%
+  levels [sstables/keys/tombstones/bytes]:
+  WAL N bytes, N compactions
 
 DROP TABLE t1;
 #

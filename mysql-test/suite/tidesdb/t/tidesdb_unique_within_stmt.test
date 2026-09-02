@@ -1,0 +1,44 @@
+--source include/have_tidesdb.inc
+#
+# A single statement that stages more than one row must catch a duplicate
+# between its own rows, not just against already-committed data.  This
+# regresses a bug where the uniqueness check reused a cached iterator whose
+# view of the transaction's buffered writes was stale, so a second row in the
+# same statement did not see the first row's key.
+#
+--disable_warnings
+DROP TABLE IF EXISTS t;
+--enable_warnings
+
+CREATE TABLE t (pk INT PRIMARY KEY, u INT, UNIQUE KEY uq (u)) ENGINE=TIDESDB;
+
+--echo # multi-row INSERT, internal duplicate on the UNIQUE secondary:
+--error ER_DUP_ENTRY
+INSERT INTO t VALUES (1,100),(2,100);
+--echo # nothing landed (statement rolled back atomically):
+SELECT COUNT(*) AS cnt FROM t;
+
+--echo # multi-row INSERT, internal duplicate on the PRIMARY KEY:
+--error ER_DUP_ENTRY
+INSERT INTO t VALUES (5,50),(5,60);
+SELECT COUNT(*) AS cnt FROM t;
+
+--echo # a clean multi-row INSERT still works:
+INSERT INTO t VALUES (1,10),(2,20),(3,30);
+SELECT * FROM t ORDER BY pk;
+
+--echo # UPDATE that collides two rows on the UNIQUE secondary:
+--error ER_DUP_ENTRY
+UPDATE t SET u = 999 WHERE pk IN (1,2);
+--echo # rows unchanged after the failed UPDATE:
+SELECT * FROM t ORDER BY pk;
+
+--echo # INSERT ... SELECT staging an internal duplicate on the UNIQUE secondary:
+--error ER_DUP_ENTRY
+INSERT INTO t SELECT pk + 100, 77 FROM t;
+SELECT COUNT(*) AS cnt FROM t;
+
+DROP TABLE t;
+
+--source include/cleanup_tidesdb.inc
+--echo # Done.

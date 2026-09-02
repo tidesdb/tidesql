@@ -1,6 +1,6 @@
 --source include/have_tidesdb.inc
 #
-# Test: Large BLOB/TEXT values (> 64KB, exercising klog_value_threshold)
+# Test: Large BLOB/TEXT values (> 64KB, exercising value_separation_threshold)
 #
 
 --echo #

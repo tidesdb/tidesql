@@ -72,9 +72,9 @@
 #
 # Examples:
 #  ./install.sh
-#  ./install.sh --tidesdb-version v8.6.1 --mariadb-version 12.1
+#  ./install.sh --tidesdb-version 10.0.0 --mariadb-version mariadb-13.0.1
 #  ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
-#  ./install.sh --mariadb-version mariadb-12.1.2
+#  ./install.sh --mariadb-version mariadb-13.0.1
 #  ./install.sh --skip-deps --skip-tidesdb
 #  ./install.sh --pgo          # Full PGO build (instrument -> train -> optimize)
 #  ./install.sh --list-engines # Show which engines can be skipped
@@ -148,7 +148,7 @@ get_latest_tidesdb_version() {
     version=$(_fetch_url "https://api.github.com/repos/tidesdb/tidesdb/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "v8.6.1"  # fallback
+        echo "10.0.0"  # fallback, TidesDB 10.x tags drop the leading v
     else
         echo "$version"
     fi
@@ -159,7 +159,7 @@ get_latest_mariadb_version() {
     version=$(_fetch_url "https://api.github.com/repos/MariaDB/server/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "12.1"  # fallback
+        echo "mariadb-13.0.1"  # fallback, the version-13 tag TideSQL 5.0.0 targets
     else
         echo "$version"
     fi
@@ -1000,7 +1000,7 @@ tidesdb_compaction_threads = 4
 tidesdb_block_cache_size = 256M
 tidesdb_max_open_sstables = 256
 tidesdb_log_level = WARN
-tidesdb_unified_memtable_write_buffer_size = 256M
+tidesdb_memtable_write_buffer_size = 256M
 
 [client]
 port = 3306

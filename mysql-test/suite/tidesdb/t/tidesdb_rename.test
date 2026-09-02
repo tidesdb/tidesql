@@ -78,8 +78,8 @@ SELECT * FROM t_alter ORDER BY id;
 
 SHOW CREATE TABLE t_alter;
 
-# ALTER TABLE to change SYNC_MODE (triggers full table copy + rename)
-ALTER TABLE t_alter SYNC_MODE='NONE';
+# ALTER TABLE ... FORCE triggers a full table copy + CF rename
+ALTER TABLE t_alter FORCE;
 SHOW CREATE TABLE t_alter;
 
 # Data must survive the ALTER
@@ -131,8 +131,8 @@ INSERT INTO t_altidx VALUES (1, 'alice'), (2, 'bob'), (3, 'charlie');
 # Index works before ALTER
 SELECT id FROM t_altidx WHERE name = 'bob';
 
-# ALTER TABLE option change (full copy with index rebuild)
-ALTER TABLE t_altidx SYNC_MODE='NONE';
+# ALTER TABLE ... FORCE (full copy with index rebuild)
+ALTER TABLE t_altidx FORCE;
 
 # Index must still work after ALTER
 SELECT id FROM t_altidx WHERE name = 'bob';
@@ -180,7 +180,7 @@ CREATE TABLE t_nopk (val VARCHAR(50)) ENGINE=TIDESDB;
 INSERT INTO t_nopk VALUES ('row1'), ('row2'), ('row3');
 SELECT * FROM t_nopk;
 
-ALTER TABLE t_nopk SYNC_MODE='NONE';
+ALTER TABLE t_nopk FORCE;
 SELECT * FROM t_nopk;
 
 INSERT INTO t_nopk VALUES ('row4');

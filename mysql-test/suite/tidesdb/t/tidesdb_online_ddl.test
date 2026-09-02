@@ -27,8 +27,8 @@ SELECT id, c FROM t_ddl WHERE id = 6;
 ALTER TABLE t_ddl CHANGE b b_name VARCHAR(100), ALGORITHM=INSTANT;
 SELECT id, b_name FROM t_ddl WHERE id = 1;
 
---echo # =+=+= INSTANT: change table option (SYNC_MODE) =+=+=
-ALTER TABLE t_ddl SYNC_MODE='NONE', ALGORITHM=INSTANT;
+--echo # =+=+= INSTANT: change table option (COMMENT) =+=+=
+ALTER TABLE t_ddl COMMENT='tidesdb', ALGORITHM=INSTANT;
 SHOW CREATE TABLE t_ddl;
 
 --echo # =+=+= INPLACE: add secondary index =+=+=

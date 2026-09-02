@@ -1,0 +1,52 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # Multi-table UPDATE and DELETE.  These buffer matched row positions via
+--echo # position() and re-fetch them with rnd_pos(), then apply the writes in a
+--echo # deferred pass -- a code path single-table DML never touches, and one
+--echo # where the engine's rowid encoding and stability matter.
+--echo #
+
+CREATE TABLE parent (id INT PRIMARY KEY, tag VARCHAR(16), total INT) ENGINE=TidesDB;
+CREATE TABLE child (id INT PRIMARY KEY, parent_id INT, val INT, KEY k_p (parent_id))
+  ENGINE=TidesDB;
+
+INSERT INTO parent VALUES (1, 'a', 0), (2, 'b', 0), (3, 'c', 0);
+INSERT INTO child VALUES
+  (10, 1, 5), (11, 1, 7), (12, 2, 3), (13, 2, 9), (14, 3, 1);
+
+--echo #
+--echo # 1. Multi-table UPDATE touching both tables via a join.
+--echo #
+UPDATE parent p JOIN child c ON c.parent_id = p.id
+  SET p.tag = CONCAT(p.tag, 'x'), c.val = c.val + 100
+  WHERE p.id IN (1, 2);
+SELECT id, tag FROM parent ORDER BY id;
+SELECT id, parent_id, val FROM child ORDER BY id;
+
+--echo #
+--echo # 2. Multi-table UPDATE with an aggregate rolled up from the child.
+--echo #
+UPDATE parent p
+  SET p.total = (SELECT COALESCE(SUM(c.val), 0) FROM child c WHERE c.parent_id = p.id);
+SELECT id, total FROM parent ORDER BY id;
+
+--echo #
+--echo # 3. Multi-table DELETE: remove parent rows and their children together.
+--echo #
+DELETE p, c FROM parent p JOIN child c ON c.parent_id = p.id WHERE p.id = 1;
+SELECT id FROM parent ORDER BY id;
+SELECT id FROM child ORDER BY id;
+
+--echo #
+--echo # 4. DELETE ... USING form, deleting only from the child side.
+--echo #
+DELETE c FROM child c JOIN parent p ON c.parent_id = p.id WHERE p.tag = 'c';
+SELECT id, parent_id FROM child ORDER BY id;
+SELECT COUNT(*) AS child_expected_2 FROM child;
+
+DROP TABLE parent, child;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

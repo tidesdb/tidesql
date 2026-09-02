@@ -45,14 +45,15 @@ DROP TABLE t_backup;
 
 --echo #
 --echo # ============================================
---echo # TEST 2: Backup to existing non-empty dir fails
+--echo # TEST 2: Backup into an existing directory succeeds
 --echo # ============================================
 --echo #
 
---echo # Re-running backup to same directory should fail (not empty)
+--echo # TidesDB 10 writes a fresh consistent snapshot into the directory, so
+--echo # re-running a backup into a directory that already holds one succeeds.
 --replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
---error ER_UNKNOWN_ERROR
 eval SET GLOBAL tidesdb_backup_dir = '$backup_dir';
+SELECT @@GLOBAL.tidesdb_backup_dir IS NOT NULL AS backup_dir_set;
 
 --echo #
 --echo # ============================================

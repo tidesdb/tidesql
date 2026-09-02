@@ -1,0 +1,40 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # Table-maintenance statements: OPTIMIZE / CHECK / REPAIR.  The handlers
+--echo # exist but had no coverage.  Each must report a sane status and leave
+--echo # all data intact and readable through both the primary key and a
+--echo # secondary index.
+--echo #
+
+CREATE TABLE t (id INT PRIMARY KEY, k INT, v VARCHAR(32), KEY k_idx (k)) ENGINE=TidesDB;
+INSERT INTO t VALUES
+  (1, 30, 'a'), (2, 10, 'b'), (3, 20, 'c'), (4, 10, 'd'), (5, 30, 'e');
+--echo # churn to create tombstones and versions before maintenance
+DELETE FROM t WHERE id = 3;
+UPDATE t SET k = 40 WHERE id = 5;
+INSERT INTO t VALUES (6, 20, 'f');
+
+--echo # CHECK reports the table healthy.
+CHECK TABLE t;
+
+--echo # OPTIMIZE runs compaction; data survives.
+OPTIMIZE TABLE t;
+--sorted_result
+SELECT id, k, v FROM t;
+SELECT id, k FROM t FORCE INDEX (k_idx) WHERE k = 10 ORDER BY id;
+
+--echo # REPAIR completes; data still intact.
+REPAIR TABLE t;
+SELECT COUNT(*) AS rows_expected_5 FROM t;
+--sorted_result
+SELECT id, k, v FROM t;
+
+--echo # A second CHECK after the maintenance still passes.
+CHECK TABLE t;
+
+DROP TABLE t;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

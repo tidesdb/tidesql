@@ -29,12 +29,15 @@ rows_after
 DROP TABLE t_backup;
 #
 # ============================================
-# TEST 2: Backup to existing non-empty dir fails
+# TEST 2: Backup into an existing directory succeeds
 # ============================================
 #
-# Re-running backup to same directory should fail (not empty)
+# TidesDB 10 writes a fresh consistent snapshot into the directory, so
+# re-running a backup into a directory that already holds one succeeds.
 SET GLOBAL tidesdb_backup_dir = 'MYSQLTEST_VARDIR/tmp/tidesdb_backup_test';
-ERROR HY000: [TIDESDB] Backup to 'MYSQLTEST_VARDIR/tmp/tidesdb_backup_test' failed (err=-6)
+SELECT @@GLOBAL.tidesdb_backup_dir IS NOT NULL AS backup_dir_set;
+backup_dir_set
+1
 #
 # ============================================
 # TEST 3: Clear backup_dir variable

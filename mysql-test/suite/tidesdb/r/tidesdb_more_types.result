@@ -1,0 +1,104 @@
+#
+# Round-trip and index ordering for column types with non-trivial
+# serialization or sort-key encoding that no other test exercises:
+# BIT, ENUM, SET, YEAR, TIME (incl fractional), fractional DATETIME
+# and TIMESTAMP, and DECIMAL used as the primary key.
+#
+#
+# 1. BIT: slow-path serialize, undecodable key -> covering read falls
+#    back to PK fetch, but values and order must be exact.
+#
+CREATE TABLE b (id INT PRIMARY KEY, f BIT(17), KEY k_f (f)) ENGINE=TidesDB;
+INSERT INTO b VALUES (1, b'0'), (2, b'1'), (3, b'11111111111111111'), (4, b'10101010101010101');
+SELECT id, f+0 FROM b FORCE INDEX (k_f) ORDER BY f;
+id	f+0
+1	0
+2	1
+4	87381
+3	131071
+#
+# 2. ENUM and SET: stored as internal integer / bitmask; ENUM orders
+#    by declaration position, not string value.
+#
+CREATE TABLE es (id INT PRIMARY KEY, e ENUM('lo','mid','hi'), s SET('a','b','c'), KEY k_e (e))
+ENGINE=TidesDB;
+INSERT INTO es VALUES (1, 'hi', 'a,c'), (2, 'lo', 'b'), (3, 'mid', 'a,b,c'), (4, 'lo', '');
+# ENUM ORDER BY follows declaration order lo < mid < hi
+SELECT id, e, s FROM es FORCE INDEX (k_e) ORDER BY e, id;
+id	e	s
+2	lo	b
+4	lo	
+3	mid	a,b,c
+1	hi	a,c
+SELECT id, e FROM es WHERE e = 'lo' ORDER BY id;
+id	e
+2	lo
+4	lo
+#
+# 3. YEAR as an indexed column.
+#
+CREATE TABLE y (id INT PRIMARY KEY, yr YEAR, KEY k_y (yr)) ENGINE=TidesDB;
+INSERT INTO y VALUES (1, 2000), (2, 1901), (3, 2155), (4, 1999);
+SELECT yr FROM y FORCE INDEX (k_y) ORDER BY yr;
+yr
+1901
+1999
+2000
+2155
+SELECT id FROM y FORCE INDEX (k_y) WHERE yr = 2000;
+id
+1
+#
+# 4. TIME and fractional TIME(6) round-trip and order.
+#
+CREATE TABLE tm (id INT PRIMARY KEY, t TIME, t6 TIME(6), KEY k_t (t)) ENGINE=TidesDB;
+INSERT INTO tm VALUES
+(1, '00:00:00', '00:00:00.000001'),
+(2, '12:34:56', '12:34:56.789012'),
+(3, '-838:59:59', '-838:59:59.000000'),
+(4, '23:59:59', '23:59:59.999999');
+SELECT id, t, t6 FROM tm FORCE INDEX (k_t) ORDER BY t;
+id	t	t6
+3	-838:59:59	-838:59:59.000000
+1	00:00:00	00:00:00.000001
+2	12:34:56	12:34:56.789012
+4	23:59:59	23:59:59.999999
+#
+# 5. Fractional DATETIME(6) / TIMESTAMP(3) ordering (variable-width
+#    fractional-second encoder).
+#
+CREATE TABLE dt (id INT PRIMARY KEY, d DATETIME(6), ts TIMESTAMP(3) NULL, KEY k_d (d))
+ENGINE=TidesDB;
+INSERT INTO dt VALUES
+(1, '2020-01-01 00:00:00.000000', '2020-01-01 00:00:00.000'),
+(2, '2020-01-01 00:00:00.000001', '2020-01-01 00:00:00.001'),
+(3, '2020-01-01 00:00:00.500000', '2020-01-01 00:00:00.500'),
+(4, '2019-12-31 23:59:59.999999', '2019-12-31 23:59:59.999');
+SELECT id, d FROM dt FORCE INDEX (k_d) ORDER BY d;
+id	d
+4	2019-12-31 23:59:59.999999
+1	2020-01-01 00:00:00.000000
+2	2020-01-01 00:00:00.000001
+3	2020-01-01 00:00:00.500000
+#
+# 6. DECIMAL as PRIMARY KEY, negatives and large magnitudes.
+#
+CREATE TABLE dc (d DECIMAL(20,5) PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO dc VALUES (-99999.99999, 1), (0.00000, 2), (12345.67000, 3), (-1.00000, 4);
+SELECT d, v FROM dc ORDER BY d;
+d	v
+-99999.99999	1
+-1.00000	4
+0.00000	2
+12345.67000	3
+SELECT v FROM dc WHERE d = -1.00000;
+v
+4
+SELECT d FROM dc WHERE d BETWEEN -2 AND 20000 ORDER BY d;
+d
+-1.00000
+0.00000
+12345.67000
+DROP TABLE b, es, y, tm, dt, dc;
+#
+# Done.

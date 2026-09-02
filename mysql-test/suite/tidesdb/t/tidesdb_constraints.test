@@ -1,0 +1,80 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # Constraint and column-default behaviors over TidesDB tables: CHECK
+--echo # constraints, ON UPDATE CURRENT_TIMESTAMP, DEFAULT expressions, the
+--echo # accepted-but-not-enforced status of FOREIGN KEY, and descending key
+--echo # parts (stored ascending; the server sorts).
+--echo #
+
+--echo #
+--echo # 1. CHECK constraints are enforced on INSERT and UPDATE.
+--echo #
+CREATE TABLE t1 (
+  id INT PRIMARY KEY,
+  age INT,
+  CONSTRAINT c_age CHECK (age >= 0)
+) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 20), (2, 0);
+--error ER_CONSTRAINT_FAILED
+INSERT INTO t1 VALUES (3, -5);
+--error ER_CONSTRAINT_FAILED
+UPDATE t1 SET age = -1 WHERE id = 1;
+SELECT id, age FROM t1 ORDER BY id;
+
+--echo #
+--echo # 2. DEFAULT expression and ON UPDATE CURRENT_TIMESTAMP round-trip.
+--echo #
+CREATE TABLE t2 (
+  id INT PRIMARY KEY,
+  v INT,
+  tag VARCHAR(8) DEFAULT (CONCAT('n', 'a')),
+  upd TIMESTAMP(6) DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE=TidesDB;
+INSERT INTO t2 (id, v) VALUES (1, 10);
+SELECT id, v, tag FROM t2;
+--echo # capture the timestamp, force time to advance, update, assert it moved
+SET @t0 = (SELECT upd FROM t2 WHERE id = 1);
+--sleep 0.05
+UPDATE t2 SET v = 11 WHERE id = 1;
+SELECT (SELECT upd FROM t2 WHERE id = 1) > @t0 AS upd_advanced;
+
+--echo #
+--echo # 3. FOREIGN KEY is enforced by the engine.  A child referencing a
+--echo #    missing parent is rejected; see tidesdb_foreign_keys for the full
+--echo #    coverage of restrict, cascade, and set null.
+--echo #
+CREATE TABLE fk_parent (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE fk_child (
+  id INT PRIMARY KEY,
+  pid INT,
+  FOREIGN KEY (pid) REFERENCES fk_parent (id)
+) ENGINE=TidesDB;
+INSERT INTO fk_parent VALUES (1);
+--echo # a child referencing a non-existent parent is now rejected
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO fk_child VALUES (10, 999);
+INSERT INTO fk_child VALUES (10, 1);
+SELECT id, pid FROM fk_child ORDER BY id;
+
+--echo #
+--echo # 4. Descending key part KEY(v DESC): the comparable sort key stores the
+--echo #    part byte-inverted so a forward index walk yields descending order,
+--echo #    NULLs sort last, and range scans and covering reads are correct.
+--echo #
+CREATE TABLE t4 (id INT PRIMARY KEY, v INT, KEY k_desc (v DESC)) ENGINE=TidesDB;
+INSERT INTO t4 VALUES (1, 30), (2, 10), (3, 20), (4, 40), (5, NULL);
+--echo # DESC: values descending, NULL last
+SELECT v FROM t4 FORCE INDEX (k_desc) ORDER BY v DESC;
+--echo # ASC: NULL first, then ascending
+SELECT v FROM t4 FORCE INDEX (k_desc) ORDER BY v ASC;
+--echo # range and covering read through the descending index
+--sorted_result
+SELECT v FROM t4 FORCE INDEX (k_desc) WHERE v > 15;
+SELECT id FROM t4 FORCE INDEX (k_desc) WHERE v = 20;
+
+DROP TABLE t1, t2, fk_child, fk_parent, t4;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

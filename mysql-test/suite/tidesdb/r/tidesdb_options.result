@@ -14,16 +14,13 @@ Variable_name	Value
 tidesdb_compaction_threads	4
 SHOW VARIABLES LIKE 'tidesdb_log_level';
 Variable_name	Value
-tidesdb_log_level	DEBUG
+tidesdb_log_level	TRACE
 SHOW VARIABLES LIKE 'tidesdb_block_cache_size';
 Variable_name	Value
 tidesdb_block_cache_size	268435456
 SHOW VARIABLES LIKE 'tidesdb_max_open_sstables';
 Variable_name	Value
 tidesdb_max_open_sstables	256
-SHOW VARIABLES LIKE 'tidesdb_max_memory_usage';
-Variable_name	Value
-tidesdb_max_memory_usage	0
 #
 # ============================================
 # TEST 2: CREATE TABLE with default options
@@ -101,55 +98,7 @@ id	val
 DROP TABLE t_lowfpr;
 #
 # ============================================
-# TEST 5: CREATE TABLE with custom write buffer
-# ============================================
-#
-CREATE TABLE t_bigbuf (id INT, val VARCHAR(50)) ENGINE=TIDESDB WRITE_BUFFER_SIZE=16777216;
-SHOW CREATE TABLE t_bigbuf;
-Table	Create Table
-t_bigbuf	CREATE TABLE `t_bigbuf` (
-  `id` int(11) DEFAULT NULL,
-  `val` varchar(50) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `WRITE_BUFFER_SIZE`=16777216
-INSERT INTO t_bigbuf VALUES (1, '16MB write buffer');
-SELECT * FROM t_bigbuf;
-id	val
-1	16MB write buffer
-DROP TABLE t_bigbuf;
-#
-# ============================================
-# TEST 6: CREATE TABLE with sync mode options
-# ============================================
-#
-CREATE TABLE t_syncnone (id INT) ENGINE=TIDESDB SYNC_MODE='NONE';
-Warnings:
-Warning	1105	[TIDESDB] Table SYNC_MODE=NONE governs SSTable file sync only.  Under tidesdb_unified_memtable=ON the shared WAL is fsynced according to tidesdb_unified_memtable_sync_mode=FULL, so the table option does not change WAL durability for this table
-SHOW CREATE TABLE t_syncnone;
-Table	Create Table
-t_syncnone	CREATE TABLE `t_syncnone` (
-  `id` int(11) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `SYNC_MODE`='NONE'
-INSERT INTO t_syncnone VALUES (1);
-SELECT * FROM t_syncnone;
-id
-1
-DROP TABLE t_syncnone;
-CREATE TABLE t_syncint (id INT) ENGINE=TIDESDB SYNC_MODE='INTERVAL' SYNC_INTERVAL_US=500000;
-Warnings:
-Warning	1105	[TIDESDB] Table SYNC_MODE=INTERVAL governs SSTable file sync only.  Under tidesdb_unified_memtable=ON the shared WAL is fsynced according to tidesdb_unified_memtable_sync_mode=FULL, so the table option does not change WAL durability for this table
-SHOW CREATE TABLE t_syncint;
-Table	Create Table
-t_syncint	CREATE TABLE `t_syncint` (
-  `id` int(11) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `SYNC_MODE`='INTERVAL' `SYNC_INTERVAL_US`=500000
-INSERT INTO t_syncint VALUES (1);
-SELECT * FROM t_syncint;
-id
-1
-DROP TABLE t_syncint;
-#
-# ============================================
-# TEST 7: CREATE TABLE with isolation level
+# TEST 5: CREATE TABLE with isolation level
 # ============================================
 #
 CREATE TABLE t_rc (id INT, val VARCHAR(50)) ENGINE=TIDESDB ISOLATION_LEVEL='READ_COMMITTED';
@@ -178,24 +127,7 @@ id	val
 DROP TABLE t_ser;
 #
 # ============================================
-# TEST 8: CREATE TABLE with B+tree format
-# ============================================
-#
-CREATE TABLE t_btree (id INT, val VARCHAR(50)) ENGINE=TIDESDB USE_BTREE=1;
-SHOW CREATE TABLE t_btree;
-Table	Create Table
-t_btree	CREATE TABLE `t_btree` (
-  `id` int(11) DEFAULT NULL,
-  `val` varchar(50) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `USE_BTREE`=1
-INSERT INTO t_btree VALUES (1, 'btree format');
-SELECT * FROM t_btree;
-id	val
-1	btree format
-DROP TABLE t_btree;
-#
-# ============================================
-# TEST 9: CREATE TABLE with multiple options
+# TEST 6: CREATE TABLE with multiple options
 # ============================================
 #
 CREATE TABLE t_multi (
@@ -203,22 +135,17 @@ id INT,
 val VARCHAR(100)
 ) ENGINE=TIDESDB
 COMPRESSION='ZSTD'
-  WRITE_BUFFER_SIZE=8388608
-BLOOM_FILTER=1
+  BLOOM_FILTER=1
 BLOOM_FPR=50
-BLOCK_INDEXES=1
-SYNC_MODE='FULL'
-  ISOLATION_LEVEL='REPEATABLE_READ'
+ISOLATION_LEVEL='REPEATABLE_READ'
   LEVEL_SIZE_RATIO=8
-MIN_LEVELS=3
-SKIP_LIST_MAX_LEVEL=16
-SKIP_LIST_PROBABILITY=50;
+MIN_LEVELS=3;
 SHOW CREATE TABLE t_multi;
 Table	Create Table
 t_multi	CREATE TABLE `t_multi` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(100) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`='ZSTD' `WRITE_BUFFER_SIZE`=8388608 `BLOOM_FILTER`=1 `BLOOM_FPR`=50 `BLOCK_INDEXES`=1 `SYNC_MODE`='FULL' `ISOLATION_LEVEL`='REPEATABLE_READ' `LEVEL_SIZE_RATIO`=8 `MIN_LEVELS`=3 `SKIP_LIST_MAX_LEVEL`=16 `SKIP_LIST_PROBABILITY`=50
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`='ZSTD' `BLOOM_FILTER`=1 `BLOOM_FPR`=50 `ISOLATION_LEVEL`='REPEATABLE_READ' `LEVEL_SIZE_RATIO`=8 `MIN_LEVELS`=3
 INSERT INTO t_multi VALUES (1, 'multi-option table');
 INSERT INTO t_multi VALUES (2, 'second row');
 SELECT * FROM t_multi;
@@ -237,7 +164,7 @@ id	val
 DROP TABLE t_multi;
 #
 # ============================================
-# TEST 10: Default isolation is REPEATABLE_READ
+# TEST 7: Default isolation is REPEATABLE_READ
 # ============================================
 #
 CREATE TABLE t_default_iso (id INT) ENGINE=TIDESDB;

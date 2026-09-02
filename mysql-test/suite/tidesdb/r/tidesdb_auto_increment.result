@@ -103,7 +103,7 @@ SELECT * FROM t_ai_alter ORDER BY id;
 id	v
 1	a
 2	b
-3	jumped
+1000	jumped
 DROP TABLE t_ai_alter;
 #
 # Cleanup

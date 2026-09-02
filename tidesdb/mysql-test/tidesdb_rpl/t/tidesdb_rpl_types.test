@@ -1,0 +1,96 @@
+# Broader row-based replication coverage for TidesDB: a wide spread of column
+# types and NULLs, secondary indexes exercised on the replica apply path, a
+# larger multi-statement transaction, and a slave stop/start resume mid-stream.
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection slave
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection master
+
+--echo #
+--echo # 1. A wide column set with secondary indexes replicates and applies
+--echo #
+CREATE TABLE wide (
+  id INT PRIMARY KEY,
+  i8 TINYINT, u8 TINYINT UNSIGNED, i64 BIGINT,
+  d DECIMAL(20,6), f DOUBLE,
+  c CHAR(8), v VARCHAR(64), t TEXT, b BLOB, bin VARBINARY(16),
+  dt DATETIME(3), ts TIMESTAMP(6) NULL, y YEAR,
+  e ENUM('a','b','c'), st SET('x','y','z'), j JSON,
+  KEY k_v (v), KEY k_d (d), KEY k_dt (dt)
+) ENGINE=TidesDB;
+
+INSERT INTO wide VALUES
+ (1, -5, 200, 9000000000, 12345.678900, 3.5, 'char', 'varchar', 'text-a', 0x0102, 0xAABB,
+  '2023-01-02 03:04:05.678', '2023-06-07 08:09:10.111213', 2021, 'b', 'x,z', '{"k": 1}'),
+ (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+  NULL, NULL, NULL, NULL, NULL, NULL);
+
+UPDATE wide SET v = 'updated', d = 99999.999999, e = 'c', st = 'y' WHERE id = 1;
+DELETE FROM wide WHERE id = 2;
+INSERT INTO wide (id, v, d, dt) VALUES (3, 'three', 3.33, '2024-02-02 02:02:02.002');
+
+--sync_slave_with_master
+--connection slave
+--echo # slave content and index-driven reads
+SELECT id, i8, u8, i64, d, f, c, v, e, st, j FROM wide ORDER BY id;
+SELECT id, v FROM wide FORCE INDEX (k_v) WHERE v = 'updated';
+SELECT id FROM wide FORCE INDEX (k_d) WHERE d > 100 ORDER BY id;
+
+--echo #
+--echo # 2. A larger multi-statement transaction replicates atomically
+--echo #
+--connection master
+BEGIN;
+--disable_query_log
+let $i= 1;
+while ($i <= 200) {
+  eval INSERT INTO wide (id, v, d) VALUES (1000 + $i, CONCAT('row', $i), $i + 0.5);
+  inc $i;
+}
+--enable_query_log
+UPDATE wide SET v = 'batched' WHERE id BETWEEN 1001 AND 1100;
+COMMIT;
+--sync_slave_with_master
+--connection slave
+SELECT COUNT(*) AS total, SUM(id) AS sum_id FROM wide;
+SELECT COUNT(*) AS batched FROM wide WHERE v = 'batched';
+
+--echo #
+--echo # 3. A slave stop/start resumes replication with no loss
+--echo #
+--connection slave
+STOP SLAVE SQL_THREAD;
+--connection master
+INSERT INTO wide (id, v, d) VALUES (5000, 'while-stopped', 1.0);
+UPDATE wide SET v = 'while-stopped-2' WHERE id = 5000;
+--connection slave
+START SLAVE SQL_THREAD;
+--connection master
+--sync_slave_with_master
+--connection slave
+SELECT id, v FROM wide WHERE id = 5000;
+
+--echo #
+--echo # 4. Master and slave tables are byte-for-byte identical
+--echo #
+--connection master
+--let $mc= query_get_value(CHECKSUM TABLE wide EXTENDED, Checksum, 1)
+--sync_slave_with_master
+--connection slave
+--let $sc= query_get_value(CHECKSUM TABLE wide EXTENDED, Checksum, 1)
+--connection master
+if ($mc == $sc) {
+  --echo # extended checksums match on master and slave
+}
+if ($mc != $sc) {
+  --echo MISMATCH master=$mc slave=$sc
+}
+
+--connection master
+DROP TABLE wide;
+--sync_slave_with_master
+
+--source include/rpl_end.inc

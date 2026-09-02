@@ -1,0 +1,225 @@
+--source include/have_tidesdb.inc
+#
+# Foreign key support in the TidesDB engine.  This first increment persists the
+# constraints, reports them back for SHOW CREATE and information_schema, rejects
+# a child row whose parent is absent, and blocks a delete or update of a parent
+# row while a child still references it.
+#
+
+--echo #
+--echo # 1. A foreign key is persisted and reported through SHOW CREATE TABLE
+--echo #
+CREATE TABLE fk_parent (id INT PRIMARY KEY, label VARCHAR(32)) ENGINE=TidesDB;
+CREATE TABLE fk_child (
+  cid INT PRIMARY KEY,
+  pid INT,
+  KEY pid_idx (pid),
+  CONSTRAINT fk_c FOREIGN KEY (pid) REFERENCES fk_parent (id)
+) ENGINE=TidesDB;
+
+SHOW CREATE TABLE fk_child;
+
+--echo #
+--echo # 2. information_schema reports the referential constraint and columns
+--echo #
+SELECT constraint_name, referenced_table_name, delete_rule, update_rule
+  FROM information_schema.referential_constraints
+  WHERE table_name = 'fk_child';
+SELECT column_name, referenced_table_name, referenced_column_name
+  FROM information_schema.key_column_usage
+  WHERE table_name = 'fk_child' AND referenced_table_name IS NOT NULL;
+
+--echo #
+--echo # 3. A child row referencing a missing parent is rejected
+--echo #
+INSERT INTO fk_parent VALUES (1, 'one'), (2, 'two');
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO fk_child VALUES (10, 99);
+INSERT INTO fk_child VALUES (10, 1);
+SELECT * FROM fk_child;
+
+--echo #
+--echo # 4. A NULL referencing column is allowed (MATCH SIMPLE)
+--echo #
+INSERT INTO fk_child VALUES (11, NULL);
+SELECT * FROM fk_child ORDER BY cid;
+
+--echo #
+--echo # 5. Updating a child to a missing parent is rejected, to an existing one is allowed
+--echo #
+--error ER_NO_REFERENCED_ROW_2
+UPDATE fk_child SET pid = 77 WHERE cid = 10;
+UPDATE fk_child SET pid = 2 WHERE cid = 10;
+SELECT * FROM fk_child ORDER BY cid;
+
+--echo #
+--echo # 6. Deleting a still-referenced parent is blocked (RESTRICT)
+--echo #
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM fk_parent WHERE id = 2;
+--echo # a parent with no children can be deleted
+DELETE FROM fk_parent WHERE id = 1;
+SELECT * FROM fk_parent ORDER BY id;
+
+--echo #
+--echo # 7. Updating a referenced parent key is blocked while referenced
+--echo #
+--error ER_ROW_IS_REFERENCED_2
+UPDATE fk_parent SET id = 3 WHERE id = 2;
+
+--echo #
+--echo # 8. foreign_key_checks = 0 bypasses enforcement
+--echo #
+SET foreign_key_checks = 0;
+INSERT INTO fk_child VALUES (12, 88);
+DELETE FROM fk_parent WHERE id = 2;
+SET foreign_key_checks = 1;
+SELECT * FROM fk_child ORDER BY cid;
+
+--echo #
+--echo # 9. Multi-column foreign key
+--echo #
+CREATE TABLE fk_p2 (a INT, b INT, PRIMARY KEY (a, b)) ENGINE=TidesDB;
+CREATE TABLE fk_c2 (
+  id INT PRIMARY KEY,
+  a INT, b INT,
+  KEY ab_idx (a, b),
+  CONSTRAINT fk_c2c FOREIGN KEY (a, b) REFERENCES fk_p2 (a, b)
+) ENGINE=TidesDB;
+INSERT INTO fk_p2 VALUES (1, 1), (1, 2);
+INSERT INTO fk_c2 VALUES (1, 1, 1);
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO fk_c2 VALUES (2, 9, 9);
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM fk_p2 WHERE a = 1 AND b = 1;
+SELECT * FROM fk_c2 ORDER BY id;
+
+DROP TABLE fk_c2, fk_p2, fk_child, fk_parent;
+
+--echo #
+--echo # 10. ON DELETE CASCADE removes the referencing children
+--echo #
+CREATE TABLE cas_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE cas_c (
+  cid INT PRIMARY KEY,
+  pid INT,
+  KEY pid_idx (pid),
+  CONSTRAINT fk_cas FOREIGN KEY (pid) REFERENCES cas_p (id) ON DELETE CASCADE
+) ENGINE=TidesDB;
+INSERT INTO cas_p VALUES (1), (2);
+INSERT INTO cas_c VALUES (10, 1), (11, 1), (12, 2);
+--echo # deleting parent 1 removes its two children, parent 2's child stays
+DELETE FROM cas_p WHERE id = 1;
+SELECT * FROM cas_c ORDER BY cid;
+
+--echo #
+--echo # 11. ON DELETE SET NULL nulls the child columns
+--echo #
+CREATE TABLE sn_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE sn_c (
+  cid INT PRIMARY KEY,
+  pid INT,
+  KEY pid_idx (pid),
+  CONSTRAINT fk_sn FOREIGN KEY (pid) REFERENCES sn_p (id) ON DELETE SET NULL
+) ENGINE=TidesDB;
+INSERT INTO sn_p VALUES (1);
+INSERT INTO sn_c VALUES (10, 1), (11, 1);
+DELETE FROM sn_p WHERE id = 1;
+--echo # the children survive with pid set to NULL
+SELECT * FROM sn_c ORDER BY cid;
+
+--echo #
+--echo # 12. ON UPDATE CASCADE follows the parent key change
+--echo #
+CREATE TABLE uc_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE uc_c (
+  cid INT PRIMARY KEY,
+  pid INT,
+  KEY pid_idx (pid),
+  CONSTRAINT fk_uc FOREIGN KEY (pid) REFERENCES uc_p (id) ON UPDATE CASCADE
+) ENGINE=TidesDB;
+INSERT INTO uc_p VALUES (1);
+INSERT INTO uc_c VALUES (10, 1), (11, 1);
+UPDATE uc_p SET id = 5 WHERE id = 1;
+--echo # the children now reference the new parent key
+SELECT * FROM uc_c ORDER BY cid;
+
+--echo #
+--echo # 13. Nested cascade runs through a chain of tables
+--echo #
+CREATE TABLE gp (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE pr (
+  id INT PRIMARY KEY,
+  gid INT,
+  KEY gid_idx (gid),
+  CONSTRAINT fk_pr FOREIGN KEY (gid) REFERENCES gp (id) ON DELETE CASCADE
+) ENGINE=TidesDB;
+CREATE TABLE ch (
+  id INT PRIMARY KEY,
+  prid INT,
+  KEY prid_idx (prid),
+  CONSTRAINT fk_ch FOREIGN KEY (prid) REFERENCES pr (id) ON DELETE CASCADE
+) ENGINE=TidesDB;
+INSERT INTO gp VALUES (1);
+INSERT INTO pr VALUES (100, 1), (101, 1);
+INSERT INTO ch VALUES (1000, 100), (1001, 101);
+--echo # deleting the grandparent cascades through parents to the children
+DELETE FROM gp WHERE id = 1;
+SELECT COUNT(*) AS parents_left FROM pr;
+SELECT COUNT(*) AS children_left FROM ch;
+
+DROP TABLE ch, pr, gp, uc_c, uc_p, sn_c, sn_p, cas_c, cas_p;
+
+--echo #
+--echo # 14. A descending foreign key column is rejected rather than enforced wrong
+--echo #
+CREATE TABLE dsc_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+--error ER_CANT_CREATE_TABLE
+CREATE TABLE dsc_c (
+  cid INT PRIMARY KEY,
+  pid INT,
+  KEY pid_idx (pid DESC),
+  CONSTRAINT fk_dsc FOREIGN KEY (pid) REFERENCES dsc_p (id)
+) ENGINE=TidesDB;
+DROP TABLE dsc_p;
+
+--echo #
+--echo # 15. A foreign key may reference a NOT NULL unique key, not only the PK
+--echo #
+CREATE TABLE uq_p (id INT PRIMARY KEY, u INT NOT NULL, UNIQUE KEY u_idx (u)) ENGINE=TidesDB;
+CREATE TABLE uq_c (
+  cid INT PRIMARY KEY,
+  uref INT,
+  KEY uref_idx (uref),
+  CONSTRAINT fk_uq FOREIGN KEY (uref) REFERENCES uq_p (u)
+) ENGINE=TidesDB;
+INSERT INTO uq_p VALUES (1, 100), (2, 200);
+--echo # referencing an existing unique value is accepted
+INSERT INTO uq_c VALUES (10, 100);
+--echo # referencing a missing unique value is rejected
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO uq_c VALUES (11, 999);
+--echo # deleting a parent row still referenced by its unique value is blocked
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM uq_p WHERE u = 100;
+--echo # an unreferenced unique value can be deleted
+DELETE FROM uq_p WHERE u = 200;
+SELECT * FROM uq_c ORDER BY cid;
+DROP TABLE uq_c, uq_p;
+
+--echo #
+--echo # 16. A reference to a NULLable unique key is rejected rather than mis-enforced
+--echo #
+CREATE TABLE nu_p (id INT PRIMARY KEY, u INT, UNIQUE KEY u_idx (u)) ENGINE=TidesDB;
+--error ER_CANT_CREATE_TABLE
+CREATE TABLE nu_c (
+  cid INT PRIMARY KEY,
+  uref INT,
+  KEY uref_idx (uref),
+  CONSTRAINT fk_nu FOREIGN KEY (uref) REFERENCES nu_p (u)
+) ENGINE=TidesDB;
+DROP TABLE nu_p;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

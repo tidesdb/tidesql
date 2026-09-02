@@ -37,7 +37,7 @@ CREATE TABLE t1 (
   pad CHAR(60) NOT NULL DEFAULT '',
   PRIMARY KEY (id),
   KEY k_1 (k)
-) ENGINE=TIDESDB SYNC_MODE='NONE';
+) ENGINE=TIDESDB;
 
 --echo #
 --echo # === Populate: 2000 rows ===

@@ -5,7 +5,7 @@
 # The row-count estimate (information_schema.TABLES.TABLE_ROWS, stats.records)
 # is derived from tidesdb_cf_estimate_cardinality, which counts each key once
 # per SSTable regardless of how many MVCC versions it holds and also counts the
-# CF's entries in the (default) shared unified memtable.  For a table written
+# CF's entries in the (default) shared memtable.  For a table written
 # with only distinct keys and no updates every key exists exactly once, so the
 # estimate is exact.  Two independent tables confirm the count is attributed to
 # each column family separately rather than summing the shared memtable.

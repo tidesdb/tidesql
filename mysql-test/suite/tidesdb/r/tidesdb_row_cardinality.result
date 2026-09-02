@@ -3,20 +3,18 @@ CREATE TABLE t_b (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
 ANALYZE TABLE t_a;
 Table	Op	Msg_type	Msg_text
 test.t_a	analyze	status	Engine-independent statistics collected
-test.t_a	analyze	Note	[TIDESDB] CF 'test__t_a'  total_keys=200  data_size=0 bytes  memtable=4600 bytes  levels=1  read_amp=1.00  cache_hit=0.0%
-test.t_a	analyze	Note	[TIDESDB] avg_key=6.9 bytes  avg_value=16.1 bytes
-test.t_a	analyze	Note	[TIDESDB] level 1  sstables=0  size=0 bytes  keys=0
-test.t_a	analyze	Note	[TIDESDB] WA  user=3800  wal=0  flush=0 (0 ssts)  compact_write=0 (0 ssts)  compact_read=0  ratio=0.00x
-test.t_a	analyze	Note	[TIDESDB] idx CF 'test__t_a__idx_k_v'  keys=200  data_size=0 bytes  levels=1
+test.t_a	analyze	Note	[TIDESDB] CF 'test__t_a'  total_keys=200  data_size=0 bytes  levels=0  read_amp=0.00
+test.t_a	analyze	Note	[TIDESDB] avg_key=0.0 bytes  avg_value=0.0 bytes
+test.t_a	analyze	Note	[TIDESDB] WA  user=3800  wal=4800  flush=0  compact_write=0 (0 ssts)  compact_read=0  ratio=1.26x
+test.t_a	analyze	Note	[TIDESDB] idx CF 'test__t_a__idx_k_v'  keys=200  data_size=0 bytes  levels=0
 test.t_a	analyze	Note	[TIDESDB] idx 'k_v' sampled=200 distinct=10 rec_per_key=20
 test.t_a	analyze	status	OK
 ANALYZE TABLE t_b;
 Table	Op	Msg_type	Msg_text
 test.t_b	analyze	status	Engine-independent statistics collected
-test.t_b	analyze	Note	[TIDESDB] CF 'test__t_b'  total_keys=75  data_size=0 bytes  memtable=1725 bytes  levels=1  read_amp=1.00  cache_hit=0.0%
-test.t_b	analyze	Note	[TIDESDB] avg_key=6.9 bytes  avg_value=16.1 bytes
-test.t_b	analyze	Note	[TIDESDB] level 1  sstables=0  size=0 bytes  keys=0
-test.t_b	analyze	Note	[TIDESDB] WA  user=1425  wal=0  flush=0 (0 ssts)  compact_write=0 (0 ssts)  compact_read=0  ratio=0.00x
+test.t_b	analyze	Note	[TIDESDB] CF 'test__t_b'  total_keys=75  data_size=0 bytes  levels=0  read_amp=0.00
+test.t_b	analyze	Note	[TIDESDB] avg_key=0.0 bytes  avg_value=0.0 bytes
+test.t_b	analyze	Note	[TIDESDB] WA  user=1425  wal=1800  flush=0  compact_write=0 (0 ssts)  compact_read=0  ratio=1.26x
 test.t_b	analyze	status	OK
 # each table reports its own distinct row count, not the shared-memtable sum
 # t_a -> 200
@@ -33,11 +31,10 @@ TABLE_ROWS
 ANALYZE TABLE t_a;
 Table	Op	Msg_type	Msg_text
 test.t_a	analyze	status	Engine-independent statistics collected
-test.t_a	analyze	Note	[TIDESDB] CF 'test__t_a'  total_keys=300  data_size=0 bytes  memtable=6900 bytes  levels=1  read_amp=1.00  cache_hit=0.0%
-test.t_a	analyze	Note	[TIDESDB] avg_key=6.9 bytes  avg_value=16.1 bytes
-test.t_a	analyze	Note	[TIDESDB] level 1  sstables=0  size=0 bytes  keys=0
-test.t_a	analyze	Note	[TIDESDB] WA  user=5700  wal=0  flush=0 (0 ssts)  compact_write=0 (0 ssts)  compact_read=0  ratio=0.00x
-test.t_a	analyze	Note	[TIDESDB] idx CF 'test__t_a__idx_k_v'  keys=300  data_size=0 bytes  levels=1
+test.t_a	analyze	Note	[TIDESDB] CF 'test__t_a'  total_keys=300  data_size=0 bytes  levels=0  read_amp=0.00
+test.t_a	analyze	Note	[TIDESDB] avg_key=0.0 bytes  avg_value=0.0 bytes
+test.t_a	analyze	Note	[TIDESDB] WA  user=5700  wal=7200  flush=0  compact_write=0 (0 ssts)  compact_read=0  ratio=1.26x
+test.t_a	analyze	Note	[TIDESDB] idx CF 'test__t_a__idx_k_v'  keys=300  data_size=0 bytes  levels=0
 test.t_a	analyze	Note	[TIDESDB] idx 'k_v' sampled=300 distinct=10 rec_per_key=30
 test.t_a	analyze	status	OK
 # t_a -> 300

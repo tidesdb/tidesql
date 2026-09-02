@@ -1,19 +1,19 @@
 # Copyright (c) 2026 TidesDB Corp.
-# 
+#
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation; version 2 of the License.
-# 
+#
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-# Optional Plugin-level ASAN + UBSAN 
+# Optional Plugin-level ASAN + UBSAN
 #
 # You enable with cmake -DTIDESDB_WITH_ASAN=ON -DTIDESDB_WITH_UBSAN=ON ..
 # This instruments only the TidesDB plugin .so, not the whole server, though its good to build the server with sanitizers too.
@@ -50,44 +50,33 @@ FIND_LIBRARY(TIDESDB_LIB
         PATH_SUFFIXES lib
 )
 
-# We find compression libraries and always use FIND_LIBRARY to get full paths
-# We cannot use pkg-config because it returns library names like "zstd" which 
-# conflict with MariaDB's own "zstd" MODULE target (provider_zstd plugin).    
-FIND_LIBRARY(ZSTD_LIBRARY
-        NAMES zstd zstd_static
-        HINTS ENV LIBRARY_PATH ENV VCPKG_INSTALLED_DIR
-        PATHS
+# The compression backends all resolve to full paths through FIND_LIBRARY.
+# pkg-config cannot be used here because it returns bare names like "zstd",
+# which collide with MariaDB's own "zstd" MODULE target (provider_zstd plugin).
+# All three live in the same system and vcpkg locations, so one shared path
+# list drives every search.
+SET(TIDESDB_COMPRESSION_PATHS
         /usr/local/lib
         /usr/lib
         /usr/lib/x86_64-linux-gnu
         /opt/homebrew/lib
         "C:/vcpkg/installed/x64-windows/lib"
-        "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/lib"
-)
+        "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/lib")
+
+FIND_LIBRARY(ZSTD_LIBRARY
+        NAMES zstd zstd_static
+        HINTS ENV LIBRARY_PATH ENV VCPKG_INSTALLED_DIR
+        PATHS ${TIDESDB_COMPRESSION_PATHS})
 
 FIND_LIBRARY(LZ4_LIBRARY
         NAMES lz4
         HINTS ENV LIBRARY_PATH ENV VCPKG_INSTALLED_DIR
-        PATHS
-        /usr/local/lib
-        /usr/lib
-        /usr/lib/x86_64-linux-gnu
-        /opt/homebrew/lib
-        "C:/vcpkg/installed/x64-windows/lib"
-        "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/lib"
-)
+        PATHS ${TIDESDB_COMPRESSION_PATHS})
 
 FIND_LIBRARY(SNAPPY_LIBRARY
         NAMES snappy
         HINTS ENV LIBRARY_PATH ENV VCPKG_INSTALLED_DIR
-        PATHS
-        /usr/local/lib
-        /usr/lib
-        /usr/lib/x86_64-linux-gnu
-        /opt/homebrew/lib
-        "C:/vcpkg/installed/x64-windows/lib"
-        "$ENV{VCPKG_INSTALLATION_ROOT}/installed/x64-windows/lib"
-)
+        PATHS ${TIDESDB_COMPRESSION_PATHS})
 
 # We find include directories
 # and look for tidesdb/db.h to get the parent include directory
@@ -129,17 +118,16 @@ IF(NOT LZ4_LIBRARY)
   RETURN()
 ENDIF()
 
-
 INCLUDE_DIRECTORIES(${TIDESDB_INCLUDE_DIR})
 
-# We build list of libraries to link, we use full paths from FIND_LIBRARY 
+# We build list of libraries to link, we use full paths from FIND_LIBRARY
 SET(TIDESDB_LIBS ${TIDESDB_LIB} ${ZSTD_LIBRARY} ${LZ4_LIBRARY})
 
 IF(SNAPPY_LIBRARY)
   LIST(APPEND TIDESDB_LIBS ${SNAPPY_LIBRARY})
 ENDIF()
 
-# On Windows, we need pthreads library 
+# On Windows, we need pthreads library
 IF(WIN32)
   FIND_LIBRARY(PTHREADS_LIBRARY
           NAMES pthreadVC3 pthreadVC2 pthread pthreads
@@ -153,22 +141,50 @@ IF(WIN32)
   ENDIF()
 ENDIF()
 
-# Optional S3 object store connector 
-OPTION(TIDESDB_WITH_S3 "Enable S3-compatible object store connector" OFF)
-IF(TIDESDB_WITH_S3)
-  FIND_PACKAGE(CURL REQUIRED)
-  LIST(APPEND TIDESDB_LIBS CURL::libcurl)
-  MESSAGE(STATUS "TidesDB: S3 object store connector enabled")
-ENDIF()
+# Server-free core modules (unit-tested standalone under test/), compiled into the plugin.
+SET(TIDESDB_CORE_SOURCES
+        src/core/spatial.cc
+        src/core/fts_text.cc
+        src/core/sort_key.cc
+        src/core/row_format.cc
+        src/core/rir.cc
+        src/core/cf_name.cc
+        src/core/fts_score.cc)
 
-# Define the storage engine using MariaDB's MYSQL_ADD_PLUGIN macro 
-MYSQL_ADD_PLUGIN(tidesdb ha_tidesdb.cc STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS})
+# Server-coupled handler modules split out of the ha_tidesdb.cc monolith.  Each is a thin
+# adapter over a src/core unit or a cohesive slice of the handler, kept under the 1000-line rule.
+SET(TIDESDB_HANDLER_SOURCES
+        src/handler/ha_tidesdb_spatial.cc
+        src/handler/ha_tidesdb_fts.cc
+        src/handler/ha_tidesdb_fts_search.cc
+        src/handler/ha_tidesdb_row.cc
+        src/handler/ha_tidesdb_keycodec.cc
+        src/handler/ha_tidesdb_dml_update.cc
+        src/handler/ha_tidesdb_dml.cc
+        src/handler/ha_tidesdb_scan.cc
+        src/handler/ha_tidesdb_index.cc
+        src/handler/ha_tidesdb_optimizer.cc
+        src/handler/ha_tidesdb_admin.cc
+        src/handler/ha_tidesdb_ddl.cc
+        src/handler/ha_tidesdb_fk.cc
+        src/handler/ha_tidesdb_lifecycle.cc
+        src/handler/ha_tidesdb_open.cc
+        src/handler/ha_tidesdb_read.cc
+        src/handler/ha_tidesdb_txn.cc
+        src/handler/ha_tidesdb_wsrep.cc
+        src/engine/ha_tidesdb_config.cc
+        src/engine/ha_tidesdb_status.cc)
 
-# S3 compile definition for the plugin 
-IF(TIDESDB_WITH_S3)
-  IF(TARGET tidesdb)
-    TARGET_COMPILE_DEFINITIONS(tidesdb PRIVATE TIDESDB_WITH_S3)
-  ENDIF()
+# Define the storage engine using MariaDB's MYSQL_ADD_PLUGIN macro
+MYSQL_ADD_PLUGIN(tidesdb ha_tidesdb.cc ${TIDESDB_CORE_SOURCES} ${TIDESDB_HANDLER_SOURCES}
+        STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS})
+
+# The split translation units under src/handler and src/engine reach the root headers
+# (ha_tidesdb.h) and the src/core and src/handler headers by their path-qualified names, so
+# the plugin source directory must be on the include path for every source, not just the ones
+# that happen to sit at the root.
+IF(TARGET tidesdb)
+  TARGET_INCLUDE_DIRECTORIES(tidesdb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 ENDIF()
 
 # We apply sanitizer flags to the plugin target only

@@ -1,18 +1,18 @@
 --source include/have_tidesdb.inc
 #
-# TidesDB TPC-C contention test -- reproduces the exact NEWORD district
-# counter read-modify-write pattern that causes 0 NOPM in HammerDB.
+# TidesDB TPC-C contention test -- the NEWORD district counter read-modify-write
+# pattern.  Every New Order transaction increments district.d_next_o_id.  Under
+# TidesDB's optimistic MVCC there are no row-blocking locks, so two concurrent
+# increments both read the same value and the second to commit fails with
+# TDB_ERR_CONFLICT (ER_LOCK_DEADLOCK / ER_ERROR_DURING_COMMIT).  The correct
+# application response is to retry, and with retry the counter is exact with no
+# lost updates -- the same final result pessimistic locking would give, reached
+# by retry instead of blocking.
 #
-# The district row is a serial bottleneck: every New Order transaction
-# must SELECT d_next_o_id FOR UPDATE, then UPDATE d_next_o_id + 1.
-# With InnoDB this serializes via row locks. With TidesDB's optimistic
-# MVCC, two concurrent transactions both read the same value, both
-# write the incremented value, and the second to commit fails with
-# TDB_ERR_CONFLICT (mapped to ER_LOCK_DEADLOCK / ER_ERROR_DURING_COMMIT).
-#
-# This test verifies that concurrent counter increments produce correct
-# results without lost updates or permanent failures.
-#
+
+# Concurrent conflicts are expected and retried, so suppress their log noise.
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_LOCKED");
 
 --echo #
 --echo # === Setup: TPC-C district table (simplified) ===
@@ -43,6 +43,30 @@ CREATE TABLE new_order (
   PRIMARY KEY (no_w_id, no_d_id, no_o_id)
 ) ENGINE=TIDESDB;
 
+# One NEWORD district increment, retried until it commits.  A conflict rolls the
+# attempt back and loops; the bound keeps a pathological run from hanging.
+delimiter |;
+CREATE PROCEDURE neword_incr()
+BEGIN
+  DECLARE committed INT DEFAULT 0;
+  DECLARE tries INT DEFAULT 0;
+  WHILE committed = 0 AND tries < 1000 DO
+    BEGIN
+      DECLARE CONTINUE HANDLER FOR 1180, 1213, 1205 SET committed = -1;
+      SET committed = 1;
+      SET tries = tries + 1;
+      START TRANSACTION;
+      UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id = 1 AND d_id = 1;
+      COMMIT;
+    END;
+    IF committed = -1 THEN
+      ROLLBACK;
+      SET committed = 0;
+    END IF;
+  END WHILE;
+END|
+delimiter ;|
+
 --echo #
 --echo # === TEST 1: Single-session NEWORD (baseline) ===
 --echo #
@@ -57,40 +81,28 @@ COMMIT;
 SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1;
 
 --echo #
---echo # === TEST 2: Two concurrent UPDATEs on same district row ===
---echo # With pessimistic_locking=ON, the second UPDATE blocks on the
---echo # row lock until the first commits.  Both succeed, counter
---echo # increments by 2 with no conflicts and no lost updates.
+--echo # === TEST 2: Two concurrent NEWORD increments ===
+--echo # Both retry on conflict, so both increments land with no lost update.
 --echo #
 
 connect (connA, localhost, root,,);
 connect (connB, localhost, root,,);
 
-# Connection A: UPDATE district (acquires row lock, held until COMMIT)
 connection connA;
-BEGIN;
-UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
-
-# Connection B: send UPDATE async -- will block on row lock until A commits
+send CALL neword_incr();
 connection connB;
-send UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
-
-# Connection A: commit -- releases row lock, unblocks B
+send CALL neword_incr();
 connection connA;
-COMMIT;
-
-# Connection B: reap -- should succeed now that A released the lock
+reap;
 connection connB;
 reap;
 
-# Check results
 connection default;
---echo # Both UPDATEs succeeded: 3002 + 2 = 3004
+--echo # Both increments applied via retry: 3002 + 2 = 3004
 SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1;
 
 --echo #
 --echo # === TEST 3: Serial counter increment (10 iterations) ===
---echo # Verify the counter works correctly when serialized.
 --echo #
 
 --disable_query_log
@@ -104,13 +116,12 @@ while ($i < 10)
 }
 --enable_query_log
 
---echo # Should be initial(3004) + 10 = 3014
+--echo # Initial(3004) + 10 = 3014
 SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1;
 
 --echo #
---echo # === TEST 4: 4 concurrent autocommit UPDATEs on same row ===
---echo # With pessimistic_locking=ON, all 4 serialize through the row lock.
---echo # Counter should advance by exactly 4.
+--echo # === TEST 4: 4 concurrent NEWORD increments on the same row ===
+--echo # Every connection retries on conflict, so the counter advances by 4.
 --echo #
 
 # Reset counter
@@ -121,15 +132,14 @@ connect (storm2, localhost, root,,);
 connect (storm3, localhost, root,,);
 connect (storm4, localhost, root,,);
 
-# Each connection does 5 serial increments (autocommit)
 connection storm1;
-send UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
+send CALL neword_incr();
 connection storm2;
-send UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
+send CALL neword_incr();
 connection storm3;
-send UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
+send CALL neword_incr();
 connection storm4;
-send UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
+send CALL neword_incr();
 
 connection storm1;
 reap;
@@ -141,7 +151,7 @@ connection storm4;
 reap;
 
 connection default;
---echo # All 4 UPDATEs succeeded through serialized row locks: 5001 + 4 = 5005
+--echo # All 4 increments applied via retry: 5001 + 4 = 5005
 SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1;
 
 --echo #
@@ -156,6 +166,7 @@ disconnect storm3;
 disconnect storm4;
 
 connection default;
+DROP PROCEDURE neword_incr;
 DROP TABLE district;
 DROP TABLE orders;
 DROP TABLE new_order;

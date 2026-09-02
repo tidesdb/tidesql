@@ -1,0 +1,91 @@
+# Cross-node write-write conflict resolution.  Two transactions on different nodes
+# touch the same row, then the second node applies the first node's write before it
+# commits its own.  TidesDB parks no row lock for an applier to block on, so the
+# plugin records each local write in a process write-intent map and, when an applier
+# replays a conflicting cluster write, brute-force aborts the local holder through
+# the server so it rolls back at its own commit rather than certifying a write set
+# the peers cannot apply.  Certification alone cannot catch this ordering because the
+# losing node has already applied the winner and legitimately depends on it, so the
+# provider sees a dependency and not a conflict; the brute-force abort is what keeps
+# the replicas from diverging, mirroring how InnoDB resolves the same race.
+#
+# The second node waits on a separate connection until it has applied the winning
+# row before committing, so the losing order is deterministic rather than a timing
+# race.  The loser gets a clean deadlock and both replicas keep the winner's row.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+# A second connection to node 2, used only to observe applied state so the wait
+# does not run inside the about-to-lose transaction.
+--connect (node_2b, 127.0.0.1, root, , test, $NODE_MYPORT_2)
+
+--connection node_1
+CREATE TABLE t (id INT PRIMARY KEY, v INT, u INT, UNIQUE KEY k_u (u)) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 0, 10), (2, 0, 20);
+
+--echo #
+--echo # 1. Same primary key changed on both nodes; first committer wins.
+--echo #
+--connection node_2
+SET AUTOCOMMIT=OFF;
+START TRANSACTION;
+UPDATE t SET v = 2 WHERE id = 1;
+
+--connection node_1
+SET AUTOCOMMIT=OFF;
+START TRANSACTION;
+UPDATE t SET v = 1 WHERE id = 1;
+COMMIT;
+
+--connection node_2b
+let $wait_condition= SELECT v = 1 FROM t WHERE id = 1;
+--source include/wait_condition.inc
+
+--connection node_2
+--error ER_LOCK_DEADLOCK,ER_ERROR_DURING_COMMIT
+COMMIT;
+SET AUTOCOMMIT=ON;
+
+--echo # node 1's value stands on both nodes
+--connection node_1
+SELECT v FROM t WHERE id = 1;
+--connection node_2b
+SELECT v FROM t WHERE id = 1;
+
+--echo #
+--echo # 2. Conflicting insert of the same unique secondary key across nodes.
+--echo #
+--connection node_2
+SET AUTOCOMMIT=OFF;
+START TRANSACTION;
+INSERT INTO t VALUES (4, 0, 99);
+
+--connection node_1
+SET AUTOCOMMIT=OFF;
+START TRANSACTION;
+INSERT INTO t VALUES (3, 0, 99);
+COMMIT;
+
+--connection node_2b
+let $wait_condition= SELECT COUNT(*) = 1 FROM t WHERE id = 3;
+--source include/wait_condition.inc
+
+--connection node_2
+--error ER_LOCK_DEADLOCK,ER_ERROR_DURING_COMMIT
+COMMIT;
+SET AUTOCOMMIT=ON;
+
+--echo # only node 1's row for the unique value survives, cluster-wide
+--connection node_1
+SELECT id, u FROM t WHERE u = 99;
+--connection node_2b
+SELECT id, u FROM t WHERE u = 99;
+
+--connection node_1
+DROP TABLE t;
+
+--source include/galera_end.inc

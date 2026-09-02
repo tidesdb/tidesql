@@ -7,6 +7,14 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+# Pinned build versions, the single place to move from one release to the next.
+# TideSQL plugin 5.0.0 targets TidesDB library 10.0.0 on MariaDB 13.  Bump these
+# two constants together to retarget the whole matrix.  TIDESDB_VERSION is a tag
+# on tidesdb/tidesdb, MARIADB_VERSION a tag on MariaDB/server.
+env:
+  TIDESDB_VERSION: "10.0.0"
+  MARIADB_VERSION: "mariadb-13.0.1"
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}
@@ -94,14 +102,6 @@ jobs:
         restore-keys: |
           vcpkg-windows-x64-
 
-    # Resolve the TidesDB library version we are about to build so the cache key
-    # tracks the LIBRARY, not the plugin.  Without this the key hashed the plugin
-    # dir (tidesql/tidesdb/**), so a library bump never invalidated the cache.
-    - name: Resolve TidesDB library revision
-      id: tidesdb_rev
-      shell: bash
-      run: echo "sha=$(git ls-remote https://github.com/tidesdb/tidesdb.git HEAD | cut -f1)" >> "$GITHUB_OUTPUT"
-
     - name: Cache TidesDB library
       uses: actions/cache@v4
       with:
@@ -109,10 +109,11 @@ jobs:
           /usr/local/lib/libtidesdb*
           /usr/local/include/tidesdb*
           C:/tidesdb
-        # Exact upstream-commit match only.  No restore-keys fallback: a loose
-        # "tidesdb-${{ runner.os }}-" prefix would restore the newest cache for
-        # the OS regardless of contents, i.e. a stale library.
-        key: tidesdb-${{ runner.os }}-${{ steps.tidesdb_rev.outputs.sha }}
+        # Keyed on the pinned TidesDB version, so bumping TIDESDB_VERSION
+        # invalidates the cache and a stale library is never restored.  No
+        # restore-keys fallback: a loose "tidesdb-${{ runner.os }}-" prefix would
+        # restore the newest cache for the OS regardless of the pinned version.
+        key: tidesdb-${{ runner.os }}-${{ env.TIDESDB_VERSION }}
 
     - name: Cache ccache
       if: runner.os != 'Windows'
@@ -156,20 +157,13 @@ jobs:
         echo "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
         echo "TIDESDB_ROOT=C:/tidesdb" >> $env:GITHUB_ENV
 
-    - name: Set MariaDB version
-      id: mariadb-release
-      shell: bash
-      run: |
-        echo "tag=mariadb-12.2.2" >> $GITHUB_OUTPUT
-        echo "MariaDB version: mariadb-12.2.2"
-
     - name: Clone MariaDB server
       shell: bash
       run: |
         MAX_RETRIES=3
         for i in $(seq 1 $MAX_RETRIES); do
-          echo "Attempt $i of $MAX_RETRIES: Cloning MariaDB server..."
-          if git clone --depth 1 --branch ${{ steps.mariadb-release.outputs.tag }} https://github.com/MariaDB/server.git mariadb-server; then
+          echo "Attempt $i of $MAX_RETRIES: Cloning MariaDB server $MARIADB_VERSION..."
+          if git clone --depth 1 --branch "$MARIADB_VERSION" https://github.com/MariaDB/server.git mariadb-server; then
             cd mariadb-server
             git submodule update --init --recursive --depth 1
             exit 0
@@ -186,7 +180,7 @@ jobs:
       run: |
         rm -rf tidesdb-lib
         for i in 1 2 3; do
-          if git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+          if git clone --depth 1 --branch "$TIDESDB_VERSION" https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
             break
           fi
           echo "Clone failed (attempt $i), retrying in 10s..."
@@ -209,7 +203,7 @@ jobs:
         
         rm -rf tidesdb-lib
         for i in 1 2 3; do
-          if git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+          if git clone --depth 1 --branch "$TIDESDB_VERSION" https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
             break
           fi
           echo "Clone failed (attempt $i), retrying in 10s..."
@@ -230,7 +224,7 @@ jobs:
       run: |
         rm -rf tidesdb-lib
         for i in 1 2 3; do
-          if git clone --depth 1 https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+          if git clone --depth 1 --branch "$TIDESDB_VERSION" https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
             break
           fi
           echo "Clone failed (attempt $i), retrying in 10s..."
