@@ -1,0 +1,142 @@
+# ---- a clean primary-key range deletes exactly that range ----
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO t VALUES (1,1),(2,2),(3,3),(4,4),(5,5),(6,6),(7,7),(8,8),(9,9),(10,10);
+DELETE FROM t WHERE id BETWEEN 3 AND 7;
+SELECT id FROM t ORDER BY id;
+id
+1
+2
+8
+9
+10
+SELECT COUNT(*) FROM t;
+COUNT(*)
+5
+DROP TABLE t;
+# ---- an IN-list with gaps keeps the rows between the deleted keys ----
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO t VALUES (10,0),(11,0),(12,0),(13,0),(14,0),(15,0);
+DELETE FROM t WHERE id IN (10,12,14);
+SELECT id FROM t ORDER BY id;
+id
+11
+13
+15
+DROP TABLE t;
+# ---- a residual filter over a range keeps the non-matching rows ----
+CREATE TABLE t (id INT PRIMARY KEY, keep INT) ENGINE=TIDESDB;
+INSERT INTO t VALUES (1,0),(2,1),(3,0),(4,1),(5,0),(6,1);
+DELETE FROM t WHERE id BETWEEN 1 AND 6 AND keep = 0;
+SELECT id FROM t ORDER BY id;
+id
+2
+4
+6
+DROP TABLE t;
+# ---- LIMIT deletes only its count from the front of the range ----
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO t VALUES (1,0),(2,0),(3,0),(4,0),(5,0),(6,0),(7,0),(8,0);
+DELETE FROM t WHERE id BETWEEN 1 AND 8 ORDER BY id LIMIT 3;
+SELECT COUNT(*) AS remaining FROM t;
+remaining
+5
+SELECT id FROM t ORDER BY id;
+id
+4
+5
+6
+7
+8
+DROP TABLE t;
+# ---- ROLLBACK restores a deferred range delete ----
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO t VALUES (1,1),(2,2),(3,3),(4,4),(5,5);
+START TRANSACTION;
+DELETE FROM t WHERE id BETWEEN 2 AND 4;
+SELECT COUNT(*) AS mid_txn FROM t;
+mid_txn
+2
+ROLLBACK;
+SELECT id FROM t ORDER BY id;
+id
+1
+2
+3
+4
+5
+DROP TABLE t;
+# ---- a secondary index stays consistent after a range delete ----
+CREATE TABLE t (id INT PRIMARY KEY, k INT, KEY k_idx (k)) ENGINE=TIDESDB;
+INSERT INTO t VALUES (1,100),(2,100),(3,200),(4,200),(5,300),(6,300);
+DELETE FROM t WHERE id BETWEEN 2 AND 5;
+SELECT id FROM t ORDER BY id;
+id
+1
+6
+# the secondary index must not point at deleted rows
+SELECT id FROM t WHERE k = 200;
+id
+SELECT id FROM t WHERE k = 100 ORDER BY id;
+id
+1
+DROP TABLE t;
+# ---- a delete trigger disables deferral and still deletes correctly ----
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+CREATE TABLE audit_del (id INT) ENGINE=TIDESDB;
+CREATE TRIGGER trg BEFORE DELETE ON t FOR EACH ROW INSERT INTO audit_del VALUES (OLD.id);
+INSERT INTO t VALUES (1,1),(2,2),(3,3),(4,4),(5,5);
+DELETE FROM t WHERE id BETWEEN 2 AND 4;
+SELECT id FROM t ORDER BY id;
+id
+1
+5
+SELECT id FROM audit_del ORDER BY id;
+id
+2
+3
+4
+DROP TRIGGER trg;
+DROP TABLE t;
+DROP TABLE audit_del;
+# ---- a large clean range (over the min-rows threshold) coalesces correctly ----
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO t
+WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n < 200)
+SELECT n, n FROM s;
+DELETE FROM t WHERE id BETWEEN 50 AND 149;
+SELECT COUNT(*) AS remaining, MIN(id) AS lo, MAX(id) AS hi FROM t;
+remaining	lo	hi
+100	1	200
+# a large range with a residual filter keeps the survivors
+DELETE FROM t WHERE id BETWEEN 1 AND 200 AND v % 2 = 0;
+SELECT COUNT(*) AS after_filter FROM t;
+after_filter
+50
+SELECT MIN(id) AS first_left FROM t;
+first_left
+1
+DROP TABLE t;
+# ---- a large range on a table with a secondary index stays consistent ----
+CREATE TABLE t (id INT PRIMARY KEY, k INT, KEY k_idx (k)) ENGINE=TIDESDB;
+INSERT INTO t
+WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n < 300)
+SELECT n, n MOD 5 FROM s;
+DELETE FROM t WHERE id BETWEEN 1 AND 200;
+SELECT COUNT(*) AS remaining FROM t;
+remaining
+100
+SELECT COUNT(*) AS via_index_k0 FROM t WHERE k = 0;
+via_index_k0
+20
+SELECT MIN(id) AS lo FROM t;
+lo
+201
+DROP TABLE t;
+# ---- a full unconditional delete empties the table ----
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO t VALUES (1,1),(2,2),(3,3);
+DELETE FROM t;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+0
+DROP TABLE t;

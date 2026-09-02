@@ -89,6 +89,33 @@ tombstone-density trigger. The compaction runs on the caller's thread, so the DE
 after it commits, and the threshold should be high enough that the compaction time is small relative
 to the DELETE that triggered it.
 
+## Range tombstone for a whole-range delete
+
+When a multi-row DELETE removes every row across a contiguous primary-key span, the engine writes one
+range tombstone over the span instead of a per-row tombstone for each key. One interval on the WAL
+and in the memtable replaces thousands, and compaction drops the whole span in a single step rather
+than carrying each tombstone through the levels.
+
+The engine cannot know upfront that a DELETE is a clean range, so it works it out as it goes.
+Through the statement it buffers each deleted primary-row key and holds its tombstone back rather
+than writing it. With the tombstones deferred, every row the statement deleted is still live, so on
+`end_bulk_delete` the count of live rows in the touched `[min, max]` span equals the number of
+buffered keys exactly when the statement removed the whole span. In that case one
+`tidesdb_txn_delete_range` replaces the run. A survivor, from a residual `WHERE` condition, an
+`IN`-list gap, an index-condition-pushdown rejection, or an `ORDER BY ... LIMIT` that picks
+scattered rows, leaves more live rows than buffered keys, and the buffer falls back to per-row
+tombstones with no change in result. The whole thing lives in the transaction, so a `ROLLBACK`
+restores the rows like any other write.
+
+Deferral is skipped for a table with a delete trigger, since a deferred tombstone must never hide a
+row from a trigger reading the table mid-statement, and under Galera, where a deferred range
+tombstone would not line up with the per-row certification the write path already issues.
+Secondary-index entries are still deleted per row, because a primary-key range does not bound a
+secondary-index range, so the range tombstone covers the primary row CF alone. A delete larger than
+an internal cap flushes its buffer to per-row tombstones and finishes on the ordinary path, which
+keeps the buffered keys bounded to a few megabytes. When the range tombstone is written it already
+reclaims the span, so the compact-after-range-delete pass above is skipped for that statement.
+
 ## Backpressure absorption
 
 When ingest outruns flush, the library applies backpressure at its L0 admission policy, making a

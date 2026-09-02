@@ -239,6 +239,18 @@ static constexpr ha_rows TIDESDB_INDEX_BUILD_BATCH = 100;
    and each secondary-index put. */
 static constexpr ha_rows TIDESDB_BULK_INSERT_BATCH_OPS = 500;
 
+/* Deferred data-key cap for a range-tombstone bulk DELETE.  While a bulk delete defers its
+   primary-row tombstones to coalesce them into one range tombstone, the keys buffer in memory and
+   the mid-txn commit is held back, so a delete larger than this flushes the buffer as per-row
+   tombstones and finishes on the ordinary path.  Sized so the buffered keys stay a few megabytes.
+ */
+static constexpr size_t TIDESDB_BULK_DELETE_DEFER_CAP = 262144;
+
+/* Fewest buffered rows worth verifying for a range tombstone.  Below this a bulk delete just writes
+   the buffered keys as per-row tombstones, since the completeness scan would cost more than the few
+   tombstones it might save. */
+static constexpr size_t TIDESDB_BULK_DELETE_MIN_RANGE = 64;
+
 /* Encryption */
 static constexpr uint TIDESDB_ENC_IV_LEN = 16;
 static constexpr uint TIDESDB_ENC_KEY_LEN = 32;

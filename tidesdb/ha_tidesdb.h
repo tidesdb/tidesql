@@ -551,6 +551,19 @@ class ha_tidesdb : public handler
     std::string bulk_delete_min_pk_;
     std::string bulk_delete_max_pk_;
 
+    /* Range-tombstone deferral for a bulk DELETE.  When a bulk delete is eligible (a user primary
+       key, no delete triggers, no wsrep) delete_row buffers each primary-row data key here instead
+       of writing a per-row tombstone, and end_bulk_delete coalesces them into one range tombstone
+       once it has confirmed every live row in the touched key span was one this statement deleted.
+       Cleared on start_bulk_delete; emptied when flushed as per-row tombstones or turned into a
+       range tombstone. */
+    bool bulk_delete_defer_{false};
+    std::vector<std::string> bulk_delete_keys_;
+
+    /* Write every buffered data key as a per-row tombstone, the fallback when a delete is not a
+       clean range or outgrows the deferral cap.  Empties bulk_delete_keys_. */
+    int bulk_delete_flush_buffered(tidesdb_txn_t *txn);
+
     /* Multi-Range Read state.  We accept MRR when every range the optimizer
        hands us is UNIQUE_RANGE|EQ_RANGE (i.e. the WHERE col IN (...) case on
        a full key) and fall back to the default MRR->read_range_first path for
@@ -758,7 +771,7 @@ class ha_tidesdb : public handler
                HA_REQUIRES_KEY_COLUMNS_FOR_DELETE | HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
                HA_ONLINE_ANALYZE | HA_CAN_ONLINE_BACKUPS | HA_CONCURRENT_OPTIMIZE |
                HA_CAN_TABLES_WITHOUT_ROLLBACK | HA_CAN_FULLTEXT | HA_CAN_FULLTEXT_EXT |
-               HA_CAN_GEOMETRY | HA_CAN_RTREEKEYS | HA_CAN_EXPORT;
+               HA_CAN_GEOMETRY | HA_CAN_RTREEKEYS | HA_CAN_EXPORT | HA_CAN_FORCE_BULK_DELETE;
     }
 
     ulong index_flags(uint idx, uint part, bool all_parts) const override;

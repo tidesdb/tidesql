@@ -457,11 +457,10 @@ int ha_tidesdb::delete_row(const uchar *buf)
     uchar dk[DATA_KEY_BUF_LEN];
     uint dk_len = build_data_key(current_pk_buf_, current_pk_len_, dk);
 
-    /* Track the touched data-key range when the auto-compact session var
-       is on and we are inside a multi-row DELETE.  We compare the full
-       data keys (KEY_NS_DATA + comparable_pk) so the recorded bounds can
-       be passed to tidesdb_compact_range without further conversion. */
-    if (in_bulk_delete_ && cached_compact_after_range_delete_min_rows_ > 0)
+    /* Track the touched data-key range for the compact-after-range-delete reclaim and for the
+       deferral's range tombstone.  Full data keys (KEY_NS_DATA + comparable_pk) compare here, so
+       the bounds pass straight to tidesdb_compact_range or tidesdb_txn_delete_range. */
+    if (in_bulk_delete_ && (bulk_delete_defer_ || cached_compact_after_range_delete_min_rows_ > 0))
     {
         const std::string this_key((const char *)dk, dk_len);
         if (bulk_delete_rows_ == 0)
@@ -477,12 +476,34 @@ int ha_tidesdb::delete_row(const uchar *buf)
         bulk_delete_rows_++;
     }
 
-    int rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->cf, dk, dk_len,
-                                        cached_single_delete_primary_);
-    if (rc != TDB_SUCCESS)
+    /* Defer the primary-row tombstone when this bulk delete is coalescing into a range tombstone,
+       buffering the key rather than writing it so end_bulk_delete can turn the whole run into one
+       tombstone.  A delete that outgrows the cap flushes the buffer to per-row tombstones and
+       finishes on the ordinary path.  Otherwise write the tombstone now, as a single-row delete
+       does. */
+    int rc = TDB_SUCCESS;
+    if (bulk_delete_defer_)
     {
-        if (flip_read_set) tmp_restore_column_map(&table->read_set, old_map);
-        DBUG_RETURN(tdb_rc_to_ha(rc, "delete_row"));
+        bulk_delete_keys_.emplace_back((const char *)dk, dk_len);
+        if (bulk_delete_keys_.size() >= TIDESDB_BULK_DELETE_DEFER_CAP)
+        {
+            if (int frc = bulk_delete_flush_buffered(txn))
+            {
+                if (flip_read_set) tmp_restore_column_map(&table->read_set, old_map);
+                DBUG_RETURN(frc);
+            }
+            bulk_delete_defer_ = false;
+        }
+    }
+    else
+    {
+        rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->cf, dk, dk_len,
+                                        cached_single_delete_primary_);
+        if (rc != TDB_SUCCESS)
+        {
+            if (flip_read_set) tmp_restore_column_map(&table->read_set, old_map);
+            DBUG_RETURN(tdb_rc_to_ha(rc, "delete_row"));
+        }
     }
 
     /* the primary-key row was removed above; now delete this row's entries from every
@@ -517,9 +538,11 @@ int ha_tidesdb::delete_row(const uchar *buf)
     }
 #endif
 
-    /* Bulk DELETE mid-txn commit-- 1 data delete + num_secondary_indexes
-       secondary-index deletes per row. */
-    if (in_bulk_delete_)
+    /* Bulk DELETE mid-txn commit-- 1 data delete + num_secondary_indexes secondary-index deletes
+       per row.  A deferring delete holds the buffered primary tombstones outside the txn, so a
+       mid-txn commit would split them from the secondary deletes; skip it and let the cap bound
+       memory instead. */
+    if (in_bulk_delete_ && !bulk_delete_defer_)
     {
         if (int mrc = bulk_flush_if_threshold(trx, 1 + (ha_rows)share->num_secondary_indexes))
         {
@@ -749,6 +772,66 @@ int ha_tidesdb::bulk_update_row(const uchar *old_data, const uchar *new_data,
     DBUG_RETURN(update_row(old_data, new_data));
 }
 
+/* build the smallest key strictly greater than every key beginning with the given data key, so a
+   half-open range from the low bound to this successor covers an inclusive [min, max] span.  the
+   last byte below 0xFF is incremented and the rest dropped; an all-0xFF key has no finite successor
+   and returns false. */
+static bool data_key_successor(const uchar *in, uint in_len, uchar *out, uint &out_len)
+{
+    if (!in || in_len == 0) return false;
+    memcpy(out, in, in_len);
+    for (uint i = in_len; i > 0; i--)
+    {
+        if ((uint8_t)out[i - 1] != KEY_INF_HI_BYTE)
+        {
+            out[i - 1]++;
+            out_len = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* count the live data-key rows in the half-open span [lo, hi) of a column family, used to confirm a
+   deferred bulk delete removed every row the span holds before it collapses to a range tombstone.
+ */
+static int count_live_data_keys(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
+                                const uchar *lo, uint lo_len, const uchar *hi, uint hi_len,
+                                uint64_t *out_count)
+{
+    *out_count = 0;
+    tidesdb_iter_t *it = NULL;
+    int rc = tidesdb_iter_new_range(txn, cf, lo, lo_len, hi, hi_len, &it);
+    if (rc != TDB_SUCCESS || !it) return rc != TDB_SUCCESS ? rc : TDB_ERR_IO;
+    tidesdb_iter_seek_to_first(it);
+    (void)thd;
+    while (tidesdb_iter_valid(it))
+    {
+        uint8_t *k = NULL;
+        size_t ks = 0;
+        if (tidesdb_iter_key(it, &k, &ks) == TDB_SUCCESS)
+        {
+            tdb_owned_buf kg(k);
+            if (is_data_key(k, ks)) (*out_count)++;
+        }
+        tidesdb_iter_next(it);
+    }
+    tidesdb_iter_free(it);
+    return TDB_SUCCESS;
+}
+
+int ha_tidesdb::bulk_delete_flush_buffered(tidesdb_txn_t *txn)
+{
+    for (const std::string &k : bulk_delete_keys_)
+    {
+        int rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->cf, (const uchar *)k.data(),
+                                            (uint)k.size(), cached_single_delete_primary_);
+        if (rc != TDB_SUCCESS) return tdb_rc_to_ha(rc, "bulk delete flush");
+    }
+    bulk_delete_keys_.clear();
+    return 0;
+}
+
 bool ha_tidesdb::start_bulk_delete()
 {
     in_bulk_delete_ = true;
@@ -756,20 +839,72 @@ bool ha_tidesdb::start_bulk_delete()
     bulk_delete_rows_ = 0;
     bulk_delete_min_pk_.clear();
     bulk_delete_max_pk_.clear();
+    bulk_delete_keys_.clear();
+    /* defer primary-row tombstones into one range tombstone only for a plain user-pk table with no
+       delete triggers, since deferral must not hide a row from a trigger reading the table
+       mid-statement, and never under galera, where a deferred range tombstone would not line up
+       with the per-row certification the write path already issued. */
+    bulk_delete_defer_ = share && share->has_user_pk && share->cf && table->triggers == nullptr;
+#ifdef WITH_WSREP
+    if (wsrep_on(cached_thd_ ? cached_thd_ : ha_thd())) bulk_delete_defer_ = false;
+#endif
     return 0;
 }
 
 int ha_tidesdb::end_bulk_delete()
 {
     in_bulk_delete_ = false;
+    bool did_range_tombstone = false;
 
-    /* Auto compact-after-range-delete.  Threshold zero (default) keeps the
-       previous behavior, i.e. no synchronous compaction at end-of-statement.
-       When the threshold is met we call tidesdb_compact_range over the
-       observed [min_pk, max_pk] data-key range on the primary CF.  Secondary
-       index tombstones are reclaimed by the per-CF tombstone_density_trigger
-       on those CFs. */
-    if (cached_compact_after_range_delete_min_rows_ > 0 &&
+    /* Resolve a deferred bulk delete.  Every buffered key is a row this statement deleted, and with
+       the tombstones deferred those rows are still live, so the live rows in [min, max] equal the
+       buffered count exactly when the statement removed the whole span.  In that case one range
+       tombstone replaces the run; a survivor (a residual filter, an IN-list gap, an ICP reject)
+       leaves more live rows than buffered keys, so the buffer falls back to per-row tombstones. */
+    if (bulk_delete_defer_ && !bulk_delete_keys_.empty())
+    {
+        if (int erc = ensure_stmt_txn()) return erc;
+        tidesdb_txn_t *txn = stmt_txn;
+
+        /* Only a run large enough to repay the completeness scan attempts a range tombstone.  When
+           the live rows in [min, max] equal the buffered count, one range tombstone replaces the
+           whole run; otherwise the buffer falls back to per-row tombstones. */
+        bool ranged = false;
+        if (bulk_delete_keys_.size() >= TIDESDB_BULK_DELETE_MIN_RANGE && share && share->cf &&
+            !bulk_delete_min_pk_.empty() && !bulk_delete_max_pk_.empty())
+        {
+            uchar hi[DATA_KEY_BUF_LEN];
+            uint hi_len = 0;
+            uint64_t range_live = 0;
+            if (data_key_successor((const uchar *)bulk_delete_max_pk_.data(),
+                                   (uint)bulk_delete_max_pk_.size(), hi, hi_len) &&
+                count_live_data_keys(
+                    cached_thd_, txn, share->cf, (const uchar *)bulk_delete_min_pk_.data(),
+                    (uint)bulk_delete_min_pk_.size(), hi, hi_len, &range_live) == TDB_SUCCESS &&
+                range_live == bulk_delete_keys_.size() &&
+                tidesdb_txn_delete_range(txn, share->cf,
+                                         (const uint8_t *)bulk_delete_min_pk_.data(),
+                                         bulk_delete_min_pk_.size(), hi, hi_len) == TDB_SUCCESS)
+            {
+                did_range_tombstone = true;
+                ranged = true;
+                stmt_txn_dirty = true;
+                if (cached_trx_) cached_trx_->dirty = true;
+                bulk_delete_keys_.clear();
+            }
+        }
+        if (!ranged)
+            if (int frc = bulk_delete_flush_buffered(txn)) return frc;
+    }
+    bulk_delete_keys_.clear();
+    bulk_delete_defer_ = false;
+
+    /* Auto compact-after-range-delete.  Threshold zero (default) keeps the previous behavior, no
+       synchronous compaction at end-of-statement.  When the threshold is met we compact the
+       observed [min_pk, max_pk] range on the primary CF, unless we already turned the run into a
+       range tombstone, which reclaims the span on its own.  Secondary index tombstones are
+       reclaimed by the per-CF tombstone_density_trigger. */
+    if (!did_range_tombstone && cached_compact_after_range_delete_min_rows_ > 0 &&
         bulk_delete_rows_ >= cached_compact_after_range_delete_min_rows_ && share && share->cf &&
         !bulk_delete_min_pk_.empty() && !bulk_delete_max_pk_.empty())
     {
