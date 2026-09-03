@@ -62,6 +62,24 @@ Misses: N
 Hit rate: N.N%
 Partitions: N
 
+=+=+= IO Device Writes =+=+=
+sstable: N writes, N bytes, avg N.N us, max N us
+wal: N writes, N bytes, avg N.N us, max N us
+vlog: N writes, N bytes, avg N.N us, max N us
+
+=+=+= Write Stalls By Reason =+=+=
+wal_append: N stalls, N us total, N us max
+rotate_lock: N stalls, N us total, N us max
+rotate_work: N stalls, N us total, N us max
+admission: N stalls, N us total, N us max
+manifest_commit: N stalls, N us total, N us max
+
+=+=+= Key Log Encoding =+=+=
+Chains: N, logical N bytes, stored N bytes, N.Nx
+
+=+=+= Value Log Encoding =+=+=
+Chains: N, logical N bytes, stored N bytes, N.Nx
+
 =+=+= Tombstones =+=+=
 Total tombstones: N
 Tombstone ratio: N.N%

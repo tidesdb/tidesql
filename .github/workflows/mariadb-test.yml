@@ -246,14 +246,12 @@ jobs:
       if: runner.os != 'Windows'
       run: |
         cp -r tidesql/tidesdb mariadb-server/storage/
-        cp -r tidesql/mysql-test/suite/tidesdb mariadb-server/mysql-test/suite/
 
     - name: Copy TidesDB storage engine to MariaDB (Windows)
       if: runner.os == 'Windows'
       shell: cmd
       run: |
         xcopy /E /I tidesql\tidesdb mariadb-server\storage\tidesdb
-        xcopy /E /I tidesql\mysql-test\suite\tidesdb mariadb-server\mysql-test\suite\tidesdb
 
     - name: Build MariaDB with TidesDB plugin (Ubuntu)
       if: runner.os == 'Linux'

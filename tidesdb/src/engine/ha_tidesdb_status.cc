@@ -113,6 +113,39 @@ static long long srv_stat_writes_blocked;
 static long long srv_stat_write_stall_us;
 static long long srv_stat_write_stall_ceiling_hits;
 
+/* Device-write accounting from tidesdb_get_io_stats.  The library meters writes
+   through its file-descriptor manager, which covers the sstable and wal devices;
+   the value log keeps its own byte accounting in the Value Log section above, so
+   only sstable and wal are surfaced as counters here.  ops and bytes are lifetime
+   totals; the per-write timing the api also reports is nondeterministic and stays
+   in the free-text SHOW ENGINE STATUS only. */
+static long long srv_stat_io_sstable_write_ops;
+static long long srv_stat_io_sstable_write_bytes;
+static long long srv_stat_io_wal_write_ops;
+static long long srv_stat_io_wal_write_bytes;
+
+/* Write-stall counts by reason from tidesdb_get_stall_stats, each the number of
+   times a commit stalled for that reason since open.  The admission reason is the
+   unflushed-backlog backpressure whose aggregate microseconds the Write Stalls
+   section already sums; splitting the count per reason lets a monitor separate wal
+   append waits from memtable rotation and manifest commit waits.  The stall time
+   is nondeterministic and prints only in the free-text status. */
+static long long srv_stat_stall_wal_append;
+static long long srv_stat_stall_rotate_lock;
+static long long srv_stat_stall_rotate_work;
+static long long srv_stat_stall_admission;
+static long long srv_stat_stall_manifest_commit;
+
+/* Codec-chain encoding aggregates from tidesdb_get_klog_encoding_stats and its vlog
+   counterpart, summed across every chain.  logical is the size before encoding and
+   stored the size after, so logical divided by stored is the realized compression
+   ratio for the key log and the value log.  The per-chain codec breakdown prints in
+   the free-text status. */
+static long long srv_stat_klog_logical_bytes;
+static long long srv_stat_klog_stored_bytes;
+static long long srv_stat_vlog_encoded_logical_bytes;
+static long long srv_stat_vlog_encoded_stored_bytes;
+
 /* Tombstone aggregates are forward-declared near the top of this file so
    tidesdb_show_status can read them directly.  Their definitions live up
    there. */
@@ -252,6 +285,19 @@ static struct st_mysql_show_var tidesdb_status_vars_inner[] = {
     {"writes_blocked", (char *)&srv_stat_writes_blocked, SHOW_LONGLONG},
     {"write_stall_us", (char *)&srv_stat_write_stall_us, SHOW_LONGLONG},
     {"write_stall_ceiling_hits", (char *)&srv_stat_write_stall_ceiling_hits, SHOW_LONGLONG},
+    {"io_sstable_write_ops", (char *)&srv_stat_io_sstable_write_ops, SHOW_LONGLONG},
+    {"io_sstable_write_bytes", (char *)&srv_stat_io_sstable_write_bytes, SHOW_LONGLONG},
+    {"io_wal_write_ops", (char *)&srv_stat_io_wal_write_ops, SHOW_LONGLONG},
+    {"io_wal_write_bytes", (char *)&srv_stat_io_wal_write_bytes, SHOW_LONGLONG},
+    {"stall_wal_append", (char *)&srv_stat_stall_wal_append, SHOW_LONGLONG},
+    {"stall_rotate_lock", (char *)&srv_stat_stall_rotate_lock, SHOW_LONGLONG},
+    {"stall_rotate_work", (char *)&srv_stat_stall_rotate_work, SHOW_LONGLONG},
+    {"stall_admission", (char *)&srv_stat_stall_admission, SHOW_LONGLONG},
+    {"stall_manifest_commit", (char *)&srv_stat_stall_manifest_commit, SHOW_LONGLONG},
+    {"klog_logical_bytes", (char *)&srv_stat_klog_logical_bytes, SHOW_LONGLONG},
+    {"klog_stored_bytes", (char *)&srv_stat_klog_stored_bytes, SHOW_LONGLONG},
+    {"vlog_encoded_logical_bytes", (char *)&srv_stat_vlog_encoded_logical_bytes, SHOW_LONGLONG},
+    {"vlog_encoded_stored_bytes", (char *)&srv_stat_vlog_encoded_stored_bytes, SHOW_LONGLONG},
     {NullS, NullS, SHOW_LONGLONG}};
 
 /* SHOW STATUS export: refresh the db-level counters once for this SHOW, then hand back the inner
@@ -343,6 +389,65 @@ static void tidesdb_refresh_status_vars()
     srv_stat_writes_blocked = (long long)db_st.writes_blocked;
     srv_stat_write_stall_us = (long long)db_st.write_stall_us;
     srv_stat_write_stall_ceiling_hits = (long long)db_st.write_stall_ceiling_hits;
+
+    /* Device-write counters.  A transient TDB_ERR_LOCKED leaves the prior snapshot
+       in place rather than zeroing a live counter, so a failed sample is stale, not
+       wrong. */
+    tidesdb_io_stats_t io_st;
+    memset(&io_st, 0, sizeof(io_st));
+    if (tidesdb_get_io_stats(tdb_global, &io_st) == TDB_SUCCESS)
+    {
+        srv_stat_io_sstable_write_ops = (long long)io_st.classes[TDB_IO_SSTABLE].ops;
+        srv_stat_io_sstable_write_bytes = (long long)io_st.classes[TDB_IO_SSTABLE].bytes;
+        srv_stat_io_wal_write_ops = (long long)io_st.classes[TDB_IO_WAL].ops;
+        srv_stat_io_wal_write_bytes = (long long)io_st.classes[TDB_IO_WAL].bytes;
+    }
+
+    /* Write-stall counts split by reason. */
+    tidesdb_stall_stats_t stall_st;
+    memset(&stall_st, 0, sizeof(stall_st));
+    if (tidesdb_get_stall_stats(tdb_global, &stall_st) == TDB_SUCCESS)
+    {
+        srv_stat_stall_wal_append = (long long)stall_st.reasons[TDB_STALL_WAL_APPEND].count;
+        srv_stat_stall_rotate_lock = (long long)stall_st.reasons[TDB_STALL_ROTATE_LOCK].count;
+        srv_stat_stall_rotate_work = (long long)stall_st.reasons[TDB_STALL_ROTATE_WORK].count;
+        srv_stat_stall_admission = (long long)stall_st.reasons[TDB_STALL_ADMISSION].count;
+        srv_stat_stall_manifest_commit =
+            (long long)stall_st.reasons[TDB_STALL_MANIFEST_COMMIT].count;
+    }
+
+    /* Codec-chain encoding aggregates, summed over every chain for the key log and
+       the value log so a monitor can track the realized compression ratio. */
+    tidesdb_encoding_stats_t enc[TDB_MAX_ENCODING_CHAINS];
+    size_t enc_count = 0;
+    memset(enc, 0, sizeof(enc));
+    if (tidesdb_get_klog_encoding_stats(tdb_global, enc, TDB_MAX_ENCODING_CHAINS, &enc_count) ==
+        TDB_SUCCESS)
+    {
+        uint64_t logical = 0, stored = 0;
+        for (size_t i = 0; i < enc_count; i++)
+        {
+            logical += enc[i].logical_bytes;
+            stored += enc[i].stored_bytes;
+        }
+        srv_stat_klog_logical_bytes = (long long)logical;
+        srv_stat_klog_stored_bytes = (long long)stored;
+    }
+
+    enc_count = 0;
+    memset(enc, 0, sizeof(enc));
+    if (tidesdb_get_vlog_encoding_stats(tdb_global, enc, TDB_MAX_ENCODING_CHAINS, &enc_count) ==
+        TDB_SUCCESS)
+    {
+        uint64_t logical = 0, stored = 0;
+        for (size_t i = 0; i < enc_count; i++)
+        {
+            logical += enc[i].logical_bytes;
+            stored += enc[i].stored_bytes;
+        }
+        srv_stat_vlog_encoded_logical_bytes = (long long)logical;
+        srv_stat_vlog_encoded_stored_bytes = (long long)stored;
+    }
 
     /* Tombstone and density figures are computed on demand in their SHOW_FUNC
        callbacks, keeping this on-demand refresh clear of the per-CF stats pass. */
@@ -523,6 +628,64 @@ static int status_format_cf_stats(char *buf, size_t sz, int pos)
     return pos;
 }
 
+/* format the device-write section into buf starting at pos; returns the new write position.  the
+   library meters writes through its descriptor manager, so this covers the sstable and wal devices,
+   and reports per-write timing whose average and worst case help spot a slow disk.  a class the api
+   does not meter, such as the value log which keeps its own accounting, shows zero here. */
+static int status_format_io_stats(char *buf, size_t sz, int pos, const tidesdb_io_stats_t &io_st)
+{
+    pos += snprintf(buf + pos, sz - pos, "\n=+=+= IO Device Writes =+=+=\n");
+    for (int c = 0; c < TDB_IO_COUNT; c++)
+    {
+        const tidesdb_io_stat_t &s = io_st.classes[c];
+        double avg_us = s.ops > 0 ? (double)s.total_us / (double)s.ops : 0.0;
+        pos += snprintf(buf + pos, sz - pos, "%s: %lu writes, %lu bytes, avg %.1f us, max %lu us\n",
+                        tidesdb_io_class_name((tidesdb_io_class_t)c), (unsigned long)s.ops,
+                        (unsigned long)s.bytes, avg_us, (unsigned long)s.max_us);
+    }
+    return pos;
+}
+
+/* format the write-stall-by-reason section into buf starting at pos; returns the new write
+   position.  each reason a commit can stall on carries its count and the total and worst time
+   spent there, so backpressure can be attributed to wal appends, memtable rotation, admission
+   backlog, or manifest commits. */
+static int status_format_stall_stats(char *buf, size_t sz, int pos,
+                                     const tidesdb_stall_stats_t &stall_st)
+{
+    pos += snprintf(buf + pos, sz - pos, "\n=+=+= Write Stalls By Reason =+=+=\n");
+    for (int r = 0; r < TDB_STALL_COUNT; r++)
+    {
+        const tidesdb_stall_stat_t &s = stall_st.reasons[r];
+        pos += snprintf(buf + pos, sz - pos, "%s: %lu stalls, %lu us total, %lu us max\n",
+                        tidesdb_stall_reason_name((tidesdb_stall_reason_t)r),
+                        (unsigned long)s.count, (unsigned long)s.total_us, (unsigned long)s.max_us);
+    }
+    return pos;
+}
+
+/* format the encoding summary for one log (the key log or the value log) into buf starting at pos;
+   returns the new write position.  it rolls the per-chain codec stats into the chain count and the
+   total logical and stored bytes, so the realized compression ratio is visible while the section
+   keeps a fixed shape rather than a variable-length per-chain table, whose line count depends on
+   which sstables and value segments currently exist and so is not reproducible in a test. */
+static int status_format_encoding_summary(char *buf, size_t sz, int pos, const char *title,
+                                          const tidesdb_encoding_stats_t *enc, size_t count)
+{
+    uint64_t logical = 0, stored = 0;
+    for (size_t i = 0; i < count; i++)
+    {
+        logical += enc[i].logical_bytes;
+        stored += enc[i].stored_bytes;
+    }
+    double ratio = stored > 0 ? (double)logical / (double)stored : 0.0;
+    pos += snprintf(buf + pos, sz - pos, "\n=+=+= %s Encoding =+=+=\n", title);
+    pos +=
+        snprintf(buf + pos, sz - pos, "Chains: %zu, logical %lu bytes, stored %lu bytes, %.2fx\n",
+                 count, (unsigned long)logical, (unsigned long)stored, ratio);
+    return pos;
+}
+
 bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print, enum ha_stat_type stat)
 {
     if (stat != HA_ENGINE_STATUS) return false;
@@ -538,6 +701,22 @@ bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print, enum 
     memset(&cache_st, 0, sizeof(cache_st));
     tidesdb_get_cache_stats(tdb_global, &cache_st);
 
+    tidesdb_io_stats_t io_st;
+    memset(&io_st, 0, sizeof(io_st));
+    tidesdb_get_io_stats(tdb_global, &io_st);
+
+    tidesdb_stall_stats_t stall_st;
+    memset(&stall_st, 0, sizeof(stall_st));
+    tidesdb_get_stall_stats(tdb_global, &stall_st);
+
+    tidesdb_encoding_stats_t klog_enc[TDB_MAX_ENCODING_CHAINS];
+    tidesdb_encoding_stats_t vlog_enc[TDB_MAX_ENCODING_CHAINS];
+    size_t klog_enc_count = 0, vlog_enc_count = 0;
+    memset(klog_enc, 0, sizeof(klog_enc));
+    memset(vlog_enc, 0, sizeof(vlog_enc));
+    tidesdb_get_klog_encoding_stats(tdb_global, klog_enc, TDB_MAX_ENCODING_CHAINS, &klog_enc_count);
+    tidesdb_get_vlog_encoding_stats(tdb_global, vlog_enc, TDB_MAX_ENCODING_CHAINS, &vlog_enc_count);
+
     /* Output buffer for SHOW ENGINE TIDESDB STATUS.  32 KiB holds the fixed
        sections plus a per-family block for a schema with dozens of column
        families; families past that margin are truncated with a trailing note.
@@ -550,6 +729,12 @@ bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print, enum 
 
     pos = status_format_db_stats(buf, TIDESDB_STATUS_BUF_LEN, pos, db_st);
     pos = status_format_cache_stats(buf, TIDESDB_STATUS_BUF_LEN, pos, cache_st);
+    pos = status_format_io_stats(buf, TIDESDB_STATUS_BUF_LEN, pos, io_st);
+    pos = status_format_stall_stats(buf, TIDESDB_STATUS_BUF_LEN, pos, stall_st);
+    pos = status_format_encoding_summary(buf, TIDESDB_STATUS_BUF_LEN, pos, "Key Log", klog_enc,
+                                         klog_enc_count);
+    pos = status_format_encoding_summary(buf, TIDESDB_STATUS_BUF_LEN, pos, "Value Log", vlog_enc,
+                                         vlog_enc_count);
     pos = status_format_tombstones(buf, TIDESDB_STATUS_BUF_LEN, pos);
     pos = status_format_cf_stats(buf, TIDESDB_STATUS_BUF_LEN, pos);
 

@@ -35,6 +35,14 @@ The report is organized into sections:
   totals, the segment count with how many are drainable or retired, and the reclaim calls and passes.
 - **Write Stalls** - writes throttled, writes blocked, total stall time, and admission ceiling hits.
 - **Block Cache** - enabled, entries, size, hits, misses, hit rate, and partitions.
+- **IO Device Writes** - per-device write count, bytes, and average and worst write latency for the
+  SSTable and WAL devices the descriptor manager meters. The value log keeps its own accounting in
+  the Value Log section, and these are write-side figures only.
+- **Write Stalls By Reason** - the stall count with total and worst time for each cause a commit can
+  stall on, splitting the aggregate stall time above across WAL append, memtable rotation, admission
+  backlog, and manifest commit.
+- **Key Log Encoding** and **Value Log Encoding** - the chain count with the logical and stored byte
+  totals and the realized compression ratio for each log.
 - **Tombstones** - total tombstones, the database-wide tombstone ratio, and the worst per-SSTable
   density with the level it sits at.
 - **Column Families** - a per-family breakdown after the aggregate sections, with each family's
@@ -84,3 +92,11 @@ tombstone-density trigger for acting on it.
 reclaim old versions. When it lags far behind `global_sequence` a long-running transaction is
 holding back garbage collection, which keeps old versions and their space alive. A large and growing
 gap is the signal to find and end that transaction.
+
+### Encoding ratio
+
+Divide `Tidesdb_klog_logical_bytes` by `Tidesdb_klog_stored_bytes`, and the value-log pair the same
+way, for the realized compression ratio of each log. A ratio near 1.0 on data you expected to
+compress means the codec is spending CPU for little gain, so the encoding pipeline is worth revisiting
+for that workload. The per-chain codec breakdown in `SHOW ENGINE TIDESDB STATUS` shows which codecs
+are in play.

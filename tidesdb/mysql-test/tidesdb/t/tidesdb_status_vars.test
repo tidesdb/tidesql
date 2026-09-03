@@ -8,7 +8,7 @@
 --echo #
 
 # The full set of status variables should be present
-SELECT COUNT(*) >= 19 AS has_all_vars FROM information_schema.GLOBAL_STATUS
+SELECT COUNT(*) >= 40 AS has_all_vars FROM information_schema.GLOBAL_STATUS
 WHERE VARIABLE_NAME LIKE 'TIDESDB%';
 
 --echo #

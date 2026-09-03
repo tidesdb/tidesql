@@ -55,6 +55,28 @@ statement costs a single stats pass.
 | `Tidesdb_vlog_used_bytes` | Uncompressed length those values represent |
 | `Tidesdb_vlog_bytes_written` | Lifetime bytes appended to the value log, output the flush and compaction counters do not see once values separate |
 
+## Encoding
+
+Aggregate codec-chain totals summed across every chain, so `logical` divided by `stored` is the realized compression ratio for each log. The per-chain codec breakdown prints in `SHOW ENGINE TIDESDB STATUS`.
+
+| Variable | Description |
+|----------|-------------|
+| `Tidesdb_klog_logical_bytes` | Key-log bytes before encoding, summed across chains |
+| `Tidesdb_klog_stored_bytes` | Key-log bytes after encoding as stored on disk |
+| `Tidesdb_vlog_encoded_logical_bytes` | Value-log bytes before encoding, summed across chains |
+| `Tidesdb_vlog_encoded_stored_bytes` | Value-log bytes after encoding as stored on disk |
+
+## Device IO
+
+Write accounting from the library's file-descriptor manager, which meters the SSTable and WAL devices. The value log keeps its own byte accounting in the value-log counters above. These counters are writes only, there is no read-side or syscall figure.
+
+| Variable | Description |
+|----------|-------------|
+| `Tidesdb_io_sstable_write_ops` | SSTable device writes issued since open |
+| `Tidesdb_io_sstable_write_bytes` | Bytes written to the SSTable device since open |
+| `Tidesdb_io_wal_write_ops` | WAL device writes issued since open |
+| `Tidesdb_io_wal_write_bytes` | Bytes written to the WAL device since open |
+
 ## Write amplification
 
 | Variable | Description |
@@ -74,6 +96,16 @@ statement costs a single stats pass.
 | `Tidesdb_writes_blocked` | Commits it made wait for the flush queue to drain |
 | `Tidesdb_write_stall_us` | Total microseconds commits spent held in admission |
 | `Tidesdb_write_stall_ceiling_hits` | Commits admitted only because the wait ceiling expired. Any sustained increase means flush is not keeping up with ingest |
+
+The aggregate counters above sum admission stall time. These per-reason counts split how often a commit stalled by cause, so backpressure can be attributed. The per-reason stall time prints in `SHOW ENGINE TIDESDB STATUS`.
+
+| Variable | Description |
+|----------|-------------|
+| `Tidesdb_stall_wal_append` | Commits that stalled appending to the write-ahead log |
+| `Tidesdb_stall_rotate_lock` | Commits that stalled taking the memtable rotation lock |
+| `Tidesdb_stall_rotate_work` | Commits that stalled while a memtable rotation was in progress |
+| `Tidesdb_stall_admission` | Commits that stalled on the unflushed-backlog admission gate |
+| `Tidesdb_stall_manifest_commit` | Commits that stalled waiting for a manifest commit |
 
 ## Block cache
 
