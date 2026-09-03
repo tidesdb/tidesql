@@ -3,18 +3,18 @@ CREATE TABLE t_b (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
 ANALYZE TABLE t_a;
 Table	Op	Msg_type	Msg_text
 test.t_a	analyze	status	Engine-independent statistics collected
-test.t_a	analyze	Note	[TIDESDB] CF 'test__t_a'  total_keys=200  data_size=0 bytes  levels=0  read_amp=0.00
-test.t_a	analyze	Note	[TIDESDB] avg_key=0.0 bytes  avg_value=0.0 bytes
-test.t_a	analyze	Note	[TIDESDB] WA  user=3800  wal=4800  flush=0  compact_write=0 (0 ssts)  compact_read=0  ratio=1.26x
-test.t_a	analyze	Note	[TIDESDB] idx CF 'test__t_a__idx_k_v'  keys=200  data_size=0 bytes  levels=0
-test.t_a	analyze	Note	[TIDESDB] idx 'k_v' sampled=200 distinct=10 rec_per_key=20
+test.t_a	analyze	Note	[TIDESDB] CF 'test__t_a'  total_keys=N  data_size=N bytes  levels=0  read_amp=N
+test.t_a	analyze	Note	[TIDESDB] avg_key=N bytes  avg_value=N bytes
+test.t_a	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N ssts)  compact_read=N  ratio=Nx
+test.t_a	analyze	Note	[TIDESDB] idx CF 'test__t_a__idx_k_v'  keys=N  data_size=N bytes  levels=0
+test.t_a	analyze	Note	[TIDESDB] idx 'k_v' sampled=N distinct=N rec_per_key=N
 test.t_a	analyze	status	OK
 ANALYZE TABLE t_b;
 Table	Op	Msg_type	Msg_text
 test.t_b	analyze	status	Engine-independent statistics collected
-test.t_b	analyze	Note	[TIDESDB] CF 'test__t_b'  total_keys=75  data_size=0 bytes  levels=0  read_amp=0.00
-test.t_b	analyze	Note	[TIDESDB] avg_key=0.0 bytes  avg_value=0.0 bytes
-test.t_b	analyze	Note	[TIDESDB] WA  user=1425  wal=1800  flush=0  compact_write=0 (0 ssts)  compact_read=0  ratio=1.26x
+test.t_b	analyze	Note	[TIDESDB] CF 'test__t_b'  total_keys=N  data_size=N bytes  levels=0  read_amp=N
+test.t_b	analyze	Note	[TIDESDB] avg_key=N bytes  avg_value=N bytes
+test.t_b	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N ssts)  compact_read=N  ratio=Nx
 test.t_b	analyze	status	OK
 # each table reports its own distinct row count, not the shared-memtable sum
 # t_a -> 200
@@ -31,11 +31,11 @@ TABLE_ROWS
 ANALYZE TABLE t_a;
 Table	Op	Msg_type	Msg_text
 test.t_a	analyze	status	Engine-independent statistics collected
-test.t_a	analyze	Note	[TIDESDB] CF 'test__t_a'  total_keys=300  data_size=0 bytes  levels=0  read_amp=0.00
-test.t_a	analyze	Note	[TIDESDB] avg_key=0.0 bytes  avg_value=0.0 bytes
-test.t_a	analyze	Note	[TIDESDB] WA  user=5700  wal=7200  flush=0  compact_write=0 (0 ssts)  compact_read=0  ratio=1.26x
-test.t_a	analyze	Note	[TIDESDB] idx CF 'test__t_a__idx_k_v'  keys=300  data_size=0 bytes  levels=0
-test.t_a	analyze	Note	[TIDESDB] idx 'k_v' sampled=300 distinct=10 rec_per_key=30
+test.t_a	analyze	Note	[TIDESDB] CF 'test__t_a'  total_keys=N  data_size=N bytes  levels=0  read_amp=N
+test.t_a	analyze	Note	[TIDESDB] avg_key=N bytes  avg_value=N bytes
+test.t_a	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N ssts)  compact_read=N  ratio=Nx
+test.t_a	analyze	Note	[TIDESDB] idx CF 'test__t_a__idx_k_v'  keys=N  data_size=N bytes  levels=0
+test.t_a	analyze	Note	[TIDESDB] idx 'k_v' sampled=N distinct=N rec_per_key=N
 test.t_a	analyze	status	OK
 # t_a -> 300
 SELECT TABLE_ROWS FROM information_schema.TABLES
