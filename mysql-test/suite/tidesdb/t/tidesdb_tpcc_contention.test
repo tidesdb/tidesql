@@ -44,7 +44,12 @@ CREATE TABLE new_order (
 ) ENGINE=TIDESDB;
 
 # One NEWORD district increment, retried until it commits.  A conflict rolls the
-# attempt back and loops; the bound keeps a pathological run from hanging.
+# attempt back and loops; the bound keeps a pathological run from hanging.  A
+# losing attempt rolls back without an fsync, so under disk pressure it can spin
+# through the whole retry bound while the winners are still fsyncing their
+# commits, dropping its increment.  A short randomized backoff after a conflict
+# lets the contention drain before the next attempt, the same way a real TPC-C
+# client backs off, so every increment still lands.
 delimiter |;
 CREATE PROCEDURE neword_incr()
 BEGIN
@@ -62,6 +67,7 @@ BEGIN
     IF committed = -1 THEN
       ROLLBACK;
       SET committed = 0;
+      DO SLEEP(0.001 + RAND() * 0.004);
     END IF;
   END WHILE;
 END|

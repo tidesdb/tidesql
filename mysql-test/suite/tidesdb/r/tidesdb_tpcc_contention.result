@@ -40,6 +40,7 @@ END;
 IF committed = -1 THEN
 ROLLBACK;
 SET committed = 0;
+DO SLEEP(0.001 + RAND() * 0.004);
 END IF;
 END WHILE;
 END|
