@@ -29,6 +29,11 @@ the rows are already ciphertext by the time they reach the library and ciphertex
 The table's secondary-index CFs hold unencrypted comparable keys and keep whatever algorithm was
 selected. Session default `tidesdb_default_compression`.
 
+Every backend except `NONE` has to be compiled into the linked TidesDB library, which is a build
+option there, so a library built without a given backend rejects a table that asks for it and the
+`CREATE` fails. `NONE` is always available. On a build that omits the default `LZ4`, set
+`tidesdb_default_compression` to a backend the library carries, or to `NONE`, before creating tables.
+
 ## Bloom filters
 
 ```sql

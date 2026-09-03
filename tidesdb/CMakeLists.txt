@@ -108,21 +108,20 @@ IF(NOT TIDESDB_INCLUDE_DIR)
   RETURN()
 ENDIF()
 
-IF(NOT ZSTD_LIBRARY)
-  MESSAGE(STATUS "TidesDB: zstd library not found - plugin will not be built. Install libzstd-dev.")
-  RETURN()
-ENDIF()
-
-IF(NOT LZ4_LIBRARY)
-  MESSAGE(STATUS "TidesDB: lz4 library not found - plugin will not be built. Install liblz4-dev.")
-  RETURN()
-ENDIF()
-
 INCLUDE_DIRECTORIES(${TIDESDB_INCLUDE_DIR})
 
-# We build list of libraries to link, we use full paths from FIND_LIBRARY
-SET(TIDESDB_LIBS ${TIDESDB_LIB} ${ZSTD_LIBRARY} ${LZ4_LIBRARY})
-
+# The compression backends are optional.  The library encodes with NONE when it is
+# built without them, and a shared libtidesdb already carries its own zstd, lz4 and
+# snappy in its needed-library list, so the plugin only has to link a backend when
+# one is present, which matters for a statically linked libtidesdb built with that
+# backend.  A missing backend is therefore not a reason to skip building the plugin.
+SET(TIDESDB_LIBS ${TIDESDB_LIB})
+IF(ZSTD_LIBRARY)
+  LIST(APPEND TIDESDB_LIBS ${ZSTD_LIBRARY})
+ENDIF()
+IF(LZ4_LIBRARY)
+  LIST(APPEND TIDESDB_LIBS ${LZ4_LIBRARY})
+ENDIF()
 IF(SNAPPY_LIBRARY)
   LIST(APPEND TIDESDB_LIBS ${SNAPPY_LIBRARY})
 ENDIF()
