@@ -78,7 +78,7 @@ Table	Create Table
 t_nobloom	CREATE TABLE `t_nobloom` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `BLOOM_FILTER`=0
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `BLOOM_FILTER`='0'
 INSERT INTO t_nobloom VALUES (1, 'no bloom');
 SELECT * FROM t_nobloom;
 id	val
@@ -90,7 +90,7 @@ Table	Create Table
 t_lowfpr	CREATE TABLE `t_lowfpr` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `BLOOM_FPR`=10
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `BLOOM_FPR`='10'
 INSERT INTO t_lowfpr VALUES (1, 'low fpr 0.1%');
 SELECT * FROM t_lowfpr;
 id	val
@@ -145,7 +145,7 @@ Table	Create Table
 t_multi	CREATE TABLE `t_multi` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(100) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`='ZSTD' `BLOOM_FILTER`=1 `BLOOM_FPR`=50 `ISOLATION_LEVEL`='REPEATABLE_READ' `LEVEL_SIZE_RATIO`=8 `MIN_LEVELS`=3
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`='ZSTD' `BLOOM_FILTER`='1' `BLOOM_FPR`='50' `ISOLATION_LEVEL`='REPEATABLE_READ' `LEVEL_SIZE_RATIO`='8' `MIN_LEVELS`='3'
 INSERT INTO t_multi VALUES (1, 'multi-option table');
 INSERT INTO t_multi VALUES (2, 'second row');
 SELECT * FROM t_multi;

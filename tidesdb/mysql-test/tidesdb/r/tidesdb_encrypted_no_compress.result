@@ -18,7 +18,7 @@ enc_lz4	CREATE TABLE `enc_lz4` (
   `v` varchar(200) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `k_u` (`u`)
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `ENCRYPTED`=YES `COMPRESSION`='LZ4'
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `ENCRYPTED`='YES' `COMPRESSION`='LZ4'
 #
 # ============================================
 # Control: a non-encrypted table with the same compression

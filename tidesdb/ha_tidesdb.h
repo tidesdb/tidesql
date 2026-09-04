@@ -840,7 +840,7 @@ class ha_tidesdb : public handler
     /* handler::referenced_by_foreign_key returned uint and was non-const before MariaDB 11.7, where
        it became bool const noexcept; match whichever the linked server declares so the override
        actually overrides. */
-#if MYSQL_VERSION_ID >= 110700
+#if MYSQL_VERSION_ID >= 110400
     bool referenced_by_foreign_key() const noexcept override;
 #else
     uint referenced_by_foreign_key() override;
