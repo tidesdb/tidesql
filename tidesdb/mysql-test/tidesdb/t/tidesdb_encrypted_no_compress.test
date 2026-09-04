@@ -30,6 +30,7 @@ CREATE TABLE enc_lz4 (
 ) ENGINE=TIDESDB `ENCRYPTED`=YES COMPRESSION='LZ4';
 
 --echo # the table still reports the requested COMPRESSION option to the user
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE enc_lz4;
 
 --echo #
@@ -42,6 +43,7 @@ CREATE TABLE plain_lz4 (
   v  VARCHAR(200)
 ) ENGINE=TIDESDB COMPRESSION='LZ4';
 
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE plain_lz4;
 
 --echo #

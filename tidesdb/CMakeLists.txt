@@ -97,15 +97,32 @@ FIND_PATH(TIDESDB_INCLUDE_DIR
         PATH_SUFFIXES include
 )
 
-# We validate required dependencies
-IF(NOT TIDESDB_LIB)
-  MESSAGE(STATUS "TidesDB: library not found - plugin will not be built. Install TidesDB or set TIDESDB_ROOT.")
-  RETURN()
-ENDIF()
+# When no system library or headers are found, build the library from source and link it
+# statically, so the plugin has no run-time dynamic dependency.  TidesQL 5.0 is pinned to TidesDB
+# library v10.0.0, so the fallback fetches exactly that release.  When a system library is present
+# this whole block is skipped and the plugin links it as before.
+IF(NOT TIDESDB_LIB OR NOT TIDESDB_INCLUDE_DIR)
+  INCLUDE(ExternalProject)
+  ADD_LIBRARY(tidesdblib STATIC IMPORTED GLOBAL)
+  ADD_DEPENDENCIES(tidesdblib tidesdblib_ext)
+  SET(dir ${CMAKE_CURRENT_BINARY_DIR}/tidesdblib_ext-prefix/src/tidesdblib_ext-build)
+  SET(file ${dir}/${CMAKE_STATIC_LIBRARY_PREFIX}tidesdb${CMAKE_STATIC_LIBRARY_SUFFIX})
+  SET_TARGET_PROPERTIES(tidesdblib PROPERTIES IMPORTED_LOCATION ${file})
+  MAKE_DIRECTORY("${dir}/include")
+  SET(TIDESDB_LIB ${file})
+  SET(TIDESDB_INCLUDE_DIR ${dir}/include)
+  TARGET_INCLUDE_DIRECTORIES(tidesdblib INTERFACE ${TIDESDB_INCLUDE_DIR})
+  IF(POLICY CMP0135)
+    CMAKE_POLICY(SET CMP0135 NEW)
+  ENDIF()
 
-IF(NOT TIDESDB_INCLUDE_DIR)
-  MESSAGE(STATUS "TidesDB: tidesdb/db.h header not found - plugin will not be built. Install TidesDB headers or set TIDESDB_ROOT.")
-  RETURN()
+  ExternalProject_Add(
+    tidesdblib_ext
+    URL "https://github.com/tidesdb/tidesdb/archive/refs/tags/v10.0.0.tar.gz"
+    INSTALL_COMMAND ""
+    CMAKE_ARGS "-DBUILD_SHARED_LIBS=OFF"
+    BUILD_BYPRODUCTS ${file}
+  )
 ENDIF()
 
 INCLUDE_DIRECTORIES(${TIDESDB_INCLUDE_DIR})
@@ -174,26 +191,46 @@ SET(TIDESDB_HANDLER_SOURCES
         src/engine/ha_tidesdb_config.cc
         src/engine/ha_tidesdb_status.cc)
 
-# Define the storage engine using MariaDB's MYSQL_ADD_PLUGIN macro
-MYSQL_ADD_PLUGIN(tidesdb ha_tidesdb.cc ${TIDESDB_CORE_SOURCES} ${TIDESDB_HANDLER_SOURCES}
-        STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS})
+# Define the storage engine.  MariaDB 11.4.13 introduced MARIADB_ADD_PLUGIN, which accepts version,
+# author and description metadata that drive the newer plugin packaging; on those servers the old
+# MYSQL_ADD_PLUGIN name is only an alias for it.  Older servers ship MYSQL_ADD_PLUGIN alone, and it
+# does not accept the metadata keywords, so passing them there would be read as extra source files.
+# Pass the metadata only where the newer macro exists and fall back to the plain call everywhere
+# else, which is the exact call that already builds across 11.0 through 13.
+IF(COMMAND MARIADB_ADD_PLUGIN)
+  MARIADB_ADD_PLUGIN(tidesdb ha_tidesdb.cc ${TIDESDB_CORE_SOURCES} ${TIDESDB_HANDLER_SOURCES}
+          STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS}
+          VERSION "5.0.0"
+          AUTHOR "TidesDB Corp"
+          DESCRIPTION "LSM B-tree engine with ACID transactions, MVCC concurrency, replication, and secondary, spatial, full-text and vector indexes")
+ELSE()
+  MYSQL_ADD_PLUGIN(tidesdb ha_tidesdb.cc ${TIDESDB_CORE_SOURCES} ${TIDESDB_HANDLER_SOURCES}
+          STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS})
+ENDIF()
+
+# A MODULE_ONLY plugin the build has disabled leaves no target, so nothing below has anything to
+# configure; stop here rather than guarding every step against a missing target.
+IF(NOT TARGET tidesdb)
+  RETURN()
+ENDIF()
+
+# When the library was fetched and built from source above, the plugin must wait for it.
+IF(TARGET tidesdblib)
+  ADD_DEPENDENCIES(tidesdb tidesdblib)
+ENDIF()
 
 # The split translation units under src/handler and src/engine reach the root headers
 # (ha_tidesdb.h) and the src/core and src/handler headers by their path-qualified names, so
 # the plugin source directory must be on the include path for every source, not just the ones
 # that happen to sit at the root.
-IF(TARGET tidesdb)
-  TARGET_INCLUDE_DIRECTORIES(tidesdb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-ENDIF()
+TARGET_INCLUDE_DIRECTORIES(tidesdb PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 # We apply sanitizer flags to the plugin target only
 IF(TIDESDB_SANITIZER_COMPILE_FLAGS)
-  IF(TARGET tidesdb)
-    TARGET_COMPILE_OPTIONS(tidesdb PRIVATE ${TIDESDB_SANITIZER_COMPILE_FLAGS})
-    TARGET_LINK_OPTIONS(tidesdb PRIVATE ${TIDESDB_SANITIZER_LINK_FLAGS})
-    MESSAGE(STATUS "TidesDB: Sanitizer compile flags: ${TIDESDB_SANITIZER_COMPILE_FLAGS}")
-    MESSAGE(STATUS "TidesDB: Sanitizer link flags: ${TIDESDB_SANITIZER_LINK_FLAGS}")
-  ENDIF()
+  TARGET_COMPILE_OPTIONS(tidesdb PRIVATE ${TIDESDB_SANITIZER_COMPILE_FLAGS})
+  TARGET_LINK_OPTIONS(tidesdb PRIVATE ${TIDESDB_SANITIZER_LINK_FLAGS})
+  MESSAGE(STATUS "TidesDB: Sanitizer compile flags: ${TIDESDB_SANITIZER_COMPILE_FLAGS}")
+  MESSAGE(STATUS "TidesDB: Sanitizer link flags: ${TIDESDB_SANITIZER_LINK_FLAGS}")
 ENDIF()
 
 # Plugin-only -Wmaybe-uninitialized.  GCC reports may-uninit reads with
@@ -204,7 +241,7 @@ ENDIF()
 # is a hard error rather than something easy to overlook in a long
 # build log.
 OPTION(TIDESDB_WERROR_UNINIT "Promote -Wmaybe-uninitialized to a hard error in the plugin" OFF)
-IF(TARGET tidesdb AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+IF(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   TARGET_COMPILE_OPTIONS(tidesdb PRIVATE -Wmaybe-uninitialized)
   IF(TIDESDB_WERROR_UNINIT)
     TARGET_COMPILE_OPTIONS(tidesdb PRIVATE -Werror=maybe-uninitialized)

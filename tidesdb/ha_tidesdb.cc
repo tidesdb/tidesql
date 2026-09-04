@@ -249,20 +249,19 @@ static MYSQL_THDVAR_BOOL(single_delete_primary, PLUGIN_VAR_RQCMDARG,
    explicit options inherits the session/global default.  Dynamic and
    session-scoped, matching InnoDB's innodb_default_* pattern. */
 
-/* st_typelib carries a fifth member, an array of hidden enum values, on some MariaDB releases and
-   four on others.  The boundary is not monotonic, the member arrived in 11.8 but the 12.0 branch
-   predates it and it returns in 12.2, so the condition spells that out.  We supply the fifth
-   initializer, NULL since this plugin hides no value, exactly where the member exists, so the
-   aggregate is neither short a member nor over-long on any release. */
-#if (MYSQL_VERSION_ID >= 110800 && MYSQL_VERSION_ID < 120000) || (MYSQL_VERSION_ID >= 120200)
-#define TDB_TYPELIB_HIDDEN , NULL
-#else
-#define TDB_TYPELIB_HIDDEN
+/* st_typelib gained a fifth member, an array of hidden enum values, in some MariaDB releases, and
+   MariaDB backports that member into maintenance releases at unpredictable patch levels, so no
+   MYSQL_VERSION_ID test tracks it reliably.  We initialize the four members every release carries,
+   which leaves the fifth to zero-initialize to the NULL this plugin wants since it hides no value,
+   and suppress the missing-field warning the releases that carry the fifth member would raise. */
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
 
 static const char *compression_names[] = {"NONE", "SNAPPY", "LZ4", "ZSTD", "LZ4_FAST", NullS};
 static TYPELIB compression_typelib = {array_elements(compression_names) - 1, "compression_typelib",
-                                      compression_names, NULL TDB_TYPELIB_HIDDEN};
+                                      compression_names, NULL};
 
 static MYSQL_THDVAR_ENUM(default_compression, PLUGIN_VAR_RQCMDARG,
                          "Default compression algorithm for new tables "
@@ -274,7 +273,7 @@ static MYSQL_THDVAR_BOOL(default_bloom_filter, PLUGIN_VAR_RQCMDARG,
 
 static const char *sync_mode_names[] = {"NONE", "INTERVAL", "FULL", NullS};
 static TYPELIB sync_mode_typelib = {array_elements(sync_mode_names) - 1, "sync_mode_typelib",
-                                    sync_mode_names, NULL TDB_TYPELIB_HIDDEN};
+                                    sync_mode_names, NULL};
 
 static MYSQL_THDVAR_ULONGLONG(default_bloom_fpr, PLUGIN_VAR_RQCMDARG,
                               "Default bloom filter false positive rate for new tables "
@@ -334,8 +333,7 @@ static MYSQL_THDVAR_ULONGLONG(default_tombstone_density_min_entries, PLUGIN_VAR_
 static const char *isolation_level_names[] = {
     "READ_UNCOMMITTED", "READ_COMMITTED", "REPEATABLE_READ", "SNAPSHOT", "SERIALIZABLE", NullS};
 static TYPELIB isolation_level_typelib = {array_elements(isolation_level_names) - 1,
-                                          "isolation_level_typelib", isolation_level_names,
-                                          NULL TDB_TYPELIB_HIDDEN};
+                                          "isolation_level_typelib", isolation_level_names, NULL};
 
 static MYSQL_THDVAR_ENUM(default_isolation_level, PLUGIN_VAR_RQCMDARG,
                          "Default isolation level for new tables "
@@ -345,7 +343,11 @@ static MYSQL_THDVAR_ENUM(default_isolation_level, PLUGIN_VAR_RQCMDARG,
 
 static const char *log_level_names[] = {"TRACE", "INFO", "WARN", "ERROR", "NONE", NullS};
 static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_level_typelib",
-                                    log_level_names, NULL TDB_TYPELIB_HIDDEN};
+                                    log_level_names, NULL};
+
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 static MYSQL_SYSVAR_ULONG(flush_threads, srv_flush_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -1088,17 +1090,38 @@ int ha_tidesdb::extra(enum ha_extra_function operation)
 
 static struct st_mysql_storage_engine tidesdb_storage_engine = {MYSQL_HANDLERTON_INTERFACE_VERSION};
 
+/* MariaDB 11.4.13 and later define the plugin's author, description, license and version string
+   from the metadata passed to MARIADB_ADD_PLUGIN, exposing PLUGIN_AUTHOR, PLUGIN_DESCRIPTION,
+   PLUGIN_LICENSE and PLUGIN_VERSION.  Older servers build with MYSQL_ADD_PLUGIN and define none of
+   them, so fall back to the plugin's own constants there.  We keep TIDESQL_VERSION_HEX for the hex
+   version rather than the macro's PLUGIN_HEX_VERSION because that macro expands from server-side
+   V_MAJOR and V_MINOR variables that some plugin.cmake releases leave unset, and it keeps the hex
+   version identical across every server. */
+#ifndef PLUGIN_AUTHOR
+#define PLUGIN_AUTHOR "TidesDB Corp"
+#endif
+#ifndef PLUGIN_DESCRIPTION
+#define PLUGIN_DESCRIPTION                                                             \
+    "LSM B-tree engine with ACID transactions, MVCC concurrency, replication, and "    \
+    "secondary, spatial, full-text and vector indexes"
+#endif
+#ifndef PLUGIN_LICENSE
+#define PLUGIN_LICENSE PLUGIN_LICENSE_GPL
+#endif
+#ifndef PLUGIN_VERSION
+#define PLUGIN_VERSION TIDESQL_VERSION_STR
+#endif
+
 maria_declare_plugin(tidesdb){MYSQL_STORAGE_ENGINE_PLUGIN,
                               &tidesdb_storage_engine,
                               "TidesDB",
-                              "TidesDB",
-                              "LSM-tree engine with ACID transactions, MVCC concurrency, "
-                              "secondary/spatial/full-text/vector indexes, and encryption",
-                              PLUGIN_LICENSE_GPL,
+                              PLUGIN_AUTHOR,
+                              PLUGIN_DESCRIPTION,
+                              PLUGIN_LICENSE,
                               tidesdb_init_func,
                               tidesdb_deinit_func,
                               TIDESQL_VERSION_HEX,
                               tidesdb_status_variables,
                               tidesdb_system_variables,
-                              TIDESQL_VERSION_STR,
-                              MariaDB_PLUGIN_MATURITY_GAMMA} maria_declare_plugin_end;
+                              PLUGIN_VERSION,
+                              MariaDB_PLUGIN_MATURITY_BETA} maria_declare_plugin_end;

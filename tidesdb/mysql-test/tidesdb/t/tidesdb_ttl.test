@@ -139,6 +139,7 @@ CREATE TABLE t_ttl_show (
   row_ttl INT `TTL`=1
 ) ENGINE=TIDESDB TTL=3600;
 
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_ttl_show;
 
 DROP TABLE t_ttl_show;

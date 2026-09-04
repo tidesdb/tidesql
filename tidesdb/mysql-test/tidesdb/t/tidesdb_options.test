@@ -28,6 +28,7 @@ SHOW VARIABLES LIKE 'tidesdb_max_open_sstables';
 --echo #
 
 CREATE TABLE t_defaults (id INT, val VARCHAR(50)) ENGINE=TIDESDB;
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_defaults;
 INSERT INTO t_defaults VALUES (1, 'default_opts');
 SELECT * FROM t_defaults;
@@ -40,12 +41,14 @@ DROP TABLE t_defaults;
 --echo #
 
 CREATE TABLE t_none (id INT, val VARCHAR(50)) ENGINE=TIDESDB COMPRESSION='NONE';
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_none;
 INSERT INTO t_none VALUES (1, 'no compression');
 SELECT * FROM t_none;
 DROP TABLE t_none;
 
 CREATE TABLE t_zstd (id INT, val VARCHAR(50)) ENGINE=TIDESDB COMPRESSION='ZSTD';
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_zstd;
 INSERT INTO t_zstd VALUES (1, 'zstd compressed');
 SELECT * FROM t_zstd;
@@ -58,12 +61,14 @@ DROP TABLE t_zstd;
 --echo #
 
 CREATE TABLE t_nobloom (id INT, val VARCHAR(50)) ENGINE=TIDESDB BLOOM_FILTER=0;
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_nobloom;
 INSERT INTO t_nobloom VALUES (1, 'no bloom');
 SELECT * FROM t_nobloom;
 DROP TABLE t_nobloom;
 
 CREATE TABLE t_lowfpr (id INT, val VARCHAR(50)) ENGINE=TIDESDB BLOOM_FPR=10;
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_lowfpr;
 INSERT INTO t_lowfpr VALUES (1, 'low fpr 0.1%');
 SELECT * FROM t_lowfpr;
@@ -76,12 +81,14 @@ DROP TABLE t_lowfpr;
 --echo #
 
 CREATE TABLE t_rc (id INT, val VARCHAR(50)) ENGINE=TIDESDB ISOLATION_LEVEL='READ_COMMITTED';
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_rc;
 INSERT INTO t_rc VALUES (1, 'read committed');
 SELECT * FROM t_rc;
 DROP TABLE t_rc;
 
 CREATE TABLE t_ser (id INT, val VARCHAR(50)) ENGINE=TIDESDB ISOLATION_LEVEL='SERIALIZABLE';
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_ser;
 INSERT INTO t_ser VALUES (1, 'serializable');
 SELECT * FROM t_ser;
@@ -104,6 +111,7 @@ CREATE TABLE t_multi (
   LEVEL_SIZE_RATIO=8
   MIN_LEVELS=3;
 
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_multi;
 INSERT INTO t_multi VALUES (1, 'multi-option table');
 INSERT INTO t_multi VALUES (2, 'second row');
@@ -121,6 +129,7 @@ DROP TABLE t_multi;
 --echo #
 
 CREATE TABLE t_default_iso (id INT) ENGINE=TIDESDB;
+--replace_regex /`([A-Z0-9_]+)`='([^']*)'/`\1`=\2/
 SHOW CREATE TABLE t_default_iso;
 INSERT INTO t_default_iso VALUES (1), (2), (3);
 SELECT * FROM t_default_iso;

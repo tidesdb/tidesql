@@ -49,7 +49,7 @@ Table	Create Table
 t_none	CREATE TABLE `t_none` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`='NONE'
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`=NONE
 INSERT INTO t_none VALUES (1, 'no compression');
 SELECT * FROM t_none;
 id	val
@@ -61,7 +61,7 @@ Table	Create Table
 t_zstd	CREATE TABLE `t_zstd` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`='ZSTD'
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`=ZSTD
 INSERT INTO t_zstd VALUES (1, 'zstd compressed');
 SELECT * FROM t_zstd;
 id	val
@@ -107,7 +107,7 @@ Table	Create Table
 t_rc	CREATE TABLE `t_rc` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `ISOLATION_LEVEL`='READ_COMMITTED'
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `ISOLATION_LEVEL`=READ_COMMITTED
 INSERT INTO t_rc VALUES (1, 'read committed');
 SELECT * FROM t_rc;
 id	val
@@ -119,7 +119,7 @@ Table	Create Table
 t_ser	CREATE TABLE `t_ser` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(50) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `ISOLATION_LEVEL`='SERIALIZABLE'
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `ISOLATION_LEVEL`=SERIALIZABLE
 INSERT INTO t_ser VALUES (1, 'serializable');
 SELECT * FROM t_ser;
 id	val
@@ -145,7 +145,7 @@ Table	Create Table
 t_multi	CREATE TABLE `t_multi` (
   `id` int(11) DEFAULT NULL,
   `val` varchar(100) DEFAULT NULL
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`='ZSTD' `BLOOM_FILTER`=1 `BLOOM_FPR`=50 `ISOLATION_LEVEL`='REPEATABLE_READ' `LEVEL_SIZE_RATIO`=8 `MIN_LEVELS`=3
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci `COMPRESSION`=ZSTD `BLOOM_FILTER`=1 `BLOOM_FPR`=50 `ISOLATION_LEVEL`=REPEATABLE_READ `LEVEL_SIZE_RATIO`=8 `MIN_LEVELS`=3
 INSERT INTO t_multi VALUES (1, 'multi-option table');
 INSERT INTO t_multi VALUES (2, 'second row');
 SELECT * FROM t_multi;

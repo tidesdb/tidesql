@@ -23,15 +23,15 @@ CREATE TABLE t_td (
 SELECT LOCATE('TOMBSTONE_DENSITY_TRIGGER', CREATE_OPTIONS) > 0 AS has_trigger
   FROM information_schema.TABLES
   WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t_td';
-SELECT LOCATE('=5000', CREATE_OPTIONS) > 0 AS trigger_value
+SELECT LOCATE('=5000', REPLACE(CREATE_OPTIONS, '''', '')) > 0 AS trigger_value
   FROM information_schema.TABLES
   WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t_td';
-SELECT LOCATE('=512', CREATE_OPTIONS) > 0 AS min_entries_value
+SELECT LOCATE('=512', REPLACE(CREATE_OPTIONS, '''', '')) > 0 AS min_entries_value
   FROM information_schema.TABLES
   WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t_td';
 
 ALTER TABLE t_td TOMBSTONE_DENSITY_TRIGGER=2000;
-SELECT LOCATE('=2000', CREATE_OPTIONS) > 0 AS new_value
+SELECT LOCATE('=2000', REPLACE(CREATE_OPTIONS, '''', '')) > 0 AS new_value
   FROM information_schema.TABLES
   WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t_td';
 
@@ -45,10 +45,10 @@ SET SESSION tidesdb_default_tombstone_density_trigger = 4000;
 SET SESSION tidesdb_default_tombstone_density_min_entries = 256;
 
 CREATE TABLE t_default_td (pk BIGINT PRIMARY KEY, c0 INT) ENGINE=TIDESDB;
-SELECT LOCATE('=4000', CREATE_OPTIONS) > 0 AS inherits_trigger
+SELECT LOCATE('=4000', REPLACE(CREATE_OPTIONS, '''', '')) > 0 AS inherits_trigger
   FROM information_schema.TABLES
   WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t_default_td';
-SELECT LOCATE('=256', CREATE_OPTIONS) > 0 AS inherits_min
+SELECT LOCATE('=256', REPLACE(CREATE_OPTIONS, '''', '')) > 0 AS inherits_min
   FROM information_schema.TABLES
   WHERE TABLE_SCHEMA='test' AND TABLE_NAME='t_default_td';
 
