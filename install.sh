@@ -990,7 +990,7 @@ character-set-server = utf8mb4
 collation-server = utf8mb4_general_ci
 
 # TidesDB plugin - loaded at startup
-plugin_maturity = gamma
+plugin_maturity = beta
 plugin_load_add = ha_tidesdb.${plugin_ext}
 
 # TidesDB settings (tune as needed)
