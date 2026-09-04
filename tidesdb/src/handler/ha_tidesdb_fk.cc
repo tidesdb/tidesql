@@ -240,7 +240,13 @@ static bool fk_resolve_parent_index(THD *thd, const std::string &ref_db,
     build_table_filename(path, sizeof(path) - 1, ref_db.c_str(), ref_table.c_str(), "", 0);
 
     TABLE_SHARE share;
+    /* init_tmp_table_share gained a trailing thread_specific flag in MariaDB 11.7; pass it where
+       the server accepts it, and fall back to the six-argument form on older releases. */
+#if MYSQL_VERSION_ID >= 110700
     init_tmp_table_share(thd, &share, ref_db.c_str(), 0, ref_table.c_str(), path, 1);
+#else
+    init_tmp_table_share(thd, &share, ref_db.c_str(), 0, ref_table.c_str(), path);
+#endif
     bool ok = false;
     if (open_table_def(thd, &share, GTS_TABLE | GTS_USE_DISCOVERY) == OPEN_FRM_OK)
     {
@@ -672,10 +678,17 @@ int ha_tidesdb::get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_
     return 0;
 }
 
+#if MYSQL_VERSION_ID >= 110700
 bool ha_tidesdb::referenced_by_foreign_key() const noexcept
 {
     return share && !share->fk_parent.empty();
 }
+#else
+uint ha_tidesdb::referenced_by_foreign_key()
+{
+    return (share && !share->fk_parent.empty()) ? 1 : 0;
+}
+#endif
 
 bool ha_tidesdb::can_switch_engines()
 {

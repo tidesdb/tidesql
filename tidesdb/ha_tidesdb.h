@@ -837,7 +837,14 @@ class ha_tidesdb : public handler
        write, update, and delete paths. */
     int get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list) override;
     int get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list) override;
+    /* handler::referenced_by_foreign_key returned uint and was non-const before MariaDB 11.7, where
+       it became bool const noexcept; match whichever the linked server declares so the override
+       actually overrides. */
+#if MYSQL_VERSION_ID >= 110700
     bool referenced_by_foreign_key() const noexcept override;
+#else
+    uint referenced_by_foreign_key() override;
+#endif
     bool can_switch_engines() override;
     char *get_foreign_key_create_info() override;
     void free_foreign_key_create_info(char *str) override;

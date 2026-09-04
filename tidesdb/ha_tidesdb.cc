@@ -249,9 +249,20 @@ static MYSQL_THDVAR_BOOL(single_delete_primary, PLUGIN_VAR_RQCMDARG,
    explicit options inherits the session/global default.  Dynamic and
    session-scoped, matching InnoDB's innodb_default_* pattern. */
 
+/* st_typelib carries a fifth member, an array of hidden enum values, on some MariaDB releases and
+   four on others.  The boundary is not monotonic, the member arrived in 11.8 but the 12.0 branch
+   predates it and it returns in 12.2, so the condition spells that out.  We supply the fifth
+   initializer, NULL since this plugin hides no value, exactly where the member exists, so the
+   aggregate is neither short a member nor over-long on any release. */
+#if (MYSQL_VERSION_ID >= 110800 && MYSQL_VERSION_ID < 120000) || (MYSQL_VERSION_ID >= 120200)
+#define TDB_TYPELIB_HIDDEN , NULL
+#else
+#define TDB_TYPELIB_HIDDEN
+#endif
+
 static const char *compression_names[] = {"NONE", "SNAPPY", "LZ4", "ZSTD", "LZ4_FAST", NullS};
 static TYPELIB compression_typelib = {array_elements(compression_names) - 1, "compression_typelib",
-                                      compression_names, NULL, NULL};
+                                      compression_names, NULL TDB_TYPELIB_HIDDEN};
 
 static MYSQL_THDVAR_ENUM(default_compression, PLUGIN_VAR_RQCMDARG,
                          "Default compression algorithm for new tables "
@@ -263,7 +274,7 @@ static MYSQL_THDVAR_BOOL(default_bloom_filter, PLUGIN_VAR_RQCMDARG,
 
 static const char *sync_mode_names[] = {"NONE", "INTERVAL", "FULL", NullS};
 static TYPELIB sync_mode_typelib = {array_elements(sync_mode_names) - 1, "sync_mode_typelib",
-                                    sync_mode_names, NULL, NULL};
+                                    sync_mode_names, NULL TDB_TYPELIB_HIDDEN};
 
 static MYSQL_THDVAR_ULONGLONG(default_bloom_fpr, PLUGIN_VAR_RQCMDARG,
                               "Default bloom filter false positive rate for new tables "
@@ -323,8 +334,8 @@ static MYSQL_THDVAR_ULONGLONG(default_tombstone_density_min_entries, PLUGIN_VAR_
 static const char *isolation_level_names[] = {
     "READ_UNCOMMITTED", "READ_COMMITTED", "REPEATABLE_READ", "SNAPSHOT", "SERIALIZABLE", NullS};
 static TYPELIB isolation_level_typelib = {array_elements(isolation_level_names) - 1,
-                                          "isolation_level_typelib", isolation_level_names, NULL,
-                                          NULL};
+                                          "isolation_level_typelib", isolation_level_names,
+                                          NULL TDB_TYPELIB_HIDDEN};
 
 static MYSQL_THDVAR_ENUM(default_isolation_level, PLUGIN_VAR_RQCMDARG,
                          "Default isolation level for new tables "
@@ -334,7 +345,7 @@ static MYSQL_THDVAR_ENUM(default_isolation_level, PLUGIN_VAR_RQCMDARG,
 
 static const char *log_level_names[] = {"TRACE", "INFO", "WARN", "ERROR", "NONE", NullS};
 static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_level_typelib",
-                                    log_level_names, NULL, NULL};
+                                    log_level_names, NULL TDB_TYPELIB_HIDDEN};
 
 static MYSQL_SYSVAR_ULONG(flush_threads, srv_flush_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,

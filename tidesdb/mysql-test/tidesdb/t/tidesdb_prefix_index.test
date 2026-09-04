@@ -13,8 +13,12 @@ CREATE TABLE t (
   KEY k_name (name(4))
 ) ENGINE=TidesDB;
 
+# the server's max_sort_length note on a prefix-indexed insert is emitted from 11.8 on but not on
+# older releases, so suppress it here to keep the test stable across server versions
+--disable_warnings
 INSERT INTO t VALUES
   (1, 'abcdefg'), (2, 'abcdxyz'), (3, 'abcd'), (4, 'abce'), (5, 'zzzz1'), (6, 'zzzz2');
+--enable_warnings
 
 --echo # exact lookup on a value whose prefix is shared by several rows returns
 --echo # only the full match (index narrows by prefix, engine re-checks)
@@ -31,10 +35,12 @@ SELECT id, name FROM t FORCE INDEX (k_name) ORDER BY name;
 --echo # values sharing the indexed prefix collide.
 --echo #
 CREATE TABLE u (id INT PRIMARY KEY, s VARCHAR(64), UNIQUE KEY uq_s (s(3))) ENGINE=TidesDB;
+--disable_warnings
 INSERT INTO u VALUES (1, 'foobar');
 --error ER_DUP_ENTRY
 INSERT INTO u VALUES (2, 'foobaz');
 INSERT INTO u VALUES (3, 'barbaz');
+--enable_warnings
 SELECT id, s FROM u ORDER BY id;
 
 DROP TABLE t, u;

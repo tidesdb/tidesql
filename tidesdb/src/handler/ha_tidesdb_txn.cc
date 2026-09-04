@@ -51,7 +51,11 @@ static bool tdb_recovery_loaded = false;
    server compares transactions by. */
 static std::string tdb_xid_key(const XID *xid)
 {
-    return std::string((const char *)xid, xid->length());
+    /* XID::length() reads the identity but was declared non-const before MariaDB made it const in a
+       later release, so calling it through a const pointer fails to compile on the older servers.
+       The call does not mutate the xid, so cast away const to bind to whichever declaration the
+       linked server provides. */
+    return std::string((const char *)xid, const_cast<XID *>(xid)->length());
 }
 
 /* Commit a transaction honoring its 2PC state: a prepared transaction takes the phase-two
@@ -457,7 +461,11 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
    of commit(), so we run the durable commit here to land it in that order, stash the outcome, and
    let the following commit() report it.  The server can then run commit() outside the commit-order
    lock, which is the throughput win group commit exists for. */
+#if MYSQL_VERSION_ID >= 110800
 static void tidesdb_commit_ordered(THD *thd, bool all)
+#else
+static void tidesdb_commit_ordered(handlerton *, THD *thd, bool all)
+#endif
 {
     tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
     if (!trx || !trx->txn) return;
