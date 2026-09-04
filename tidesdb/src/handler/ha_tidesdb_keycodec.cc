@@ -309,6 +309,11 @@ bool ha_tidesdb::keyread_decode_key_parts(KEY *key, const uint8_t *&pos, const u
             {
                 f->set_null(ptrdiff);
                 pos++;
+                /* make_comparable_key writes the null indicator followed by kp->length zeroed
+                   value bytes, so skip that full width; advancing by the indicator alone decodes
+                   every later key part one part-width early and silently loses its value. */
+                if (pos + kp->length > end) return false;
+                pos += kp->length;
                 continue;
             }
             f->set_notnull(ptrdiff);
@@ -507,6 +512,10 @@ bool ha_tidesdb::icp_decode_key_parts(KEY *key, const uint8_t *&pos, const uint8
                    buf is not record[0], matching keyread_decode_key_parts. */
                 f->set_null(ptrdiff);
                 pos++;
+                /* skip the kp->length zeroed value bytes the null part occupies so the pushed
+                   condition reads the following part's bytes, not this part's padding. */
+                if (pos + kp->length > end) return false;
+                pos += kp->length;
                 continue;
             }
             f->set_notnull(ptrdiff);
