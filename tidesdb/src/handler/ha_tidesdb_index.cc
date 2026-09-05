@@ -298,6 +298,18 @@ int ha_tidesdb::index_read_secondary(uchar *buf, const uchar *comp_key, uint com
             ret = 0;
         else
             ret = fetch_row_by_pk(scan_txn, ik + idx_col_len, (uint)(iks - idx_col_len), buf);
+        /* the index entry outlived its row, a concurrent delete removed the row between the
+           iterator reading this entry and the point lookup, so step over it and keep scanning
+           the same way a negative pushed condition does, rather than surfacing the miss as an
+           error the way an absent key would */
+        if (ret == HA_ERR_KEY_NOT_FOUND)
+        {
+            if (is_backward)
+                tidesdb_iter_prev(scan_iter);
+            else
+                tidesdb_iter_next(scan_iter);
+            continue;
+        }
         if (ret == 0) scan_dir_ = is_backward ? DIR_BACKWARD : DIR_FORWARD;
         return ret;
     }
@@ -393,6 +405,13 @@ int ha_tidesdb::index_next(uchar *buf)
                 ret = 0;
             else
                 ret = fetch_row_by_pk(scan_txn, ik + idx_key_len, (uint)(iks - idx_key_len), buf);
+            /* stale index entry whose row a concurrent delete removed after the iterator read it,
+               step over it rather than return the miss as an error */
+            if (ret == HA_ERR_KEY_NOT_FOUND)
+            {
+                tidesdb_iter_next(scan_iter);
+                continue;
+            }
             scan_dir_ = DIR_FORWARD;
             DBUG_RETURN(ret);
         }
@@ -472,6 +491,13 @@ int ha_tidesdb::index_prev(uchar *buf)
                 ret = 0;
             else
                 ret = fetch_row_by_pk(scan_txn, ik + idx_key_len, (uint)(iks - idx_key_len), buf);
+            /* stale index entry whose row a concurrent delete removed after the iterator read it,
+               step back over it rather than return the miss as an error */
+            if (ret == HA_ERR_KEY_NOT_FOUND)
+            {
+                tidesdb_iter_prev(scan_iter);
+                continue;
+            }
             DBUG_RETURN(ret);
         }
     }
@@ -548,18 +574,30 @@ int ha_tidesdb::index_last(uchar *buf)
         if (sentinel_len > sizeof(sentinel)) sentinel_len = sizeof(sentinel);
         memset(sentinel, KEY_INF_HI_BYTE, sentinel_len);
         tidesdb_iter_seek_for_prev(scan_iter, sentinel, sentinel_len);
-        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
-        uint8_t *ik = NULL;
-        size_t iks = 0;
-        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
-        tdb_owned_buf ik_g(ik);
 
         uint idx_key_len = share->idx_comp_key_len[active_index];
-        if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
-
         scan_dir_ = DIR_BACKWARD;
-        DBUG_RETURN(fetch_row_by_pk(scan_txn, ik + idx_key_len, (uint)(iks - idx_key_len), buf));
+        for (;;)
+        {
+            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            uint8_t *ik = NULL;
+            size_t iks = 0;
+            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            tdb_owned_buf ik_g(ik);
+
+            if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+
+            /* stale index entry whose row a concurrent delete removed after the iterator read it,
+               step back over it rather than return the miss as an error */
+            int ret = fetch_row_by_pk(scan_txn, ik + idx_key_len, (uint)(iks - idx_key_len), buf);
+            if (ret == HA_ERR_KEY_NOT_FOUND)
+            {
+                tidesdb_iter_prev(scan_iter);
+                continue;
+            }
+            DBUG_RETURN(ret);
+        }
     }
 }
 
@@ -645,6 +683,13 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
             ret = 0;
         else
             ret = fetch_row_by_pk(scan_txn, ik + idx_col_len, (uint)(iks - idx_col_len), buf);
+        /* stale index entry whose row a concurrent delete removed after the iterator read it,
+           step over it rather than return the miss as an error */
+        if (ret == HA_ERR_KEY_NOT_FOUND)
+        {
+            tidesdb_iter_next(scan_iter);
+            continue;
+        }
         DBUG_RETURN(ret);
     }
 }
