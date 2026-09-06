@@ -11,6 +11,7 @@ startup from `my.cnf`:
 ```ini
 [mysqld]
 plugin-load-add=ha_tidesdb.so
+plugin-maturity=beta
 ```
 
 or dynamically in a running server:
@@ -19,12 +20,14 @@ or dynamically in a running server:
 INSTALL SONAME 'ha_tidesdb';
 ```
 
+The plugin ships at Beta maturity, so the server's `plugin_maturity` threshold has to be `beta` or lower or the load is refused. A stable server defaults that threshold to `gamma`, which is stricter than `beta`, so the `plugin-maturity=beta` line above is needed, and `install.sh` writes it into the `my.cnf` it generates.
+
 Once loaded it appears in `SHOW ENGINES`:
 
 ```
-Engine: TIDESDB
+Engine: TidesDB
 Support: YES
-Comment: LSM-tree engine with ACID transactions, MVCC concurrency, secondary/spatial/full-text/vector indexes, and encryption
+Comment: LSM B-tree engine with ACID transactions, MVCC concurrency, replication, and secondary, spatial, full-text and vector indexes
 Transactions: YES
      XA: YES
 Savepoints: YES

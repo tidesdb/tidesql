@@ -439,9 +439,11 @@ static ulong srv_memtable_sync_mode = 2; /* FULL */
 static MYSQL_SYSVAR_ENUM(memtable_sync_mode, srv_memtable_sync_mode,
                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                          "Sync mode for the WAL.  "
-                         "NONE relies on the OS page cache and is the fastest.  INTERVAL "
-                         "syncs periodically on the memtable_sync_interval timer.  FULL "
-                         "fsyncs on every commit and is the most durable.  This setting "
+                         "NONE keeps each commit staged in the log's in-process ring without handing "
+                         "it to the operating system, the fastest and least durable, so a process "
+                         "crash loses acknowledged commits.  INTERVAL hands each commit to the "
+                         "operating system and fsyncs periodically on the memtable_sync_interval "
+                         "timer.  FULL fsyncs on every commit and is the most durable.  This setting "
                          "governs WAL durability for every commit",
                          NULL, NULL, 2 /* FULL */, &sync_mode_typelib);
 
@@ -683,8 +685,9 @@ static void tidesdb_checkpoint_dir_update(THD *thd, struct st_mysql_sys_var *, v
 
 static MYSQL_SYSVAR_STR(checkpoint_dir, srv_checkpoint_dir,
                         PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
-                        "Set to a directory path to trigger a TidesDB checkpoint "
-                        "(hard-link snapshot, near-instant). "
+                        "Set to a directory path to write a consistent checkpoint copy of the data "
+                        "directory there, a durable flush of the WAL, value log, and manifest "
+                        "followed by a byte-for-byte copy. "
                         "The directory must not exist or be empty. "
                         "Example: SET GLOBAL tidesdb_checkpoint_dir = '/path/to/checkpoint'",
                         NULL, tidesdb_checkpoint_dir_update, NULL);

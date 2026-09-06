@@ -29,8 +29,8 @@ CREATE TABLE classified (
 
 `ENCRYPTION_KEY_ID` defaults to 1 and ranges from 1 to 255.
 
-Encryption can be turned on for an existing table, which rebuilds the data column family so the
-current rows are rewritten as ciphertext:
+Encryption can be turned on for an existing table. The change rewrites the table through a copy so
+the current rows are stored as ciphertext:
 
 ```sql
 ALTER TABLE existing_table `ENCRYPTED`=YES;

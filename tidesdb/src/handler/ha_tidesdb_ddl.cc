@@ -73,6 +73,20 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
         ALTER_ADD_UNIQUE_INDEX | ALTER_DROP_UNIQUE_INDEX | ALTER_ADD_INDEX | ALTER_DROP_INDEX |
         ALTER_INDEX_ORDER;
 
+    /* An encryption on/off toggle changes the on-disk row format, plaintext versus ciphertext, so
+       the rows already in the table have to be rewritten.  It reaches us as a create-option change,
+       which would otherwise ride the instant path and leave old rows in the wrong format while the
+       read path now treated them as the other, corrupting access to them.  Force a copy so every
+       row is rewritten through write_row, the same reason FULLTEXT and SPATIAL force a copy below. */
+    if ((flags & ALTER_CHANGE_CREATE_OPTION) && TDB_TABLE_OPTIONS(table) &&
+        TDB_TABLE_OPTIONS(altered_table) &&
+        TDB_TABLE_OPTIONS(table)->encrypted != TDB_TABLE_OPTIONS(altered_table)->encrypted)
+    {
+        ha_alter_info->unsupported_reason =
+            "TidesDB rewrites every row on an encryption change, which needs a table copy";
+        DBUG_RETURN(HA_ALTER_INPLACE_NOT_SUPPORTED);
+    }
+
     /* If only instant operations, return INSTANT */
     if (!(flags & ~TIDESDB_INSTANT)) DBUG_RETURN(HA_ALTER_INPLACE_INSTANT);
 

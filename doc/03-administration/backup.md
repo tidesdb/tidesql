@@ -1,6 +1,6 @@
 ---
 title: Backup and Checkpoint
-description: Online backup, near-instant hard-link checkpoints, and flushing for a physical copy.
+description: Online backup, durable checkpoints that flush and copy the data directory, and flushing for a physical copy.
 ---
 
 # Backup and Checkpoint

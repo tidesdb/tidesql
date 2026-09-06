@@ -88,8 +88,9 @@ CHECK TABLE orders;
 `REPAIR TABLE` runs a full compaction (`tidesdb_compact()`) of every column family, close to
 `OPTIMIZE TABLE` but stricter about failure. Unlike `OPTIMIZE`, it does not defer when a column
 family is already compacting, and it treats a failure to compact the data column family as a repair
-failure rather than something to retry. The compaction reads and re-checksums every block, dropping
-corrupt entries, expired TTL data, and tombstones.
+failure rather than something to retry. The compaction reads and re-checksums every block, so a
+block that fails its checksum fails the repair rather than being dropped, and it drops expired TTL
+data and tombstones as it merges.
 
 ```sql
 REPAIR TABLE orders;

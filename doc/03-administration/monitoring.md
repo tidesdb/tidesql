@@ -30,14 +30,15 @@ The report is organized into sections:
 - **Background** - flush pending, compaction pending, whether a flush is in flight, the WAL
   generation, and the next column family index.
 - **Write Amplification** - user bytes written, flush and compaction bytes with their SSTable
-  counts, compaction bytes read, and the derived total WA ratio.
+  counts, compaction bytes read, value-log bytes written, and the derived total WA ratio, whose
+  numerator sums flush, compaction, and value-log output so value separation is not under-counted.
 - **Value Log** - file size, indexed value count, used bytes, the stored, live, and dead byte
   totals, the segment count with how many are drainable or retired, and the reclaim calls and passes.
 - **Write Stalls** - writes throttled, writes blocked, total stall time, and admission ceiling hits.
 - **Block Cache** - enabled, entries, size, hits, misses, hit rate, and partitions.
 - **IO Device Writes** - per-device write count, bytes, and average and worst write latency for the
-  SSTable and WAL devices the descriptor manager meters. The value log keeps its own accounting in
-  the Value Log section, and these are write-side figures only.
+  three devices the descriptor manager meters, the SSTable, WAL, and value-log devices, and these
+  are write-side figures only.
 - **Write Stalls By Reason** - the stall count with total and worst time for each cause a commit can
   stall on, splitting the aggregate stall time above across WAL append, memtable rotation, admission
   backlog, and manifest commit.

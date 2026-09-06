@@ -38,7 +38,7 @@ is the default new sessions inherit).
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `tidesdb_backup_dir` | (empty) | Set to a path to trigger an online backup. Clear with an empty string. See [Backup](/administration/backup) |
-| `tidesdb_checkpoint_dir` | (empty) | Set to a path to trigger a hard-link checkpoint. Clear with an empty string |
+| `tidesdb_checkpoint_dir` | (empty) | Set to a path to write a consistent checkpoint copy of the data directory to, a durable flush of the WAL, value log, and manifest followed by a byte-for-byte copy. Clear with an empty string |
 | `tidesdb_fts_min_word_len` | 3 | Minimum word length in characters for full-text indexing |
 | `tidesdb_fts_max_word_len` | 84 | Maximum word length in characters for full-text indexing |
 | `tidesdb_fts_bm25_k1` | 1.2 | BM25 k1 parameter, term-frequency saturation |

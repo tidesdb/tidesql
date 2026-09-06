@@ -7,12 +7,10 @@
   So this engine keeps its own catalog of the constraints, loads it on both sides
   at open, and runs the referential checks inside its own row operations.
 
-  This first cut enforces the common shape where the referenced columns are the
-  parent primary key.  It rejects a child row whose referenced parent key is
-  absent, and it blocks a delete or update of a parent row while a child still
-  references it.  Cascade and set-null actions, and references to a non-primary
-  unique key, are recorded and reported but fall back to the restrict behaviour
-  until the follow-up increment wires the child-handler rewrite path.
+  It enforces the referential actions itself.  It rejects a child row whose referenced parent key is
+  absent, and on a delete or update of a parent row it applies the constraint's action to the
+  matching child rows, one of RESTRICT, NO ACTION, CASCADE, or SET NULL.  The referenced columns may
+  be the parent primary key or a non-nullable unique key.
 */
 
 #include "ha_tidesdb.h"
