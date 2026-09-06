@@ -6,8 +6,16 @@ KeepEmptyLinesAtTheStartOfBlocks: false
 AlignConsecutiveMacros: true
 BreakBeforeBraces: Allman
 SortIncludes: true
+# The plugin's own headers are not self-contained; they use server types (KEY,
+# uchar, uint, MAX_KEY_LENGTH) that ha_tidesdb.h brings in, so ha_tidesdb.h must
+# be included first in every translation unit.  Disable clang-format's
+# main-header-first rule (which would hoist ha_tidesdb_<x>.h above ha_tidesdb.h)
+# and pin my_global.h then ha_tidesdb.h ahead of every other include.
+IncludeIsMainRegex: '$^'
 IncludeCategories:
   - Regex:    '^"my_global\.h"'
+    Priority: -2
+  - Regex:    '^"ha_tidesdb\.h"'
     Priority: -1
   - Regex:    '^<ext/.*\.h>'
     Priority:  2

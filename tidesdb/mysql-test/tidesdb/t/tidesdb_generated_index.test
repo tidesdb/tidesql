@@ -1,0 +1,79 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # Secondary indexes on GENERATED columns (virtual and stored / the
+--echo # MariaDB functional-index idiom).  The engine maintains index keys for
+--echo # a column with no stored base value, so a base-column UPDATE must both
+--echo # delete the old index entry and insert the new one -- a stale entry
+--echo # would silently return wrong rows through the index.
+--echo #
+
+--echo #
+--echo # 1. Index on a VIRTUAL generated column; base UPDATE must re-key it.
+--echo #
+CREATE TABLE v (
+  id INT PRIMARY KEY,
+  base INT,
+  dbl INT AS (base * 2) VIRTUAL,
+  KEY k_dbl (dbl)
+) ENGINE=TidesDB;
+INSERT INTO v (id, base) VALUES (1, 10), (2, 20), (3, 30);
+SELECT id, base, dbl FROM v ORDER BY id;
+--echo # query through the virtual-column index
+SELECT id FROM v FORCE INDEX (k_dbl) WHERE dbl = 40 ORDER BY id;
+--echo # update the base: dbl for id=1 goes 20 -> 100
+UPDATE v SET base = 50 WHERE id = 1;
+--echo # the row now appears under the new key and is gone under the old
+SELECT id FROM v FORCE INDEX (k_dbl) WHERE dbl = 100 ORDER BY id;
+SELECT id FROM v FORCE INDEX (k_dbl) WHERE dbl = 20 ORDER BY id;
+--echo # full ordered scan through the index reflects the update
+SELECT id, dbl FROM v FORCE INDEX (k_dbl) ORDER BY dbl;
+--echo # delete via the index key too
+DELETE FROM v WHERE id = 2;
+SELECT id, dbl FROM v FORCE INDEX (k_dbl) ORDER BY dbl;
+
+--echo #
+--echo # 2. Functional index: VIRTUAL column over a string expression.
+--echo #
+CREATE TABLE fx (
+  id INT PRIMARY KEY,
+  email VARCHAR(100),
+  domain VARCHAR(100) AS (SUBSTRING_INDEX(email, '@', -1)) VIRTUAL,
+  KEY k_dom (domain)
+) ENGINE=TidesDB;
+INSERT INTO fx (id, email) VALUES
+  (1, 'a@gmail.com'), (2, 'b@yahoo.com'), (3, 'c@gmail.com'), (4, 'd@proton.me');
+SELECT id, domain FROM fx FORCE INDEX (k_dom) WHERE domain = 'gmail.com' ORDER BY id;
+UPDATE fx SET email = 'a@yahoo.com' WHERE id = 1;
+--echo # id 1 moved from gmail.com to yahoo.com in the index
+SELECT id FROM fx FORCE INDEX (k_dom) WHERE domain = 'gmail.com' ORDER BY id;
+SELECT id FROM fx FORCE INDEX (k_dom) WHERE domain = 'yahoo.com' ORDER BY id;
+
+--echo #
+--echo # 3. STORED generated column in a UNIQUE index enforces on the
+--echo #    materialized value, and a base UPDATE that collides is rejected.
+--echo #
+CREATE TABLE su (
+  id INT PRIMARY KEY,
+  a INT,
+  b INT,
+  s INT AS (a + b) PERSISTENT,
+  UNIQUE KEY uq_s (s)
+) ENGINE=TidesDB;
+INSERT INTO su (id, a, b) VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+SELECT id, s FROM su ORDER BY id;
+--echo # a duplicate materialized value is rejected on INSERT
+--error ER_DUP_ENTRY
+INSERT INTO su (id, a, b) VALUES (4, 4, 0);
+--echo # ... and on an UPDATE that would collide (id 1 s=2 -> s=4 collides with id 2)
+--error ER_DUP_ENTRY
+UPDATE su SET a = 3, b = 1 WHERE id = 1;
+--echo # a non-colliding base UPDATE re-keys the unique entry
+UPDATE su SET a = 10, b = 10 WHERE id = 1;
+SELECT id, s FROM su FORCE INDEX (uq_s) ORDER BY s;
+
+DROP TABLE v, fx, su;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

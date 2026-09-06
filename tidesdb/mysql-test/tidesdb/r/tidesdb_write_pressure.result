@@ -1,0 +1,114 @@
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_LOCKED");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_MEMORY_LIMIT");
+call mtr.add_suppression("\\[TIDESDB\\].*unexpected TidesDB error");
+#
+# === Setup: sysbench-like schema ===
+#
+CREATE TABLE sbtest1 (
+id  INT NOT NULL AUTO_INCREMENT,
+k   INT NOT NULL DEFAULT 0,
+c   CHAR(120) NOT NULL DEFAULT '',
+pad CHAR(60) NOT NULL DEFAULT '',
+PRIMARY KEY (id),
+KEY k_1 (k)
+) ENGINE=TIDESDB;
+CREATE TABLE sbtest2 (
+id  INT NOT NULL AUTO_INCREMENT,
+k   INT NOT NULL DEFAULT 0,
+c   CHAR(120) NOT NULL DEFAULT '',
+pad CHAR(60) NOT NULL DEFAULT '',
+PRIMARY KEY (id),
+KEY k_1 (k)
+) ENGINE=TIDESDB;
+#
+# === Populate: 1000 rows per table ===
+#
+SELECT COUNT(*) AS sbtest1_rows FROM sbtest1;
+sbtest1_rows
+1000
+SELECT COUNT(*) AS sbtest2_rows FROM sbtest2;
+sbtest2_rows
+1000
+CREATE PROCEDURE write_storm(IN which INT, IN offs INT, IN n_txns INT)
+BEGIN
+DECLARE t INT DEFAULT 0;
+DECLARE committed INT;
+DECLARE tries INT;
+WHILE t < n_txns DO
+SET committed = 0;
+SET tries = 0;
+WHILE committed = 0 AND tries < 1000 DO
+BEGIN
+DECLARE CONTINUE HANDLER FOR 1180, 1213, 1205 SET committed = -1;
+SET committed = 1;
+SET tries = tries + 1;
+START TRANSACTION;
+IF which = 1 THEN
+UPDATE sbtest1 SET k = k + 1 WHERE id = 1 + ((t + offs) % 1000);
+UPDATE sbtest1 SET c = REPEAT('A',120) WHERE id = 1 + ((t + offs + 200) % 1000);
+UPDATE sbtest1 SET k = k - 1 WHERE id = 1 + ((t + offs + 400) % 1000);
+UPDATE sbtest1 SET c = REPEAT('B',120) WHERE id = 1 + ((t + offs + 600) % 1000);
+DELETE FROM sbtest1 WHERE id = 1 + ((t + offs + 800) % 1000);
+INSERT INTO sbtest1 (k, c, pad) VALUES (FLOOR(RAND()*100000), REPEAT('w',120), REPEAT('z',60));
+ELSE
+UPDATE sbtest2 SET k = k + 1 WHERE id = 1 + ((t + offs) % 1000);
+UPDATE sbtest2 SET c = REPEAT('E',120) WHERE id = 1 + ((t + offs + 200) % 1000);
+UPDATE sbtest2 SET k = k - 1 WHERE id = 1 + ((t + offs + 400) % 1000);
+UPDATE sbtest2 SET c = REPEAT('F',120) WHERE id = 1 + ((t + offs + 600) % 1000);
+DELETE FROM sbtest2 WHERE id = 1 + ((t + offs + 800) % 1000);
+INSERT INTO sbtest2 (k, c, pad) VALUES (FLOOR(RAND()*100000), REPEAT('w',120), REPEAT('z',60));
+END IF;
+COMMIT;
+END;
+IF committed = -1 THEN
+ROLLBACK;
+SET committed = 0;
+END IF;
+END WHILE;
+SET t = t + 1;
+END WHILE;
+END|
+#
+# === TEST 1: Single-connection write-only storm (200 txns) ===
+#
+CALL write_storm(1, 0, 200);
+SELECT COUNT(*) AS after_single FROM sbtest1;
+after_single
+1000
+#
+# === TEST 2: Concurrent write-only storm (4 connections, overlapping) ===
+#
+connect  wr1, localhost, root,,;
+connect  wr2, localhost, root,,;
+connect  wr3, localhost, root,,;
+connect  wr4, localhost, root,,;
+connection wr1;
+CALL write_storm(1, 0, 100);
+connection wr2;
+CALL write_storm(1, 100, 100);
+connection wr3;
+CALL write_storm(2, 0, 100);
+connection wr4;
+CALL write_storm(2, 100, 100);
+connection wr1;
+connection wr2;
+connection wr3;
+connection wr4;
+connection default;
+#
+# === Verify data/index consistency after concurrent writes ===
+#
+PK/index consistency: OK
+#
+# === Cleanup ===
+#
+disconnect wr1;
+disconnect wr2;
+disconnect wr3;
+disconnect wr4;
+connection default;
+DROP PROCEDURE write_storm;
+DROP TABLE sbtest1;
+DROP TABLE sbtest2;
+# Done.

@@ -1,0 +1,86 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+--source include/have_partition.inc
+
+--echo #
+--echo # Partitioning depth: prune proof via EXPLAIN PARTITIONS, a row that
+--echo # moves partitions when its partitioning key is UPDATEd, uniqueness
+--echo # enforced across partitions, and auto-increment under partitioning.
+--echo #
+
+--echo #
+--echo # 1. Partition pruning actually restricts the scanned partitions.
+--echo #
+CREATE TABLE p (
+  id INT,
+  v INT,
+  PRIMARY KEY (id)
+) ENGINE=TidesDB
+PARTITION BY RANGE (id) (
+  PARTITION p0 VALUES LESS THAN (10),
+  PARTITION p1 VALUES LESS THAN (20),
+  PARTITION p2 VALUES LESS THAN (30),
+  PARTITION p3 VALUES LESS THAN MAXVALUE
+);
+INSERT INTO p VALUES (1,1),(5,5),(12,12),(18,18),(22,22),(28,28),(35,35);
+--echo # only p1 should be scanned for id in [10,20)
+EXPLAIN PARTITIONS SELECT * FROM p WHERE id >= 10 AND id < 20;
+--sorted_result
+SELECT * FROM p WHERE id >= 10 AND id < 20;
+--echo # a point lookup prunes to a single partition
+EXPLAIN PARTITIONS SELECT * FROM p WHERE id = 22;
+
+--echo #
+--echo # 2. UPDATE of the partitioning key relocates the row (p0 -> p3).
+--echo #
+UPDATE p SET id = 99 WHERE id = 5;
+EXPLAIN PARTITIONS SELECT * FROM p WHERE id = 99;
+SELECT * FROM p WHERE id = 99;
+--echo # the old key is gone
+SELECT COUNT(*) AS gone_expected_0 FROM p WHERE id = 5;
+--sorted_result
+SELECT id FROM p;
+
+--echo #
+--echo # 3. UNIQUE enforced across partitions (the unique key contains the
+--echo #    partitioning column, as MariaDB requires).
+--echo #
+CREATE TABLE pu (
+  id INT,
+  code INT,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq (id, code)
+) ENGINE=TidesDB
+PARTITION BY HASH (id) PARTITIONS 4;
+INSERT INTO pu VALUES (1,100),(2,100),(5,100),(9,100);
+--error ER_DUP_ENTRY
+INSERT INTO pu VALUES (1,200);
+--sorted_result
+SELECT id, code FROM pu;
+
+--echo #
+--echo # 4. AUTO_INCREMENT on a partitioned table stays monotonic across
+--echo #    partitions.
+--echo #
+CREATE TABLE pa (
+  id INT AUTO_INCREMENT,
+  v INT,
+  PRIMARY KEY (id)
+) ENGINE=TidesDB
+PARTITION BY HASH (id) PARTITIONS 4;
+INSERT INTO pa (v) VALUES (10),(20),(30),(40),(50);
+SELECT id, v FROM pa ORDER BY id;
+SELECT COUNT(DISTINCT id) AS distinct_ids_expected_5 FROM pa;
+
+--echo #
+--echo # 5. TRUNCATE PARTITION empties one partition, leaves the rest.
+--echo #
+ALTER TABLE p TRUNCATE PARTITION p2;
+--sorted_result
+SELECT id FROM p;
+
+DROP TABLE p, pu, pa;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

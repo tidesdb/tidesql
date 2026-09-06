@@ -1,0 +1,53 @@
+#
+# Table-maintenance statements: OPTIMIZE / CHECK / REPAIR.  The handlers
+# exist but had no coverage.  Each must report a sane status and leave
+# all data intact and readable through both the primary key and a
+# secondary index.
+#
+CREATE TABLE t (id INT PRIMARY KEY, k INT, v VARCHAR(32), KEY k_idx (k)) ENGINE=TidesDB;
+INSERT INTO t VALUES
+(1, 30, 'a'), (2, 10, 'b'), (3, 20, 'c'), (4, 10, 'd'), (5, 30, 'e');
+# churn to create tombstones and versions before maintenance
+DELETE FROM t WHERE id = 3;
+UPDATE t SET k = 40 WHERE id = 5;
+INSERT INTO t VALUES (6, 20, 'f');
+# CHECK reports the table healthy.
+CHECK TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	check	status	OK
+# OPTIMIZE runs compaction; data survives.
+OPTIMIZE TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	optimize	status	OK
+SELECT id, k, v FROM t;
+id	k	v
+1	30	a
+2	10	b
+4	10	d
+5	40	e
+6	20	f
+SELECT id, k FROM t FORCE INDEX (k_idx) WHERE k = 10 ORDER BY id;
+id	k
+2	10
+4	10
+# REPAIR completes; data still intact.
+REPAIR TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	repair	status	OK
+SELECT COUNT(*) AS rows_expected_5 FROM t;
+rows_expected_5
+5
+SELECT id, k, v FROM t;
+id	k	v
+1	30	a
+2	10	b
+4	10	d
+5	40	e
+6	20	f
+# A second CHECK after the maintenance still passes.
+CHECK TABLE t;
+Table	Op	Msg_type	Msg_text
+test.t	check	status	OK
+DROP TABLE t;
+#
+# Done.

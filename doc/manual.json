@@ -1,0 +1,196 @@
+{
+  "$comment": "Table of contents for the TideSQL manual, in reading order. TideSQL is the MariaDB storage engine that embeds the TidesDB library, and this manual is the companion to the TidesDB library manual. It documents the TideSQL 5.x line, which pairs with TidesDB v10. Minor and patch releases extend this same manual rather than starting a new one. The exact pinned release comes from the website's versions.js and is not repeated here.",
+  "title": "TideSQL Manual",
+  "tidesdb": "10.0.0",
+  "parts": [
+    {
+      "id": "preface",
+      "title": "Preface",
+      "dir": "00-preface",
+      "chapters": [
+        {
+          "file": "preface.md",
+          "slug": "preface",
+          "title": "Preface"
+        }
+      ]
+    },
+    {
+      "id": "getting-started",
+      "title": "Getting Started",
+      "dir": "01-getting-started",
+      "chapters": [
+        {
+          "file": "install.md",
+          "slug": "getting-started/install",
+          "title": "Installing TideSQL"
+        },
+        {
+          "file": "first-table.md",
+          "slug": "getting-started/first-table",
+          "title": "Your First Table"
+        }
+      ]
+    },
+    {
+      "id": "concepts",
+      "title": "Concepts",
+      "dir": "02-concepts",
+      "chapters": [
+        {
+          "file": "data-model.md",
+          "slug": "concepts/data-model",
+          "title": "Data Model"
+        },
+        {
+          "file": "transactions.md",
+          "slug": "concepts/transactions",
+          "title": "Transactions and Isolation"
+        },
+        {
+          "file": "durability.md",
+          "slug": "concepts/durability",
+          "title": "Durability and Sync Modes"
+        }
+      ]
+    },
+    {
+      "id": "administration",
+      "title": "Administration",
+      "dir": "03-administration",
+      "chapters": [
+        {
+          "file": "monitoring.md",
+          "slug": "administration/monitoring",
+          "title": "Monitoring"
+        },
+        {
+          "file": "backup.md",
+          "slug": "administration/backup",
+          "title": "Backup and Checkpoint"
+        },
+        {
+          "file": "maintenance.md",
+          "slug": "administration/maintenance",
+          "title": "Table Maintenance"
+        },
+        {
+          "file": "online-ddl.md",
+          "slug": "administration/online-ddl",
+          "title": "Online DDL"
+        },
+        {
+          "file": "partitioning.md",
+          "slug": "administration/partitioning",
+          "title": "Partitioning"
+        },
+        {
+          "file": "replication-and-ha.md",
+          "slug": "administration/replication-ha",
+          "title": "Replication and High Availability"
+        }
+      ]
+    },
+    {
+      "id": "reference",
+      "title": "SQL Reference",
+      "dir": "04-reference",
+      "chapters": [
+        {
+          "file": "table-options.md",
+          "slug": "reference/table-options",
+          "title": "Table Options"
+        },
+        {
+          "file": "system-variables.md",
+          "slug": "reference/system-variables",
+          "title": "System Variables"
+        },
+        {
+          "file": "status-variables.md",
+          "slug": "reference/status-variables",
+          "title": "Status Variables"
+        },
+        {
+          "file": "ttl.md",
+          "slug": "reference/ttl",
+          "title": "Time-To-Live"
+        },
+        {
+          "file": "encryption.md",
+          "slug": "reference/encryption",
+          "title": "Data-at-Rest Encryption"
+        },
+        {
+          "file": "full-text-search.md",
+          "slug": "reference/full-text-search",
+          "title": "Full-Text Search"
+        },
+        {
+          "file": "vector-search.md",
+          "slug": "reference/vector-search",
+          "title": "Vector Search"
+        },
+        {
+          "file": "spatial-indexes.md",
+          "slug": "reference/spatial-indexes",
+          "title": "Spatial Indexes"
+        },
+        {
+          "file": "generated-columns-and-json.md",
+          "slug": "reference/generated-columns-and-json",
+          "title": "Generated Columns and JSON"
+        },
+        {
+          "file": "foreign-keys.md",
+          "slug": "reference/foreign-keys",
+          "title": "Foreign Keys"
+        }
+      ]
+    },
+    {
+      "id": "internals",
+      "title": "Internals",
+      "dir": "05-internals",
+      "chapters": [
+        {
+          "file": "storage.md",
+          "slug": "internals/storage",
+          "title": "How Data Is Stored"
+        },
+        {
+          "file": "optimizer.md",
+          "slug": "internals/optimizer",
+          "title": "Statistics and the Optimizer"
+        },
+        {
+          "file": "write-path.md",
+          "slug": "internals/write-path",
+          "title": "Write-Path Optimizations"
+        }
+      ]
+    },
+    {
+      "id": "appendix",
+      "title": "Appendixes",
+      "dir": "06-appendix",
+      "chapters": [
+        {
+          "file": "limitations.md",
+          "slug": "appendix/limitations",
+          "title": "Limitations"
+        },
+        {
+          "file": "compatibility.md",
+          "slug": "appendix/compatibility",
+          "title": "MariaDB Compatibility"
+        },
+        {
+          "file": "glossary.md",
+          "slug": "appendix/glossary",
+          "title": "Glossary"
+        }
+      ]
+    }
+  ]
+}

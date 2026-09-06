@@ -1,0 +1,92 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_1;
+#
+# 1. A TidesDB table created on one node exists on the other.
+#
+CREATE TABLE t1 (id INT PRIMARY KEY, v VARCHAR(32), KEY k_v (v)) ENGINE=TidesDB;
+connection node_2;
+SHOW CREATE TABLE t1;
+Table	Create Table
+t1	CREATE TABLE `t1` (
+  `id` int(11) NOT NULL,
+  `v` varchar(32) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `k_v` (`v`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+#
+# 2. Rows written on node 1 apply on node 2.
+#
+connection node_1;
+INSERT INTO t1 VALUES (1, 'one'), (2, 'two'), (3, 'three');
+connection node_2;
+SELECT id, v FROM t1 ORDER BY id;
+id	v
+1	one
+2	two
+3	three
+# the replicated secondary index answers a covered lookup on node 2
+SELECT id FROM t1 FORCE INDEX (k_v) WHERE v = 'two';
+id
+2
+#
+# 3. Writes on node 2 apply back on node 1.
+#
+connection node_2;
+INSERT INTO t1 VALUES (4, 'four');
+UPDATE t1 SET v = 'ONE' WHERE id = 1;
+DELETE FROM t1 WHERE id = 3;
+connection node_1;
+SELECT id, v FROM t1 ORDER BY id;
+id	v
+1	ONE
+2	two
+4	four
+#
+# 4. A wider column set with NULLs replicates and applies.
+#
+connection node_1;
+CREATE TABLE t2 (
+id INT PRIMARY KEY,
+i64 BIGINT, d DECIMAL(20,6), f DOUBLE,
+c CHAR(8), v VARCHAR(64), t TEXT, b BLOB,
+dt DATETIME(3), y YEAR, e ENUM('a','b','c'),
+KEY k_d (d)
+) ENGINE=TidesDB;
+INSERT INTO t2 VALUES
+(1, 9000000000, 12345.678900, 3.5, 'char', 'varchar', 'text-a', 0x0102,
+'2023-01-02 03:04:05.678', 2021, 'b'),
+(2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+UPDATE t2 SET d = 99999.999999, e = 'c' WHERE id = 1;
+connection node_2;
+SELECT id, i64, d, f, c, v, e FROM t2 ORDER BY id;
+id	i64	d	f	c	v	e
+1	9000000000	99999.999999	3.5	char	varchar	c
+2	NULL	NULL	NULL	NULL	NULL	NULL
+SELECT id FROM t2 FORCE INDEX (k_d) WHERE d > 100 ORDER BY id;
+id
+1
+#
+# 5. A larger multi-statement transaction replicates atomically.
+#
+connection node_1;
+BEGIN;
+COMMIT;
+connection node_2;
+SELECT COUNT(*) AS total, SUM(id) AS sum_id FROM t1;
+total	sum_id
+103	105057
+#
+# 6. Both nodes hold byte-for-byte identical tables.
+#
+connection node_1;
+connection node_2;
+# t1 extended checksums match on node 1 and node 2
+# t2 extended checksums match on node 1 and node 2
+connection node_1;
+DROP TABLE t1, t2;
+disconnect node_2;
+disconnect node_1;

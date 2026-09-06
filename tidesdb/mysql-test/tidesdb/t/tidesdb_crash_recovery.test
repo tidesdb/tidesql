@@ -1,0 +1,54 @@
+--source include/have_tidesdb.inc
+# Durability under a hard crash, not a clean shutdown.  The server is killed
+# outright, then restarted, and the store must come back with every committed row
+# present, every prepared two-phase transaction recovered and still in-doubt, and
+# no trace of a transaction that had neither committed nor prepared.
+--source include/have_binlog_format_row.inc
+
+CREATE TABLE cr (id INT PRIMARY KEY, v VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO cr VALUES (1, 'committed-a'), (2, 'committed-b');
+
+--echo #
+--echo # A two-phase transaction prepared before the crash must survive it.
+--echo #
+XA START 'x1';
+INSERT INTO cr VALUES (10, 'prepared');
+XA END 'x1';
+XA PREPARE 'x1';
+
+--echo #
+--echo # Kill the server outright, then bring it back.
+--echo #
+--source include/kill_and_restart_mysqld.inc
+--disable_query_log
+call mtr.add_suppression("Found [0-9]+ prepared XA transaction");
+--enable_query_log
+
+--echo #
+--echo # Committed rows survived the crash; the prepared row is not visible yet.
+--echo #
+SELECT id, v FROM cr ORDER BY id;
+
+--echo #
+--echo # The prepared transaction is recovered and still in-doubt.
+--echo #
+XA RECOVER;
+
+--echo #
+--echo # Deciding it applies the row that was prepared before the crash.
+--echo #
+XA COMMIT 'x1';
+SELECT id, v FROM cr ORDER BY id;
+XA RECOVER;
+
+--echo #
+--echo # A fresh write after recovery works normally.
+--echo #
+INSERT INTO cr VALUES (20, 'after');
+SELECT id, v FROM cr ORDER BY id;
+
+DROP TABLE cr;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

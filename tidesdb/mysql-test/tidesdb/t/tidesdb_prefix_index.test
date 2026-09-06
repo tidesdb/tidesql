@@ -1,0 +1,50 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # Prefix indexes KEY(col(N)) on string columns.  make_comparable_key
+--echo # truncates the sort key to the key-part length, so the index narrows
+--echo # to the prefix and the engine must re-check the full value.  Rows that
+--echo # share a prefix but differ later must not be conflated.
+--echo #
+
+CREATE TABLE t (
+  id INT PRIMARY KEY,
+  name VARCHAR(64),
+  KEY k_name (name(4))
+) ENGINE=TidesDB;
+
+# the server's max_sort_length note on a prefix-indexed insert is emitted from 11.8 on but not on
+# older releases, so suppress it here to keep the test stable across server versions
+--disable_warnings
+INSERT INTO t VALUES
+  (1, 'abcdefg'), (2, 'abcdxyz'), (3, 'abcd'), (4, 'abce'), (5, 'zzzz1'), (6, 'zzzz2');
+--enable_warnings
+
+--echo # exact lookup on a value whose prefix is shared by several rows returns
+--echo # only the full match (index narrows by prefix, engine re-checks)
+SELECT id, name FROM t FORCE INDEX (k_name) WHERE name = 'abcdefg';
+SELECT id, name FROM t FORCE INDEX (k_name) WHERE name = 'abcd';
+--echo # prefix range
+--sorted_result
+SELECT id, name FROM t FORCE INDEX (k_name) WHERE name LIKE 'abcd%';
+--echo # ordering delivered through the prefix index
+SELECT id, name FROM t FORCE INDEX (k_name) ORDER BY name;
+
+--echo #
+--echo # Prefix UNIQUE index: uniqueness is enforced on the prefix, so two full
+--echo # values sharing the indexed prefix collide.
+--echo #
+CREATE TABLE u (id INT PRIMARY KEY, s VARCHAR(64), UNIQUE KEY uq_s (s(3))) ENGINE=TidesDB;
+--disable_warnings
+INSERT INTO u VALUES (1, 'foobar');
+--error ER_DUP_ENTRY
+INSERT INTO u VALUES (2, 'foobaz');
+INSERT INTO u VALUES (3, 'barbaz');
+--enable_warnings
+SELECT id, s FROM u ORDER BY id;
+
+DROP TABLE t, u;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

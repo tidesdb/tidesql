@@ -1,0 +1,75 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # Triggers over TidesDB tables.  A trigger re-enters the handler to do
+--echo # DML on other TidesDB tables (and to mutate NEW) while the driving
+--echo # statement is mid-flight, so this exercises nested handler use, the
+--echo # per-connection transaction shared across handlers, auto-increment
+--echo # inside a trigger, and statement-atomic rollback when a trigger fails.
+--echo #
+
+CREATE TABLE orders (id INT PRIMARY KEY, sku INT, qty INT) ENGINE=TidesDB;
+CREATE TABLE stock (sku INT PRIMARY KEY, on_hand INT) ENGINE=TidesDB;
+CREATE TABLE audit (aid INT PRIMARY KEY AUTO_INCREMENT, order_id INT, old_qty INT, new_qty INT)
+  ENGINE=TidesDB;
+
+INSERT INTO stock VALUES (100, 50), (200, 50);
+
+--echo # BEFORE INSERT clamps qty; AFTER INSERT decrements stock and logs.
+CREATE TRIGGER trg_bi BEFORE INSERT ON orders FOR EACH ROW
+  SET NEW.qty = IF(NEW.qty < 0, 0, NEW.qty);
+
+DELIMITER |;
+CREATE TRIGGER trg_ai AFTER INSERT ON orders FOR EACH ROW
+BEGIN
+  UPDATE stock SET on_hand = on_hand - NEW.qty WHERE sku = NEW.sku;
+  INSERT INTO audit (order_id, old_qty, new_qty) VALUES (NEW.id, NULL, NEW.qty);
+END|
+
+CREATE TRIGGER trg_au AFTER UPDATE ON orders FOR EACH ROW
+BEGIN
+  UPDATE stock SET on_hand = on_hand - (NEW.qty - OLD.qty) WHERE sku = NEW.sku;
+  INSERT INTO audit (order_id, old_qty, new_qty) VALUES (NEW.id, OLD.qty, NEW.qty);
+END|
+
+CREATE TRIGGER trg_ad AFTER DELETE ON orders FOR EACH ROW
+BEGIN
+  UPDATE stock SET on_hand = on_hand + OLD.qty WHERE sku = OLD.sku;
+  INSERT INTO audit (order_id, old_qty, new_qty) VALUES (OLD.id, OLD.qty, NULL);
+END|
+DELIMITER ;|
+
+--echo # Multi-row INSERT fires the BEFORE (clamp) and AFTER (stock+audit) triggers.
+INSERT INTO orders VALUES (1, 100, 5), (2, 100, -3), (3, 200, 10);
+--echo # order 2's qty was clamped from -3 to 0
+SELECT id, sku, qty FROM orders ORDER BY id;
+--echo # stock 100 down by 5+0, stock 200 down by 10
+SELECT sku, on_hand FROM stock ORDER BY sku;
+
+UPDATE orders SET qty = qty + 2 WHERE id = 1;
+DELETE FROM orders WHERE id = 3;
+
+SELECT sku, on_hand FROM stock ORDER BY sku;
+--echo # audit has: 3 inserts, 1 update, 1 delete = 5 rows, auto-inc contiguous
+SELECT aid, order_id, old_qty, new_qty FROM audit ORDER BY aid;
+
+--echo #
+--echo # A trigger that violates a unique constraint rolls the whole statement
+--echo # back atomically -- the driving INSERT and the trigger's effects both undo.
+--echo #
+CREATE TABLE uniq_log (k INT PRIMARY KEY) ENGINE=TidesDB;
+INSERT INTO uniq_log VALUES (1);
+CREATE TRIGGER trg_fail AFTER INSERT ON stock FOR EACH ROW
+  INSERT INTO uniq_log VALUES (1);
+--error ER_DUP_ENTRY
+INSERT INTO stock VALUES (300, 5);
+--echo # neither the stock row nor a uniq_log row was added
+SELECT COUNT(*) AS stock_expected_2 FROM stock;
+SELECT COUNT(*) AS uniq_log_expected_1 FROM uniq_log;
+
+DROP TRIGGER trg_fail;
+DROP TABLE orders, stock, audit, uniq_log;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

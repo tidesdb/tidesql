@@ -19,8 +19,8 @@
 #   4. Clone MariaDB server source
 #        - Checkout the requested branch/tag
 #        - Init submodules
-#        - Copy tidesdb/ storage engine plugin into storage/
-#        - Copy tidesdb test suite into storage/tidesdb/mysql-test/
+#        - Copy tidesdb/ storage engine plugin into storage/ (the test suites
+#          under tidesdb/mysql-test/ are discovered from the engine directory)
 #   5. Build MariaDB (full server)
 #        - All default storage engines (InnoDB, Aria, CONNECT, etc.)
 #        - All standard tools (mariadb, mysqldump, mariadb-admin, etc.)
@@ -72,9 +72,9 @@
 #
 # Examples:
 #  ./install.sh
-#  ./install.sh --tidesdb-version v8.6.1 --mariadb-version 12.1
+#  ./install.sh --tidesdb-version 10.0.0 --mariadb-version mariadb-13.0.1
 #  ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
-#  ./install.sh --mariadb-version mariadb-12.1.2
+#  ./install.sh --mariadb-version mariadb-13.0.1
 #  ./install.sh --skip-deps --skip-tidesdb
 #  ./install.sh --pgo          # Full PGO build (instrument -> train -> optimize)
 #  ./install.sh --list-engines # Show which engines can be skipped
@@ -148,7 +148,7 @@ get_latest_tidesdb_version() {
     version=$(_fetch_url "https://api.github.com/repos/tidesdb/tidesdb/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "v8.6.1"  # fallback
+        echo "10.0.0"  # fallback, TidesDB 10.x tags drop the leading v
     else
         echo "$version"
     fi
@@ -159,7 +159,7 @@ get_latest_mariadb_version() {
     version=$(_fetch_url "https://api.github.com/repos/MariaDB/server/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "12.1"  # fallback
+        echo "mariadb-13.0.1"  # fallback, the version-13 tag TideSQL 5.0.0 targets
     else
         echo "$version"
     fi
@@ -622,10 +622,9 @@ prepare_mariadb() {
 
     info "Copying TidesDB storage engine plugin into MariaDB source..."
     cp -r "${SCRIPT_DIR}/tidesdb" "${mariadb_src}/storage/"
-
-    info "Copying TidesDB test suite into the plugin's mysql-test directory..."
-    mkdir -p "${mariadb_src}/storage/tidesdb/mysql-test"
-    cp -r "${SCRIPT_DIR}/mysql-test/suite/tidesdb" "${mariadb_src}/storage/tidesdb/mysql-test/"
+    # The test suites live under tidesdb/mysql-test, so MariaDB discovers them
+    # from the engine directory once the plugin is copied above; there is no
+    # separate copy into the server's global mysql-test tree.
 
     ok "MariaDB source prepared"
 }
@@ -991,7 +990,7 @@ character-set-server = utf8mb4
 collation-server = utf8mb4_general_ci
 
 # TidesDB plugin - loaded at startup
-plugin_maturity = gamma
+plugin_maturity = beta
 plugin_load_add = ha_tidesdb.${plugin_ext}
 
 # TidesDB settings (tune as needed)
@@ -1000,7 +999,7 @@ tidesdb_compaction_threads = 4
 tidesdb_block_cache_size = 256M
 tidesdb_max_open_sstables = 256
 tidesdb_log_level = WARN
-tidesdb_unified_memtable_write_buffer_size = 256M
+tidesdb_memtable_write_buffer_size = 256M
 
 [client]
 port = 3306
@@ -1200,14 +1199,14 @@ rebuild_plugin() {
             "  Run a full install first before using --rebuild-plugin."
     fi
 
-    # Re-copy plugin source & test suite into the existing source tree
+    # Re-copy plugin source into the existing source tree.  The test suites live
+    # under tidesdb/mysql-test, so this copy refreshes them along with the code.
     info "Copying TidesDB plugin source into MariaDB source tree..."
     cp -r "${SCRIPT_DIR}/tidesdb" "${mariadb_src}/storage/"
-    mkdir -p "${mariadb_src}/storage/tidesdb/mysql-test"
-    cp -r "${SCRIPT_DIR}/mysql-test/suite/tidesdb" "${mariadb_src}/storage/tidesdb/mysql-test/"
-    # Remove any stale top-level copy from an older install so MTR does not
-    # discover two suites named tidesdb.
-    rm -rf "${mariadb_src}/mysql-test/suite/tidesdb"
+    # Remove any stale copies an older install left in the server's global
+    # mysql-test tree so MTR does not discover two suites of the same name.
+    rm -rf "${mariadb_src}/mysql-test/suite/tidesdb" \
+           "${mariadb_src}/mysql-test/suite/tidesdb_galera"
 
     # Point cmake at the TidesDB library
     export TIDESDB_ROOT="${TIDESDB_PREFIX}"

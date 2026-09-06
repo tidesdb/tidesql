@@ -1,8 +1,0 @@
-# This is an example configuration file. Copy it (using a different name) and
-# edit the copy to customise the server configuration. Files in this directory
-# are loaded after the main configuration file, so settings here override the
-# defaults. Files in this directory (other than this example) are not versioned.
-
-[server]
-# sql_mode  = STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION
-# old_mode  =

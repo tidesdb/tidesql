@@ -1,0 +1,38 @@
+#
+# XA crash-recovery: a transaction prepared before a restart survives
+# it and stays in-doubt until decided.
+#
+# XA PREPARE durably logs the write batch under its XID.  After the
+# server restarts, the library recovers the prepared-but-undecided
+# transaction, the handlerton recover() callback hands its XID back to
+# the server, XA RECOVER lists it, and XA COMMIT applies the rows that
+# were prepared before the restart.
+#
+CREATE TABLE xa_r (id INT PRIMARY KEY, v VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO xa_r VALUES (1, 'before');
+XA START 'r1';
+INSERT INTO xa_r VALUES (2, 'prepared');
+XA END 'r1';
+XA PREPARE 'r1';
+# Restart the server -- the prepared transaction must persist.
+# restart
+# The prepared rows are not visible yet.
+SELECT * FROM xa_r ORDER BY id;
+id	v
+1	before
+# The recovered transaction is listed as in-doubt.
+XA RECOVER;
+formatID	gtrid_length	bqual_length	data
+1	2	0	r1
+# Deciding it applies the rows prepared before the restart.
+XA COMMIT 'r1';
+SELECT * FROM xa_r ORDER BY id;
+id	v
+1	before
+2	prepared
+# Nothing is left in-doubt.
+XA RECOVER;
+formatID	gtrid_length	bqual_length	data
+DROP TABLE xa_r;
+#
+# Done.

@@ -35,313 +35,60 @@
 #include "my_base.h"
 #include "thr_lock.h"
 
+#ifdef WITH_WSREP
+/* the certification key type enum and the wsrep_on / thread service that the galera participation
+   methods declared on the handler take, pulled in under the same build guard the galera translation
+   unit compiles under so a server built without wsrep never sees them. */
+#include <mysql/service_wsrep.h>
+#endif
+
 extern "C"
 {
 #include <tidesdb/db.h>
 }
 
-/* Mirror constants for the library's TDB_DEFAULT_* values defined in
-   <tidesdb/tidesdb.h>.  We don't include that header directly because it
-   leaks a `realloc` macro that conflicts with MariaDB's String::realloc()
-   method.  Keep these in sync with src/tidesdb.h on every library bump --
-   sysvar defaults reference the TIDESQL_* names so drift is caught here
-   rather than scattered across the sysvar declarations. */
-static constexpr unsigned long long TIDESQL_DEFAULT_WRITE_BUFFER_SIZE = 64ULL * 1024 * 1024;
-static constexpr unsigned long long TIDESQL_DEFAULT_SYNC_INTERVAL_US = 128000;
-static constexpr unsigned long long TIDESQL_DEFAULT_KLOG_VALUE_THRESHOLD = 512;
-static constexpr unsigned long long TIDESQL_DEFAULT_LEVEL_SIZE_RATIO = 10;
-static constexpr unsigned long long TIDESQL_DEFAULT_MIN_LEVELS = 1;
-static constexpr unsigned long long TIDESQL_DEFAULT_DIVIDING_LEVEL_OFFSET = 1;
-static constexpr unsigned long long TIDESQL_DEFAULT_INDEX_SAMPLE_RATIO = 1;
-static constexpr unsigned long long TIDESQL_DEFAULT_BLOCK_INDEX_PREFIX_LEN = 16;
-static constexpr unsigned long long TIDESQL_DEFAULT_MIN_DISK_SPACE = 100ULL * 1024 * 1024;
+/* The TideSQL plugin's own version, reported through tidesdb_version / _version_hex and the
+   maria_declare_plugin block.  Distinct from the vendored library version (TIDESDB_VERSION). */
+#define TIDESQL_VERSION_STR "5.0.0"
+#define TIDESQL_VERSION_HEX 0x50000
 
-/* Key namespace prefixes (first byte of every TidesDB key) */
-static constexpr uint8_t KEY_NS_META = 0x00;
-static constexpr uint8_t KEY_NS_DATA = 0x01;
+/* shared compile-time constants (key/row format, spatial, fts, cost model, library defaults) */
+#include "ha_tidesdb_constants.h"
 
-/* Size of the namespace prefix that every TidesDB key starts with. */
-static constexpr uint KEY_NAMESPACE_LEN = 1;
-
-/* Buffer size for a data CF key, namespace byte + comparable PK + 1 byte slack.
-   Used by every site that builds KEY_NS_DATA + pk via build_data_key. */
-static constexpr uint DATA_KEY_BUF_LEN = KEY_NAMESPACE_LEN + MAX_KEY_LENGTH + 1;
-
-/* Buffer size for a secondary-index CF entry key, comparable index-column
-   bytes (up to MAX_KEY_LENGTH) + appended PK bytes (up to MAX_KEY_LENGTH)
-   + 2 bytes of slack that covers VARBINARY length-byte overflow emitted
-   by make_comparable_key. */
-static constexpr uint SEC_IDX_KEY_BUF_LEN = (MAX_KEY_LENGTH * 2) + 2;
-
-/* Number of doubles in a 2-D minimum bounding rectangle.  Always four
-   (xmin, ymin, xmax, ymax); used for the on-disk spatial value layout
-   and the in-memory query-MBR cache on the handler. */
-static constexpr uint SPATIAL_MBR_DIMS = 4;
-
-/* CF naming */
-static constexpr const char CF_INDEX_INFIX[] = "__idx_";
-
-/* Reserved CF for schema discovery (object store mode only) */
-static constexpr const char SCHEMA_CF_NAME[] = "__tidesql_schema";
-
-/* Hidden primary key size (tables without explicit PK) */
-static constexpr size_t HIDDEN_PK_SIZE = sizeof(uint64_t);
-
-/* Maximum number of secondary indexes we support */
-static constexpr uint MAX_TIDESDB_KEYS = MAX_KEY;
-
-/* Cost model constants for the optimizer */
-static constexpr double TIDESDB_COST_SEQ_READ = 0.00005;
-static constexpr double TIDESDB_COST_KEY_READ = 0.00003;
-static constexpr double TIDESDB_COST_RANGE_SETUP = 0.0001;
-static constexpr double TIDESDB_DEFAULT_READ_AMP = 1.0;
-
-/* Stats cache refresh interval (microseconds) */
-static constexpr long long TIDESDB_STATS_REFRESH_US = 2000000LL; /* 2 seconds */
-
-/* Minimum stats.records to avoid optimizer edge cases with 0 rows */
-static constexpr ha_rows TIDESDB_MIN_STATS_RECORDS = 2;
-
-/* scan_time() -- split the opaque cost returned by tidesdb_range_cost
-   between MariaDB's I/O and CPU cost buckets.  LSM scans are mostly
-   block-read bound, so 90% I/O / 10% CPU matches observed profiles. */
-static constexpr double TIDESDB_SCAN_IO_WEIGHT = 0.9;
-static constexpr double TIDESDB_SCAN_CPU_WEIGHT = 0.1;
-
-/* records_in_range() fallbacks when we can't get a useful estimate. */
-static constexpr ha_rows TIDESDB_RIR_DEFAULT_EST = 10;         /* no share available */
-static constexpr ha_rows TIDESDB_RIR_UNKNOWN_DENOM = 4;        /* total/4 + 1 quarter fallback */
-static constexpr double TIDESDB_RIR_FRACTION_UNRELIABLE = 0.8; /* fall back to rec_per_key */
-
-/* Range-width multiplier applied to rec_per_key when tidesdb_range_cost
-   returned an unreliably high fraction (memtable-only data, narrow range
-   indistinguishable from full scan).  Typical OLTP ranges span tens of
-   key values; 20 keeps the estimate tight while still being vastly
-   better than the full ratio. */
-static constexpr ha_rows TIDESDB_RIR_RANGE_RPK_MULTIPLIER = 20;
-
-/* Cap the rec_per_key range fallback at total / N so it never claims
-   more than this fraction of the table. */
-static constexpr ha_rows TIDESDB_RIR_RANGE_CAP_DENOM = 2;
-
-/* Sentinel bytes for building full-range bounds that pass through
-   tidesdb_range_cost or seek primitives.  KEY_INF_HI_BYTE fills upper
-   bound buffers with 0xFF.  KEY_INF_LO_BYTE seeds the smallest possible
-   first byte for secondary-index lower bounds (primary uses KEY_NS_DATA). */
-static constexpr uint8_t KEY_INF_HI_BYTE = 0xFF;
-static constexpr uint8_t KEY_INF_LO_BYTE = 0x00;
-
-/* Row format constants.  Every row written by serialize_row carries the
-   header [ROW_HEADER_MAGIC][null_bytes(2 LE)][field_count(2 LE)] for a
-   total of ROW_HEADER_SIZE bytes; deserialize_row reads them back to
-   support instant ADD/DROP COLUMN. */
-static constexpr uchar ROW_HEADER_MAGIC = 0xFE;
-static constexpr uint ROW_HEADER_SIZE = 5;
-
-/* Length prefix Field::pack writes ahead of a wide VARCHAR payload.
-   Two bytes covers VARCHAR above 255 chars; narrower columns use a
-   single-byte prefix. */
-static constexpr uint FIELD_VARCHAR_LEN_PREFIX = 2;
-
-/* Sign-bit XOR mask used to translate a signed integer's MSB into
-   sortable form (and back).  Big-endian sort keys flip this bit so
-   negative values sort below positive ones lexicographically. */
-static constexpr uint8_t INT_SORT_SIGN_FLIP_MASK = 0x80;
-
-/* MariaDB packed-field widths used by sort-key decoders. */
-static constexpr uint DATE_PACK_LEN = 3;
-static constexpr uint DATETIME_MAX_PACK_LEN = 8;
-
-/* Sysvar enum index for tidesdb_object_store_backend.  0 = LOCAL, 1 = S3,
-   2 = FS (local filesystem object-store connector, for failover testing without S3). */
-static constexpr uint OBJSTORE_BACKEND_LOCAL = 0;
-static constexpr uint OBJSTORE_BACKEND_S3 = 1;
-static constexpr uint OBJSTORE_BACKEND_FS = 2;
-
-/* Separator that joins db and table names when forming a TidesDB CF name
-   from a MariaDB path (e.g. "test/foo" -> "test__foo").  Centralized so
-   path_to_cf_name, schema_cf, and discover stay in sync. */
-static constexpr const char CF_DB_TABLE_SEP[] = "__";
-
-/* Schema CF key encoding "db_name<SEP>table_name" with no trailing NUL.
-   The null byte separator is unambiguous because MariaDB identifiers
-   cannot contain NUL.  Used by schema_cf_key, schema_cf_key_from_path,
-   the discover prefix builders, and the schema_cf_ensure_databases scan. */
-static constexpr char SCHEMA_CF_KEY_SEP = '\0';
-
-/* MariaDB temp-table marker character.  Internal temp/exchange tables
-   carry one or more '#' in their on-disk name (e.g. "#sql-..."); we
-   substitute '_' so the resulting CF name remains valid. */
-static constexpr char MARIADB_TEMP_NAME_MARKER = '#';
-static constexpr char MARIADB_TEMP_NAME_REPLACEMENT = '_';
-
-/* Relative-path prefix that MariaDB prepends to table paths handed
-   to handler callbacks ("./db/table").  schema_cf_key_from_path and
-   path_to_cf_name strip it before extracting db/table components. */
-static constexpr const char MARIADB_REL_PATH_PREFIX[] = "./";
-static constexpr size_t MARIADB_REL_PATH_PREFIX_LEN = 2;
-
-/* MariaDB sort-key null-indicator bytes prepended to nullable key parts
-   in make_comparable_key.  Convention 0 sorts NULLs first under memcmp,
-   1 marks a present value. */
-static constexpr uchar SORT_KEY_NULL = 0;
-static constexpr uchar SORT_KEY_NOT_NULL = 1;
-
-/* Slot indices into the 4-double MBR layout used by spatial_qmbr_ and
-   tdb_mbr_t-shaped buffers.  Order matches the on-disk SPATIAL_MBR_VALUE_LEN
-   layout [xmin, ymin, xmax, ymax]. */
-static constexpr uint MBR_XMIN_IDX = 0;
-static constexpr uint MBR_YMIN_IDX = 1;
-static constexpr uint MBR_XMAX_IDX = 2;
-static constexpr uint MBR_YMAX_IDX = 3;
-
-/* Inclusive bounds of the full 64-bit Hilbert value space.  Used when a
-   spatial query has no decomposable cells (e.g. HA_READ_MBR_DISJOINT) and
-   we have to scan the entire curve. */
-static constexpr uint64_t HILBERT_RANGE_FULL_LO = 0;
-static constexpr uint64_t HILBERT_RANGE_FULL_HI = UINT64_MAX;
-
-/* Minimum number of point ranges in a multi-range request before our
-   custom MRR path takes over from MariaDB's default implementation.
-   Single-range plans bypass MRR so pessimistic row locking still
-   engages on the index_read_map fast path. */
-static constexpr uint MRR_ACCEPT_MIN_RANGES = 2;
-
-/* Selectivity values used in info() / analyze() for index rec_per_key.
-   UNIQUE exactly one row per distinct value.  FLOOR smallest plausible
-   estimate so the optimizer never sees rec_per_key=0 (treated as "unknown"). */
-static constexpr ulong REC_PER_KEY_UNIQUE = 1;
-static constexpr ulong REC_PER_KEY_FLOOR = 1;
-
-/* Divisor used to compute the centroid of an MBR ((min + max) / 2) when
-   building a Hilbert spatial index key.  The centroid is the point that
-   feeds hilbert_xy2d_64 -- the MBR corners themselves are stored in the
-   value, not the key. */
-static constexpr double MBR_CENTROID_DIV = 2.0;
-
-/* Multiplier used to convert a 0..1 ratio (cache hit rate, etc.) into
-   a percentage for human-readable status output. */
-static constexpr double PERCENT_SCALE = 100.0;
-
-/* First row id assigned to a freshly created (or fully truncated)
-   hidden-PK table.  Row ids are one-based so that "0" remains a clean
-   sentinel for "no row id yet" / "uninitialized". */
-static constexpr uint64_t HIDDEN_PK_FIRST_ROW_ID = 1;
-
-/* Inclusive bounds of a probability / cost fraction in [0, 1].  Used to
-   clamp tidesdb_range_cost ratios in records_in_range so floating-point
-   noise from the cost estimator can't push the fraction outside its
-   semantic range. */
-static constexpr double FRACTION_MIN = 0.0;
-static constexpr double FRACTION_MAX = 1.0;
-
-/* Read-amplification value reported when TidesDB has not yet collected
-   enough statistics to compute a real read_amp.  1.0 means "one disk op
-   per logical op" -- the optimistic baseline that won't penalize plans. */
-static constexpr double READ_AMP_NONE = 1.0;
-
-/* Per-document delta values for fts_update_meta when maintaining the
-   FTS metadata row alongside DML.  ADD/DEL track whether a document
-   was inserted or removed; word-count deltas use the matching sign. */
-static constexpr int FTS_DOC_DELTA_ADD = 1;
-static constexpr int FTS_DOC_DELTA_DEL = -1;
-
-/* mkdir mode used when the discover_table callback creates a missing
-   database directory under datadir. */
-static constexpr int TIDESDB_DB_DIR_MODE = 0755;
-
-/* Default ENCRYPTION_KEY_ID applied when a table is opened with
-   encryption enabled but no explicit key id is provided.  Mirrors the
-   default in the ENCRYPTION_KEY_ID HA_TOPTION_NUMBER declaration. */
-static constexpr uint TIDESDB_DEFAULT_ENCRYPTION_KEY_ID = 1;
-
-/* Sentinel value stored in TidesDB_share::ttl_field_idx when no TTL
-   column is configured for the table.  Valid TTL field indexes are
-   non-negative; >= 0 implies a TTL_COL column is present. */
-static constexpr int TIDESDB_TTL_FIELD_NONE = -1;
-
-/* Fallback divisor when rec_per_key is unset for a non-unique secondary
-   index in info().  Estimate is total_records / N, biasing toward more
-   selective lookups (10 ~= one decimal order of magnitude). */
-static constexpr ha_rows STATS_REC_PER_KEY_FALLBACK_DIVISOR = 10;
-
-/* IEEE-754 double-precision bit layout used by the spatial code's
-   lexicographic-orderable encoding.  The sign bit is bit 63 of the 64-bit
-   representation; LEX_UINT32_HI_SHIFT extracts the high 32 bits after
-   sign-flipping for big-endian comparison. */
-static constexpr uint64_t IEEE754_DOUBLE_SIGN_MASK = (uint64_t)1 << 63;
-static constexpr uint LEX_UINT32_HI_SHIFT = 32;
-
-/* Number of bits per byte for shift-based byte (de)serialization in the
-   spatial encoder/decoder loops.  Equivalent to CHAR_BIT on POSIX. */
-static constexpr uint BITS_PER_BYTE = 8;
-
-/* yesno flag values used by the FTS boolean-mode parser to mark each
-   query term as required (`+term`), excluded (`-term`), or neutral
-   (just `term`).  Compared with `> 0` and `< 0` in the BM25 reducer. */
-static constexpr int FTS_TERM_REQUIRED = 1;
-static constexpr int FTS_TERM_EXCLUDED = -1;
-static constexpr int FTS_TERM_NEUTRAL = 0;
-
-/* Operator characters recognized by fts_parse_boolean for queries
-   issued in `IN BOOLEAN MODE`.  These are part of the MariaDB FTS
-   query DSL, not arbitrary punctuation. */
-static constexpr char FTS_BOOL_OP_REQUIRED = '+';
-static constexpr char FTS_BOOL_OP_EXCLUDED = '-';
-static constexpr char FTS_BOOL_OP_PHRASE = '"';
-static constexpr char FTS_BOOL_OP_TRUNC = '*';
-
-/* BM25 (Okapi / Robertson Walker) ranking formula constants.
-   Used in ft_init_ext to score postings.  IDF uses the Lucene
-   smoothed form, log((N - df + EPS) / (df + EPS) + SHIFT).  TF
-   normalization uses (tf * (k1 + BOOST)) / (tf + k1 * (BASE - b +
-   b * dl / avgdl)). */
-static constexpr double BM25_IDF_EPSILON = 0.5;
-static constexpr double BM25_IDF_NONNEG_SHIFT = 1.0;
-static constexpr double BM25_TF_SATURATION_BOOST = 1.0;
-static constexpr double BM25_LENGTH_NORM_BASE = 1.0;
-/* Fallback average document length when the FTS metadata reports
-   zero total documents.  A value of 1.0 collapses the length
-   normalization term to neutral so scoring still proceeds. */
-static constexpr double BM25_DEFAULT_AVGDL = 1.0;
-/* Floor for total_docs in the IDF denominator.  Guards std::log
-   from a divide-by-zero when no documents have been indexed yet. */
-static constexpr int64_t BM25_MIN_TOTAL_DOCS = 1;
-
-/* Inplace index builds rows between mid-txn commits and between
-   thd_killed polls. */
-static constexpr ha_rows TIDESDB_INDEX_BUILD_BATCH = 100;
-
-/* Bulk DML ops between mid-txn commits during start_bulk_insert /
-   start_bulk_update / start_bulk_delete.  Counts both the primary put
-   and each secondary-index put. */
-static constexpr ha_rows TIDESDB_BULK_INSERT_BATCH_OPS = 500;
-
-/* Encryption */
-static constexpr uint TIDESDB_ENC_IV_LEN = 16;
-static constexpr uint TIDESDB_ENC_KEY_LEN = 32;
-
-/* Bytes of key-version prefix on every encrypted row blob.  The on-disk
-   layout is the 4-byte little-endian key version, then the IV, then the
-   ciphertext, so a row always decrypts under the exact key version it was
-   written with and survives an encryption key rotation. */
-static constexpr uint TIDESDB_ENC_VERSION_LEN = 4;
-
-/* Bloom filter FPR conversion (table option stores parts per 10000) */
-static constexpr double TIDESDB_BLOOM_FPR_DIVISOR = 10000.0;
-
-/* Tombstone density trigger conversion (table option stores parts per
-   10000; library config is a 0.0..1.0 ratio). */
-static constexpr double TIDESDB_TOMBSTONE_DENSITY_DIVISOR = 10000.0;
-
-/* Skip list probability conversion (table option stores percentage) */
-static constexpr float TIDESDB_SKIP_LIST_PROB_DIV = 100.0f;
-
-/* TTL sentinel value meaning no expiration */
-static constexpr time_t TIDESDB_TTL_NONE = (time_t)-1;
-
-/* Default block cache size (bytes) */
-static constexpr ulonglong TIDESDB_DEFAULT_BLOCK_CACHE = 256ULL * 1024 * 1024; /* 256M */
+/*
+  One foreign-key constraint as this engine persists and enforces it.  The same
+  definition is loaded on both sides of the relationship, so a table keeps a list
+  of the constraints where it is the child (referencing) and a separate list of
+  the constraints where it is the parent (referenced).  The field-index vectors
+  are in the constraint's declared order, and the resolved column-family names let
+  the enforcement path probe the parent and scan the children without reopening
+  the server table definitions.
+*/
+struct tdb_fk_def
+{
+    std::string name;                          /* constraint name                        */
+    std::string child_cf;                      /* referencing table's data cf            */
+    std::string child_db;                      /* referencing table's database           */
+    std::string child_table;                   /* referencing table's name               */
+    std::vector<uint16> child_fields;          /* referencing column field indexes       */
+    std::vector<uint8> child_nullable;         /* whether each child column is nullable   */
+    std::string ref_db;                        /* referenced database, as written        */
+    std::string ref_table;                     /* referenced table, as written           */
+    std::string parent_cf;                     /* referenced table's data cf             */
+    std::vector<uint16> parent_fields;         /* referenced column field indexes        */
+    std::vector<std::string> ref_column_names; /* referenced column names, for display */
+    std::string child_index_name;              /* index on the child fk columns          */
+    std::string parent_index_name;             /* pk or unique index probed on the parent */
+    uint8 on_delete;                           /* enum_fk_option                         */
+    uint8 on_update;                           /* enum_fk_option                         */
+    /* Key numbers resolved at load time from the table this side owns, so the
+       enforcement path encodes comparable keys without a per-check name lookup.
+       child_key_no is set on the child side, parent_key_no on the parent side,
+       either stays -1 when this side does not own that end. */
+    int child_key_no{-1};
+    int parent_key_no{-1};
+    bool parent_is_pk{false}; /* referenced columns are the parent pk    */
+};
 
 /*
   TidesDB_share -- shared state for one table, visible to all handler objects.
@@ -383,6 +130,17 @@ class TidesDB_share : public Handler_share
     uint num_secondary_indexes; /* count of non-NULL secondary index CFs */
     size_t cached_row_est{0};   /* cached serialize_row size estimate for non-BLOB tables */
 
+    /* Foreign keys loaded from the engine's own catalog at open time.  fk_child
+       holds the constraints where this table references another, driving the
+       parent-existence checks on insert and update.  fk_parent holds the
+       constraints where another table references this one, driving the
+       restrict, cascade, and set-null actions on delete and update.  Both stay
+       empty for a table with no foreign keys, so the enforcement path costs
+       nothing there. */
+    std::vector<tdb_fk_def> fk_child;
+    std::vector<tdb_fk_def> fk_parent;
+    bool fk_loaded{false};
+
     /* Field indices of BLOB/TEXT columns -- populated at open() when
        has_blobs is true.  serialize_row iterates only these instead of
        scanning all fields for the BLOB_FLAG. */
@@ -422,19 +180,6 @@ class TidesDB_share : public Handler_share
     std::atomic<double> cached_scan_cost{0.0};
     std::atomic<long long> scan_cost_time{0};
 
-    /* records_in_range needs a full-range cost as the normalizer; without
-       a cache it recomputes that for every probe of every alternative
-       plan.  Stored per CF -- one atomic for the data CF, one array per
-       secondary index -- refreshed with the same TIDESDB_STATS_REFRESH_US
-       window.  std::atomic<double> is not move-constructible so the
-       per-index storage uses a fixed unique_ptr<atomic[]> sized in
-       open().  A stale read just produces a slightly stale estimate. */
-    std::atomic<double> cached_pk_full_cost{0.0};
-    std::atomic<long long> cached_pk_full_cost_time{0};
-    std::unique_ptr<std::atomic<double>[]> cached_idx_full_cost;
-    std::unique_ptr<std::atomic<long long>[]> cached_idx_full_cost_time;
-    uint cached_idx_full_cost_n{0};
-
     /* Table timestamps for information_schema.TABLES */
     time_t create_time{0};              /* from .frm stat at first open */
     std::atomic<time_t> update_time{0}; /* bumped on DML (write/update/delete) */
@@ -457,9 +202,17 @@ class TidesDB_share : public Handler_share
     bool idx_is_fts[MAX_KEY];
     bool idx_is_spatial[MAX_KEY];
 
-    /* Cached rec_per_key for secondary indexes (populated by ANALYZE TABLE).
+    /* Cached rec_per_key for secondary indexes (populated by ANALYZE TABLE
+       or the open-time auto-sample below).
        0 = not yet computed, use heuristic; >0 = sampled value. */
     std::atomic<ulong> cached_rec_per_key[MAX_KEY];
+
+    /* Auto-sample bookkeeping.  sampled flips true once a populated table has
+       had its secondary-index cardinality measured for real, so we never fall
+       back to records/10 for a high-cardinality index; sampling guards the
+       one scan against a thundering herd of concurrent first queries. */
+    std::atomic<bool> idx_stats_sampled{false};
+    std::atomic<bool> idx_stats_sampling{false};
 
     /* Secondary index CFs (one per secondary key) */
     std::vector<tidesdb_column_family_t *> idx_cfs;
@@ -497,15 +250,6 @@ class ha_tidesdb_inplace_ctx : public inplace_alter_handler_ctx
     }
 };
 
-/* Pessimistic lock mode.  Shared is read-intent and compatible with itself,
-   exclusive is write-intent and conflicts with everything.  Declared here
-   because tidesdb_trx_t carries a waiting_on_mode field. */
-enum tdb_lock_mode_t
-{
-    TDB_LOCK_MODE_S = 0,
-    TDB_LOCK_MODE_X = 1,
-};
-
 /* Per-txn accumulator entry for one FTS index's metadata key.  The
    plugin folds the per-row delta_docs and delta_words contributions
    from every write_row / update_row / delete_row in a transaction here
@@ -536,27 +280,12 @@ struct tidesdb_trx_t
     tidesdb_isolation_level_t isolation_level{TDB_ISOLATION_REPEATABLE_READ};
     uint64_t txn_generation{0};
 
-    /* Plugin-level row lock state for this txn.  The lock manager supports
-       shared (read-intent) and exclusive (write-intent) modes; multiple S
-       holders coexist on the same lock, X blocks any other holder, and a
-       new S blocks while an X is queued so writers are never starved by a
-       stream of readers.  Locks are acquired from write_row, fetch_row_by_pk,
-       and iter_read_current depending on session isolation and write intent,
-       and released en masse at commit or rollback. */
-
-    struct tdb_lock_request_t *held_locks_head{nullptr};
-
-    /* What this txn is currently waiting for, published as two fields the
-       deadlock walker can read lock-free from other partitions without ever
-       dereferencing a request struct.  Lock entries themselves are never
-       freed at runtime (find_or_create recycles empty slots in place), so
-       waiting_on_lock is always a safe pointer to follow.  The writing
-       thread stores waiting_on_mode before waiting_on_lock with release
-       ordering, and walkers load waiting_on_lock with acquire then read the
-       mode, so a walker that sees a non-null lock pointer also sees the
-       matching mode. */
-    std::atomic<struct tdb_row_lock_t *> waiting_on_lock{nullptr};
-    tdb_lock_mode_t waiting_on_mode{TDB_LOCK_MODE_S};
+#ifdef WITH_WSREP
+    /* Galera write-intent keys this transaction registered in the shared intent map, so it can drop
+       its own entries at commit or rollback and truncate them to a savepoint on a savepoint
+       rollback. */
+    std::vector<std::string> wsrep_intent_keys;
+#endif
 
     /* Per-statement FTS meta deltas, applied before tidesdb_commit hands
        the txn to the library so the meta update lands in the same commit
@@ -564,31 +293,94 @@ struct tidesdb_trx_t
     std::vector<fts_meta_delta_t> fts_meta_pending;
     bool fts_meta_dirty{false};
 
-    /* Same-txn pending key existence, consulted by probe_pk_exists before its
-       non-tracking tidesdb_txn_contains check on the write txn.  Committed data
-       alone cannot show what this txn has staged, so we record it here:
-       true = inserted this txn (re-insert is a duplicate),
-       false = deleted this txn (re-insert is allowed though committed has it).
-       Keyed by cf_name + primary-key bytes; cleared at commit/rollback. */
-    std::unordered_map<std::string, bool> txn_key_state;
-
     /* Statement-atomicity bookkeeping.  A "stmt" library savepoint is armed at
        statement start (external_lock) inside a multi-statement transaction so a
        statement error rolls back only its own effects, not the whole txn.  The
-       library savepoint reverts the txn op array; these members revert the
-       plugin-side shadow state to the same statement boundary.
-
-       stmt_lock_marker is held_locks_head at statement start; locks acquired
-       during the statement sit above it and are released to it on rollback.
-       stmt_key_state_undo journals prior txn_key_state values per mutation
-       (prior: -1 absent, 0 false, 1 true) so we revert in O(statement writes)
-       rather than snapshotting the whole (potentially huge) map.
+       library savepoint reverts the txn op array; this member reverts the
+       plugin-side fts meta accumulator to the same statement boundary.
        stmt_fts_snapshot is a copy of the small fts_meta_pending vector taken at
        statement start and restored wholesale on rollback. */
-    tdb_lock_request_t *stmt_lock_marker{nullptr};
-    std::vector<std::pair<std::string, signed char>> stmt_key_state_undo;
     std::vector<fts_meta_delta_t> stmt_fts_snapshot;
     bool stmt_fts_dirty_snapshot{false};
+
+    /* When this connection's transaction has been XA PREPAREd, the serialized XID it was registered
+       in the prepared-transaction map under, so a same-connection XA COMMIT/ROLLBACK (resolved
+       through the normal commit/rollback callbacks) can drop that registry entry.  Empty otherwise.
+     */
+    std::string prepared_xid;
+
+    /* Group-commit handoff.  When the server drives ordered commit, commit_ordered runs the durable
+       commit in binlog order and records here that it did so and with what result, so the following
+       commit() reports the outcome and skips a second commit rather than re-committing. */
+    bool commit_ordered_done{false};
+    int commit_ordered_rc{0};
+};
+
+/* MariaDB 12.3.1 (MDEV-37815) renamed TABLE_SHARE::option_struct to
+   option_struct_table and introduced handler::option_struct as the preferred
+   accessor.  We keep reading from TABLE_SHARE so the macro works from
+   create(), inplace alter, and free functions that only have a TABLE*. */
+#if MYSQL_VERSION_ID >= 120301
+#define TDB_TABLE_OPTIONS(tbl) ((tbl)->s->option_struct_table)
+#else
+#define TDB_TABLE_OPTIONS(tbl) ((tbl)->s->option_struct)
+#endif
+
+/* per-table CREATE TABLE options.  the option list that binds these fields to
+   SYSVAR defaults lives in the root translation unit next to the sysvars it
+   references; the struct itself is shared so the column-family config builders
+   can read it from their own translation unit. */
+struct ha_table_option_struct
+{
+    ulonglong btree_klog_block_size;
+    ulonglong level_size_ratio;
+    ulonglong min_levels;
+    ulonglong dividing_level_offset;
+    ulonglong bloom_fpr; /* parts per 10000 -- 100 = 1% */
+    ulonglong l1_file_count_trigger;
+    uint compression;
+    uint isolation_level;
+    bool bloom_filter;
+    bool keep_values_inline;     /* hold every value in the klog, ignoring the db
+                                    value_separation_threshold */
+    ulonglong ttl;               /* default TTL in seconds (0 = no expiration) */
+    bool encrypted;              /* ENCRYPTED=YES enables data-at-rest encryption */
+    ulonglong encryption_key_id; /* ENCRYPTION_KEY_ID (default 1) */
+    /* Tombstone-density compaction trigger.  Stored as parts-per-10000
+       (e.g. 5000 = 0.50 ratio) so the option list can use integer storage;
+       converted to a double at build_cf_config time. */
+    ulonglong tombstone_density_trigger;
+    ulonglong tombstone_density_min_entries;
+};
+
+/* per-column CREATE TABLE options.  as with the table options, the option list binding this to a
+   field flag lives in the root translation unit; the struct is shared so open can find the column
+   marked as the per-row TTL source. */
+struct ha_field_option_struct
+{
+    bool ttl; /* marks this column as the per-row TTL source (seconds) */
+};
+
+/*
+  Scope guard for a buffer handed back by tidesdb_iter_key, tidesdb_iter_value,
+  or tidesdb_iter_key_value.  Each returns a newly allocated buffer the caller
+  owns and must release with tidesdb_free.  The guard binds to the caller's
+  pointer by reference and frees whatever it holds at scope exit, so a scan that
+  reads a key or value per row does not have to thread a free onto every return
+  path.  A NULL pointer, as left by a failed read, is left alone.
+*/
+struct tdb_owned_buf
+{
+    uint8_t *&p;
+    explicit tdb_owned_buf(uint8_t *&ptr) : p(ptr)
+    {
+    }
+    ~tdb_owned_buf()
+    {
+        if (p) tidesdb_free(p);
+    }
+    tdb_owned_buf(const tdb_owned_buf &) = delete;
+    tdb_owned_buf &operator=(const tdb_owned_buf &) = delete;
 };
 
 /*
@@ -610,7 +402,17 @@ class ha_tidesdb : public handler
     tidesdb_column_family_t *scan_iter_cf_; /* CF the cached scan_iter was created for */
     tidesdb_txn_t *scan_iter_txn_;          /* txn the cached scan_iter was created on */
     uint64_t scan_iter_txn_gen_;            /* txn_generation when scan_iter was created */
-    bool idx_pk_exact_done_;                /* deferred seek after PK exact */
+    /* When a range scan is set up via read_range_first these hold the encoded
+       lower/upper key bounds, so ensure_scan_iter builds a range iterator that
+       opens only the sstables overlapping the scan rather than every sstable in
+       the CF.  scan_range_valid_ gates it; a full scan or point lookup leaves it
+       false and gets an unbounded iterator. */
+    bool scan_range_valid_;
+    uint scan_range_lo_len_;
+    uint scan_range_hi_len_;
+    uchar scan_range_lo_[DATA_KEY_BUF_LEN];
+    uchar scan_range_hi_[DATA_KEY_BUF_LEN];
+    bool idx_pk_exact_done_; /* deferred seek after PK exact */
     enum scan_dir_t
     {
         DIR_NONE,
@@ -661,14 +463,6 @@ class ha_tidesdb : public handler
     uchar upd_old_ik_[SEC_IDX_KEY_BUF_LEN];
     uchar upd_new_ik_[SEC_IDX_KEY_BUF_LEN];
 
-    /* Cached dup-check iterators for UNIQUE secondary indexes.
-       tidesdb_iter_new() is O(num_sstables) -- caching avoids rebuilding
-       the merge heap on every INSERT for tables with unique indexes. */
-    tidesdb_iter_t *dup_iter_cache_[MAX_KEY];
-    tidesdb_txn_t *dup_iter_txn_[MAX_KEY]; /* txn each was created on */
-    uint64_t dup_iter_txn_gen_[MAX_KEY];   /* txn_generation when created */
-    uint dup_iter_count_;                  /* number of slots populated */
-
     /* Reusable buffer for tidesdb_txn_get values -- avoids malloc/free per
        point-lookup.  Retains heap capacity across calls. */
     std::string get_val_buf_;
@@ -694,17 +488,6 @@ class ha_tidesdb : public handler
     bool cached_skip_unique_;
     bool cached_single_delete_primary_;
     bool cached_thdvars_valid_;
-
-    /* Write-lock mode -- set when store_lock detects FOR UPDATE / write intent.
-       Used to decide whether to acquire row locks in index_read_map. */
-    bool stmt_has_write_lock_;
-
-    /* True for UPDATE / DELETE statements -- set in external_lock(F_WRLCK)
-       from cached_sql_cmd_.  iter_read_current uses this to skip the
-       per-row X lock during ICP filtering; update_row / delete_row
-       reacquire on the row they actually mutate.  SELECT ... FOR UPDATE
-       leaves this false so the locking-cursor contract is preserved. */
-    bool stmt_is_update_or_delete_{false};
 
     /* Cached "is this scan on the primary key" flag.  Set once in index_init
        so the navigation methods (index_next/prev/first/last/next_same) skip
@@ -768,6 +551,19 @@ class ha_tidesdb : public handler
     std::string bulk_delete_min_pk_;
     std::string bulk_delete_max_pk_;
 
+    /* Range-tombstone deferral for a bulk DELETE.  When a bulk delete is eligible (a user primary
+       key, no delete triggers, no wsrep) delete_row buffers each primary-row data key here instead
+       of writing a per-row tombstone, and end_bulk_delete coalesces them into one range tombstone
+       once it has confirmed every live row in the touched key span was one this statement deleted.
+       Cleared on start_bulk_delete; emptied when flushed as per-row tombstones or turned into a
+       range tombstone. */
+    bool bulk_delete_defer_{false};
+    std::vector<std::string> bulk_delete_keys_;
+
+    /* Write every buffered data key as a per-row tombstone, the fallback when a delete is not a
+       clean range or outgrows the deferral cap.  Empties bulk_delete_keys_. */
+    int bulk_delete_flush_buffered(tidesdb_txn_t *txn);
+
     /* Multi-Range Read state.  We accept MRR when every range the optimizer
        hands us is UNIQUE_RANGE|EQ_RANGE (i.e. the WHERE col IN (...) case on
        a full key) and fall back to the default MRR->read_range_first path for
@@ -790,14 +586,25 @@ class ha_tidesdb : public handler
 
     /* private helpers
      */
-    int ensure_stmt_txn(); /* lazy txn creation on first data access */
+    int ensure_stmt_txn();     /* lazy txn creation on first data access */
+    void cache_stmt_thdvars(); /* populate the per-statement session-var cache once */
     TidesDB_share *get_share();
     const std::string &serialize_row(const uchar *buf);
+    /* upper-bound packed size of the row at buf, ptrdiff its offset from record[0], adding real
+       blob lengths for a blob table on top of the cached constant estimate. */
+    size_t serialize_estimate_size(const uchar *buf, my_ptrdiff_t ptrdiff);
+    /* encrypt the plaintext already packed into row_buf_ into enc_buf_ and return it, refreshing
+       the per-statement cached key version on first use. */
+    const std::string &serialize_encrypt_row();
     void deserialize_row(uchar *buf, const uchar *data, size_t len);
+    /* unpack unpack_count packed fields from [from, from_end) into buf using the field plan. */
+    void deserialize_unpack_fields(uchar *buf, const uchar *from, const uchar *from_end,
+                                   uint unpack_count);
     void deserialize_row(uchar *buf, const std::string &row);
 
     /* Build memcmp-comparable key bytes into out[]; returns byte count */
-    uint make_comparable_key(KEY *key_info, const uchar *record, uint num_parts, uchar *out);
+    uint make_comparable_key(KEY *key_info, const uchar *record, uint num_parts, uchar *out,
+                             bool for_fk_ref = false);
 
     /* Convert key_copy-format search key directly to comparable bytes */
     uint key_copy_to_comparable(KEY *key_info, const uchar *key_buf, uint key_len, uchar *out);
@@ -822,11 +629,12 @@ class ha_tidesdb : public handler
     /* Probe whether a PK already exists, WITHOUT entering the write txn's
        read-set.  tkey = cf_name + data-key bytes.  Returns 1 = exists,
        0 = absent, <0 = -(HA error). */
-    int probe_pk_exists(tidesdb_trx_t *trx, const std::string &tkey, const uchar *dk, uint dk_len);
+    int probe_pk_exists(tidesdb_trx_t *trx, const uchar *dk, uint dk_len);
 
-    /* Compute the absolute TTL timestamp for a row being written.
-       Reads per-row TTL_COL value if present, else uses table default.
-       Returns -1 (no expiration) or a future Unix timestamp. */
+    /* Compute the row's TTL as a duration in seconds from now, the way the
+       library expects it.  Reads the per-row TTL_COL value if present, else the
+       session or table default.  Returns -1 (no expiration) or a positive
+       number of seconds the row should live. */
     time_t compute_row_ttl(const uchar *buf);
 
     /* Read current iterator entry (data-CF), decode row into buf.
@@ -836,8 +644,41 @@ class ha_tidesdb : public handler
     /* Lazily create scan_iter from scan_cf_ when first needed */
     int ensure_scan_iter();
 
+    /* Position and read for a primary-key index_read_map, comp_key holds the
+       comparable-format search key of comp_len bytes.  Handles the full-PK
+       point lookup and every iterator-based PK seek mode. */
+    int index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
+                      enum ha_rkey_function find_flag);
+
+    /* Position and read for a spatial MBR index_read_map, key is the raw
+       server search key.  Decomposes the query box into hilbert ranges and
+       hands off to spatial_scan_next. */
+    int index_read_spatial(uchar *buf, const uchar *key, enum ha_rkey_function find_flag);
+
+    /* Seek scan_iter to the starting entry for a secondary-index read, comp_key
+       holds the comparable-format index prefix of comp_len bytes. */
+    void index_seek_secondary(const uchar *comp_key, uint comp_len,
+                              enum ha_rkey_function find_flag);
+
+    /* Read the first matching secondary-index entry from the positioned cursor,
+       applying index-condition pushdown before the PK point-lookup. */
+    int index_read_secondary(uchar *buf, const uchar *comp_key, uint comp_len,
+                             enum ha_rkey_function find_flag);
+
+    /* Encode a records_in_range key range into comparable lo_buf/hi_buf bytes,
+       substituting the natural key-space boundary for a missing bound.  inx is
+       the index, is_pk true when it is the clustered primary key. */
+    void rir_encode_bounds(uint inx, bool is_pk, const key_range *min_key, const key_range *max_key,
+                           uchar *lo_buf, uint &lo_len, uchar *hi_buf, uint &hi_len);
+
     /* Try to decode record from secondary index key (keyread-only) */
     bool try_keyread_from_index(const uint8_t *ik, size_t iks, uint idx, uchar *buf);
+    /* Decode the read-set columns of one key's parts from a comparable key at pos into buf, setting
+       null bits at ptrdiff and un-inverting descending parts.  Advances pos; returns false if a
+       part runs past end or is undecodable.  Shared by the index-part and pk-suffix passes above.
+     */
+    bool keyread_decode_key_parts(KEY *key, const uint8_t *&pos, const uint8_t *end, uchar *buf,
+                                  my_ptrdiff_t ptrdiff);
 
     /* Evaluate pushed index condition on a secondary-index entry before
        the expensive PK point-lookup.  Decodes the index key columns into
@@ -847,20 +688,16 @@ class ha_tidesdb : public handler
                CHECK_OUT_OF_RANGE       -- past end of scan range
                CHECK_ABORTED_BY_USER    -- query killed */
     check_result_t icp_check_secondary(const uint8_t *ik, size_t iks, uint idx, uchar *buf);
-
-    /* Reverse a single integer sort-key part back to native little-endian
-       at `to` (destination byte pointer computed once by the caller).
-       Returns true on success, false for unsupported sort_len. */
-    static bool decode_int_sort_key(const uint8_t *src, uint sort_len, bool is_signed, uchar *to);
+    /* decode one key's parts from a comparable-format sort key into buf, advancing pos; returns
+       false as soon as a part runs past end or holds a type decode_sort_key_part cannot reverse. */
+    bool icp_decode_key_parts(KEY *key, const uint8_t *&pos, const uint8_t *end, uchar *buf,
+                              my_ptrdiff_t ptrdiff);
 
     /* Extended sort-key decoder -- handles integers, DATE, DATETIME,
        TIMESTAMP, YEAR, and fixed-length CHAR/BINARY.  Returns true on
        success, false for unsupported types.  Used by covering index
        reads and ICP evaluation to avoid PK point-lookups. */
     static bool decode_sort_key_part(const uint8_t *src, uint sort_len, Field *f, uchar *buf);
-
-    /* Free all cached dup-check iterators */
-    void free_dup_iter_cache();
 
     /* Commit the current txn mid-statement when a bulk op crosses the batch
        threshold, then reset it to READ_COMMITTED for the next batch.  Shared
@@ -870,6 +707,57 @@ class ha_tidesdb : public handler
 
     /* Recover hidden-PK counter by scanning the CF */
     void recover_counters();
+
+    /* When the auto-increment column is not the leftmost primary-key part, seed its counter from
+       the last entry of the index whose first part is that column (that entry holds the maximum),
+       so a restart does not restart the counter low and hand out colliding ids.  No-op otherwise.
+     */
+    void recover_auto_inc_secondary();
+
+    /* Persist the CREATE/ALTER ... AUTO_INCREMENT=N start value (next_value) as a meta key in the
+       given column family so an empty table's counter still begins at N after a restart, when there
+       are no rows to recover it from. */
+    void write_auto_inc_meta(tidesdb_column_family_t *cf, ulonglong next_value);
+
+    /* Read the persisted AUTO_INCREMENT=N start value under the txn and raise the counter to it
+       when it exceeds the value already recovered from the rows.  No-op when the table has no
+       auto-inc column or no meta key. */
+    void apply_auto_inc_start_meta(tidesdb_txn_t *txn);
+
+    /* First-open share initialization, split from open() so each phase stays small.  These run once
+       per share under lock_shared_ha_data(), populating the shared per-table metadata the hot paths
+       read.  name is the server table path. */
+
+    /* resolve the data column family and cache primary-key geometry, isolation, TTL, encryption,
+       and the blob/ttl field indices; returns 0 or a handler error when the CF or encryption key
+       is unavailable (the caller unlocks and returns the code). */
+    int open_init_share_columns(const char *name);
+
+    /* build the per-field serialize/deserialize plan (offset, pack length, memcpy-fast eligibility)
+       cached on the share for the row hot loops. */
+    void open_build_field_plan();
+
+    /* build the per-index metadata: comparable key lengths, index-type flags, coverage bitmaps,
+       resolved secondary column families, and the full-cost cache, then recover counters. */
+    void open_build_index_meta(const char *name);
+
+    /* info() helpers, split so each stays small.  refresh recomputes the cached row-count, data
+       size, and mean record length from the column-family stats behind a time-gated CAS; fill
+       populates every index's rec_per_key selectivity estimate for the current row count. */
+    void info_refresh_cf_stats();
+    void info_fill_rec_per_key();
+
+    /* analyze() helpers.  report pushes the column-family, per-level, b-tree, and write-amp figures
+       as ANALYZE notes; sample walks each secondary index to estimate its rec_per_key cardinality
+       and caches it. */
+    void analyze_report_cf_stats(THD *thd, const tidesdb_cf_stats_t &st);
+    void analyze_sample_indexes(THD *thd, tidesdb_txn_t *txn, bool verbose);
+
+    /* Measure secondary-index cardinality on its own short-lived read txn the
+       first time a populated table is asked for const stats, so a workload that
+       never runs ANALYZE still plans against real selectivity instead of the
+       records/10 fallback.  Runs at most once per share per server lifetime. */
+    void auto_sample_index_stats();
 
    public:
     ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg);
@@ -883,7 +771,7 @@ class ha_tidesdb : public handler
                HA_REQUIRES_KEY_COLUMNS_FOR_DELETE | HA_PRIMARY_KEY_REQUIRED_FOR_POSITION |
                HA_ONLINE_ANALYZE | HA_CAN_ONLINE_BACKUPS | HA_CONCURRENT_OPTIMIZE |
                HA_CAN_TABLES_WITHOUT_ROLLBACK | HA_CAN_FULLTEXT | HA_CAN_FULLTEXT_EXT |
-               HA_CAN_GEOMETRY | HA_CAN_RTREEKEYS | HA_CAN_EXPORT;
+               HA_CAN_GEOMETRY | HA_CAN_RTREEKEYS | HA_CAN_EXPORT | HA_CAN_FORCE_BULK_DELETE;
     }
 
     ulong index_flags(uint idx, uint part, bool all_parts) const override;
@@ -942,6 +830,26 @@ class ha_tidesdb : public handler
     int delete_table(const char *name) override;
     int rename_table(const char *from, const char *to) override;
 
+    /* Foreign keys.  The server never checks a constraint itself, it only asks
+       the engine to describe its constraints for SHOW CREATE, information_schema,
+       and prelocking, and relies on the engine to enforce them in its row ops.
+       These describe what the loaded catalog holds, the enforcement lives in the
+       write, update, and delete paths. */
+    int get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list) override;
+    int get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list) override;
+    /* handler::referenced_by_foreign_key returned uint and non-const in the early 11 releases and
+       became bool const noexcept in the mainline at 11.7, but MariaDB backported that into the 11.4
+       maintenance line as well, so guard at 11.4 to match whichever the linked server declares and
+       keep the override actually overriding. */
+#if MYSQL_VERSION_ID >= 110400
+    bool referenced_by_foreign_key() const noexcept override;
+#else
+    uint referenced_by_foreign_key() override;
+#endif
+    bool can_switch_engines() override;
+    char *get_foreign_key_create_info() override;
+    void free_foreign_key_create_info(char *str) override;
+
     /* Full table scan */
     int rnd_init(bool scan) override;
     int rnd_end() override;
@@ -952,6 +860,10 @@ class ha_tidesdb : public handler
     /* Index scan */
     int index_init(uint idx, bool sorted) override;
     int index_end() override;
+    /* Overridden to capture the scan's key range and drive a range-bounded
+       iterator that prunes sstables outside the scan. */
+    int read_range_first(const key_range *start_key, const key_range *end_key, bool eq_range,
+                         bool sorted) override;
     int index_read_map(uchar *buf, const uchar *key, key_part_map keypart_map,
                        enum ha_rkey_function find_flag) override;
     int index_next(uchar *buf) override;
@@ -964,6 +876,116 @@ class ha_tidesdb : public handler
     int write_row(const uchar *buf) override;
     int update_row(const uchar *old_data, const uchar *new_data) override;
     int delete_row(const uchar *buf) override;
+
+    /* write_row helpers, one cohesive step each (defined in ha_tidesdb_dml.cc).  Each returns 0 /
+       TDB_SUCCESS on success or an error code to surface, and none touches the caller's saved
+       column map -- write_row owns the tmp_use_all_columns/restore pairing. */
+
+    /* run the server auto-increment step for an INSERT and report through pk_auto_generated whether
+       the value was engine-generated (and thus known unique).  returns 0 or a handler error. */
+    int write_row_auto_increment(const uchar *buf, bool &pk_auto_generated);
+    /* build the primary key bytes for a row into pk, using the user PK columns or a freshly minted
+       hidden row id, and return the key length. */
+    uint write_build_pk(const uchar *buf, uchar *pk);
+    /* account weight buffered operations against the bulk-DML batch and, when the batch threshold
+       is reached, commit it mid-statement.  returns 0 or the commit error to surface. */
+    int bulk_flush_if_threshold(tidesdb_trx_t *trx, ha_rows weight);
+    /* reject an INSERT whose primary key already exists, unless skip_pk_unique lets it overwrite.
+       returns 0 to proceed or the handler error to surface. */
+    int write_check_pk_unique(tidesdb_trx_t *trx, const uchar *dk, uint dk_len, const uchar *pk,
+                              uint pk_len, bool skip_pk_unique);
+    /* reject an INSERT that duplicates any UNIQUE secondary index value.  returns 0 to proceed or
+       the handler error to surface. */
+    int write_check_secondary_unique(const uchar *buf, tidesdb_txn_t *txn);
+
+    /* Foreign-key internals, implemented in ha_tidesdb_fk.cc.  fk_persist_defs
+       parses the foreign keys off the create clause and records them in the
+       engine catalog.  fk_load reads the catalog into share->fk_child and
+       share->fk_parent at open.  fk_purge_catalog removes a table's rows when it
+       is dropped.  The three enforce helpers run the referential checks in the
+       row ops and return 0 to proceed or a handler error to surface, and each is
+       a cheap early return when the relevant list is empty or foreign_key_checks
+       is off. */
+    int fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_INFO *create_info);
+    void fk_load();
+    static int fk_purge_catalog(const char *child_cf_name);
+    int fk_check_child(const uchar *new_row);
+    int fk_enforce_parent_delete(const uchar *old_row);
+    int fk_enforce_parent_update(const uchar *old_row, const uchar *new_row);
+    /* Apply the cascade or set-null action for one constraint by driving the
+       referencing child rows through the prelocked child table's own handler, so
+       the children's secondary indexes and their own nested foreign keys stay
+       correct.  new_row is the parent's new image for an update cascade and NULL
+       for a delete.  Returns 0 or a handler error to surface. */
+    int fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, const uchar *new_row);
+    /* Set on a child handler while a parent cascade drives its rows, so the
+       child's own parent-existence check is skipped for the value the cascade is
+       writing, which the cascade already knows to be valid. */
+    bool fk_in_cascade_{false};
+    /* Does one constraint have a referencing child row for the key in old_row?
+       Returns 1 referenced, 0 none, or a negative handler error. */
+    int fk_child_ref_exists(const tdb_fk_def &d, const uchar *old_row);
+    /* write every secondary index entry (regular, fts, spatial) for a freshly inserted row. returns
+       TDB_SUCCESS or the first library error. */
+    int write_maintain_indexes(const uchar *buf, tidesdb_txn_t *txn, tidesdb_trx_t *trx,
+                               const uchar *pk, uint pk_len, time_t row_ttl);
+    /* delete every secondary index entry (regular, fts, spatial) for a row being removed.  returns
+       TDB_SUCCESS or the first library error from a regular-index delete. */
+    int delete_maintain_indexes(const uchar *buf, tidesdb_txn_t *txn, tidesdb_trx_t *trx);
+
+#ifdef WITH_WSREP
+    /* Galera participation, implemented in ha_tidesdb_wsrep.cc.  wsrep_certify_row appends a
+       certification key for every unique or, on a table with no unique key, every ordinary index of
+       a changed row, taking the before image too for an update.  The wsrep_intent_* pair records a
+       local write in the shared write-intent map and, on the applier side, brute-force aborts a
+       local holder of the same key so a cross-node conflict resolves the way InnoDB's row lock
+       would. */
+    int wsrep_certify_row(THD *thd, const uchar *rec0, const uchar *rec1,
+                          enum Wsrep_service_key_type key_type);
+    /* whether secondary index i constrains this row by a unique value, so its comparable value is a
+       cross-node conflict key.  false for a non-unique, fulltext, or spatial index, or a unique key
+       with a null part, none of which pin the row across the cluster. */
+    bool sec_idx_value_keyed(uint i, const uchar *record);
+    std::string wsrep_intent_key_bytes(uint i, const uchar *record);
+    std::string wsrep_intent_row_key_bytes(const uchar *pk, uint pk_len);
+    void wsrep_intent_add(std::string key, tidesdb_trx_t *trx);
+    void wsrep_intent_abort_holder(const std::string &key);
+    void wsrep_intent_register(uint i, const uchar *record, tidesdb_trx_t *trx);
+    void wsrep_intent_check(uint i, const uchar *record);
+    void wsrep_intent_register_row(const uchar *pk, uint pk_len, tidesdb_trx_t *trx);
+    void wsrep_intent_check_row(const uchar *pk, uint pk_len);
+#endif
+
+    /* update_row helpers, one cohesive step each (defined in ha_tidesdb_dml_update.cc).  The index
+       maintainers return TDB_SUCCESS on a no-op skip or success, or a library error to propagate;
+       update_check_unique returns 0 or the HA_ERR_* to surface. */
+    int update_check_unique(const uchar *old_data, const uchar *new_data, const uchar *old_pk,
+                            uint old_pk_len, const uchar *new_pk, uint new_pk_len, bool pk_changed);
+    int update_fts_index(uint i, const uchar *old_data, const uchar *new_data, const uchar *old_pk,
+                         uint old_pk_len, const uchar *new_pk, uint new_pk_len, bool pk_changed,
+                         time_t row_ttl);
+    /* apply the term-level fts diff for an UPDATE that kept the same pk, deleting terms that
+       vanished and rewriting terms whose frequency or the document length changed. */
+    int update_fts_index_diff(uint i, const std::unordered_map<std::string, uint16> &old_tf,
+                              const std::unordered_map<std::string, uint16> &new_tf,
+                              const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
+                              uint new_pk_len, uint32 new_wc, bool doc_len_changed, time_t row_ttl);
+    int update_spatial_index(uint i, const uchar *old_data, const uchar *new_data,
+                             const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
+                             uint new_pk_len, time_t row_ttl);
+    int update_regular_index(uint i, const uchar *old_data, const uchar *new_data,
+                             const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
+                             uint new_pk_len, bool pk_changed, time_t row_ttl);
+    /* rewrite the primary row for an UPDATE, deleting the old data key first when the pk changed
+       and writing the new serialized row.  returns TDB_SUCCESS or the library error. */
+    int update_rewrite_primary(const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
+                               uint new_pk_len, const uint8_t *row_ptr, size_t row_len,
+                               time_t row_ttl, bool pk_changed);
+    /* walk every secondary index for an UPDATE, dispatching each to its per-type maintainer.
+       returns TDB_SUCCESS or the first library error. */
+    int update_maintain_indexes(const uchar *old_data, const uchar *new_data, const uchar *old_pk,
+                                uint old_pk_len, const uchar *new_pk, uint new_pk_len,
+                                bool pk_changed, time_t row_ttl);
     int delete_all_rows(void) override;
 
     /* Full-text search */
@@ -1019,8 +1041,6 @@ class ha_tidesdb : public handler
                              page_range *pages) override;
     int extra(enum ha_extra_function operation) override;
 
-   private:
-   public:
    protected:
     IO_AND_CPU_COST scan_time() override;
 
@@ -1032,6 +1052,13 @@ class ha_tidesdb : public handler
         return 0;
     }
     int external_lock(THD *thd, int lock_type) override;
+    /* statement-start half of external_lock: resolve and cache the per-statement shape, join or
+       create the connection transaction, and arm the statement savepoint.  returns 0 or an error.
+     */
+    int external_lock_acquire(THD *thd);
+    /* statement-end half of external_lock: free the scan iterator when the writeset moved, stamp
+       the update time, and invalidate the per-statement caches. */
+    void external_lock_release(THD *thd);
     THR_LOCK_DATA **store_lock(THD *thd, THR_LOCK_DATA **to, enum thr_lock_type lock_type) override;
 
     /* Online DDL -- instant metadata, inplace indexes, copy for columns */
@@ -1040,7 +1067,55 @@ class ha_tidesdb : public handler
     bool prepare_inplace_alter_table(TABLE *altered_table,
                                      Alter_inplace_info *ha_alter_info) override;
     bool inplace_alter_table(TABLE *altered_table, Alter_inplace_info *ha_alter_info) override;
+    /* build every newly-added secondary-index entry for one base row during an inplace ADD INDEX.
+       returns 0 on success, 1 on a UNIQUE duplicate, or 2 on a library put failure; the offending
+       index number is reported through fail_key_num for the caller's error message. */
+    int inplace_add_row_entries(ha_tidesdb_inplace_ctx *ctx, TABLE *altered_table,
+                                const uint8_t *key_data, size_t key_size, const uint8_t *val_data,
+                                size_t val_size, tidesdb_txn_t *txn,
+                                std::vector<std::unordered_set<std::string>> &idx_seen,
+                                const std::vector<bool> &idx_is_unique, uint &fail_key_num);
+    /* build the comparable sort key for one index of the row currently in table->record[0] during
+       an inplace ADD INDEX; ptdiff rebases the altered-table field pointers, row_has_null reports a
+       NULL part (which exempts a UNIQUE index).  returns the key length written to ik. */
+    uint inplace_build_index_key(KEY *ki, my_ptrdiff_t ptdiff, uchar *ik, bool &row_has_null);
+    /* commit the current index-build batch and reopen the scan cursor positioned just past the last
+       processed data key.  txn and iter are updated in place.  returns 0 to continue the scan, 1 to
+       abort the ALTER, or 2 to end the scan gracefully. */
+    int inplace_batch_commit_reseek(tidesdb_txn_t *&txn, tidesdb_iter_t *&iter,
+                                    const uchar *last_data_key, size_t last_data_key_len);
+    /* scan the base table and populate every newly added secondary index, committing in batches.
+       txn and iter are the already-opened build cursor.  returns true when the ALTER must abort
+       (the helper has freed the cursor, restored old_map, and raised the error), false on success.
+     */
+    bool inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *altered_table,
+                                tidesdb_txn_t *&txn, tidesdb_iter_t *&iter, MY_BITMAP *old_map);
+    /* release an aborting index build's cursor and transaction and restore the column map; the
+       caller raises the specific error first.  always returns true for `return
+       inplace_abort_build`. */
+    bool inplace_abort_build(tidesdb_iter_t *iter, tidesdb_txn_t *txn, TABLE *altered_table,
+                             MY_BITMAP *old_map);
+    /* one flag per newly added index marking whether it is UNIQUE, so the build can reject a
+       duplicate index-column prefix during population. */
+    std::vector<bool> inplace_build_unique_flags(ha_tidesdb_inplace_ctx *ctx, TABLE *altered_table);
+    /* rebuild the shared per-index metadata (resolved column families, key lengths, type flags, and
+       coverage bitmaps) for the altered table's new key layout after an inplace ALTER commits. */
+    void commit_rebuild_index_meta(TABLE *altered_table);
+    /* push changed table options (compression, sync mode, bloom, isolation, ttl, encryption) onto
+       the live data and index column families so an ALTER..OPTIONS takes effect without a reopen.
+     */
+    void commit_apply_runtime_config(TABLE *altered_table, Alter_inplace_info *ha_alter_info);
     bool commit_inplace_alter_table(TABLE *altered_table, Alter_inplace_info *ha_alter_info,
                                     bool commit) override;
     bool check_if_incompatible_data(HA_CREATE_INFO *create_info, uint table_changes) override;
 };
+
+#ifdef WITH_WSREP
+/* Galera free functions implemented in ha_tidesdb_wsrep.cc.  tidesdb_wsrep_register wires the
+   handlerton's wsrep replication flag and its cluster-position and brute-force-abort hooks.  The
+   intent helpers drop or truncate a transaction's write-intent entries from the shared map at
+   commit, rollback, or a savepoint rollback. */
+void tidesdb_wsrep_register(handlerton *hton);
+void tidesdb_wsrep_intent_clear(tidesdb_trx_t *trx);
+void tidesdb_wsrep_intent_truncate(tidesdb_trx_t *trx, size_t keep);
+#endif

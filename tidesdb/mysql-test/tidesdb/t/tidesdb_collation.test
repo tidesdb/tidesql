@@ -1,0 +1,59 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # Collation-sensitive indexing.  The comparable sort key is built from
+--echo # Field::sort_string, which folds by the column's collation, so a
+--echo # case-insensitive UNIQUE index must collapse case variants while a
+--echo # binary/case-sensitive one keeps them distinct, and ORDER BY through
+--echo # the index must follow each collation.
+--echo #
+
+--echo #
+--echo # 1. Case-insensitive collation: 'abc' and 'ABC' collide in a UNIQUE
+--echo #    index and sort together.
+--echo #
+CREATE TABLE ci (
+  id INT PRIMARY KEY,
+  name VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci,
+  UNIQUE KEY uq (name)
+) ENGINE=TidesDB;
+INSERT INTO ci VALUES (1, 'abc'), (2, 'XYZ'), (3, 'def');
+--error ER_DUP_ENTRY
+INSERT INTO ci VALUES (4, 'ABC');
+--error ER_DUP_ENTRY
+INSERT INTO ci VALUES (5, 'xyz');
+--echo # lookup is case-insensitive
+SELECT id, name FROM ci FORCE INDEX (uq) WHERE name = 'AbC';
+--echo # ordered scan through the ci index
+SELECT id, name FROM ci FORCE INDEX (uq) ORDER BY name;
+
+--echo #
+--echo # 2. Binary collation keeps case variants distinct.
+--echo #
+CREATE TABLE bin (
+  id INT PRIMARY KEY,
+  name VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  UNIQUE KEY uq (name)
+) ENGINE=TidesDB;
+INSERT INTO bin VALUES (1, 'abc'), (2, 'ABC'), (3, 'Abc');
+SELECT COUNT(*) AS rows_expected_3 FROM bin;
+--echo # exact (case-sensitive) lookup
+SELECT id FROM bin FORCE INDEX (uq) WHERE name = 'ABC';
+--echo # binary order: uppercase sorts before lowercase
+SELECT id, name FROM bin FORCE INDEX (uq) ORDER BY name;
+
+--echo #
+--echo # 3. Accent/case folding: a range scan honors the ci collation weights.
+--echo #
+CREATE TABLE r (id INT PRIMARY KEY, w VARCHAR(16) COLLATE utf8mb4_general_ci, KEY k_w (w))
+  ENGINE=TidesDB;
+INSERT INTO r VALUES (1, 'Apple'), (2, 'banana'), (3, 'Cherry'), (4, 'apple');
+--sorted_result
+SELECT id, w FROM r FORCE INDEX (k_w) WHERE w BETWEEN 'a' AND 'c';
+SELECT id, w FROM r FORCE INDEX (k_w) ORDER BY w, id;
+
+DROP TABLE ci, bin, r;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

@@ -1,0 +1,62 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # AUTO_INCREMENT counter recovery across a restart, and gap semantics.
+--echo # The counter is rebuilt from stored rows at open; a value that is not
+--echo # the leftmost primary-key column must still be recovered so the next
+--echo # insert after a restart does not reuse an existing id.
+--echo #
+
+--echo #
+--echo # 1. AUTO_INCREMENT column that is NOT the leftmost PK part.
+--echo #
+CREATE TABLE t1 (
+  grp INT,
+  id INT AUTO_INCREMENT,
+  v INT,
+  PRIMARY KEY (grp, id),
+  UNIQUE KEY uq_id (id)
+) ENGINE=TidesDB;
+INSERT INTO t1 (grp, v) VALUES (1, 100), (1, 200), (2, 300), (2, 400), (1, 500);
+SELECT grp, id, v FROM t1 ORDER BY id;
+SELECT MAX(id) AS max_before_restart FROM t1;
+
+--source include/restart_mysqld.inc
+
+--echo # After restart the counter must resume past MAX(id); the UNIQUE on id
+--echo # would raise ER_DUP_ENTRY if it wrongly restarted at 1.
+INSERT INTO t1 (grp, v) VALUES (3, 600), (3, 700);
+SELECT grp, id, v FROM t1 ORDER BY id;
+SELECT MIN(id) > 5 AS new_ids_above_5 FROM t1 WHERE v IN (600, 700);
+
+--echo #
+--echo # 2. AUTO_INCREMENT on a plain single-column PK, gap after a failed
+--echo #    (duplicate) insert -- the counter is not rewound by the failure.
+--echo #
+CREATE TABLE t2 (id INT AUTO_INCREMENT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t2 (v) VALUES (10), (20), (30);
+--error ER_DUP_ENTRY
+INSERT INTO t2 (id, v) VALUES (2, 99);
+INSERT INTO t2 (v) VALUES (40);
+--echo # the new row's id advanced past 3 (not reusing 2)
+SELECT id, v FROM t2 ORDER BY id;
+
+--echo #
+--echo # 3. CREATE TABLE ... AUTO_INCREMENT=N honors the start value and it
+--echo #    survives a restart (persisted as a meta key, since an empty table
+--echo #    has no rows to recover the counter from).
+--echo #
+CREATE TABLE t3 (id INT AUTO_INCREMENT PRIMARY KEY, v INT) AUTO_INCREMENT=500
+  ENGINE=TidesDB;
+INSERT INTO t3 (v) VALUES (1), (2);
+SELECT id, v FROM t3 ORDER BY id;
+--source include/restart_mysqld.inc
+INSERT INTO t3 (v) VALUES (3);
+--echo # the counter resumed at 502 after the restart, not back at 1
+SELECT id, v FROM t3 ORDER BY id;
+
+DROP TABLE t1, t2, t3;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.
