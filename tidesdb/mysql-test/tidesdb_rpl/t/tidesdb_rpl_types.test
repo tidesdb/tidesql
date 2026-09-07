@@ -20,7 +20,7 @@ CREATE TABLE wide (
   dt DATETIME(3), ts TIMESTAMP(6) NULL, y YEAR,
   e ENUM('a','b','c'), st SET('x','y','z'), j JSON,
   KEY k_v (v), KEY k_d (d), KEY k_dt (dt)
-) ENGINE=TidesDB;
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4;
 
 INSERT INTO wide VALUES
  (1, -5, 200, 9000000000, 12345.678900, 3.5, 'char', 'varchar', 'text-a', 0x0102, 0xAABB,

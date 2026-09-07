@@ -15,7 +15,7 @@ c CHAR(8), v VARCHAR(64), t TEXT, b BLOB, bin VARBINARY(16),
 dt DATETIME(3), ts TIMESTAMP(6) NULL, y YEAR,
 e ENUM('a','b','c'), st SET('x','y','z'), j JSON,
 KEY k_v (v), KEY k_d (d), KEY k_dt (dt)
-) ENGINE=TidesDB;
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4;
 Warnings:
 Note	1071	Specified key was too long; max key length is 255 bytes
 INSERT INTO wide VALUES
