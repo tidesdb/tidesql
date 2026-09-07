@@ -35,6 +35,21 @@
 #include "my_base.h"
 #include "thr_lock.h"
 
+/* An in-tree build learns it has wsrep from my_config.h, which defines WITH_WSREP.  An
+   out-of-tree build, such as the MariaDB Foundry packaging build, compiles against the
+   installed my_config.h, which omits WITH_WSREP, so the galera participation below would
+   silently compile out and a TidesDB table would replicate its DDL but not its rows in a
+   cluster.  Turn it on here when the wsrep-lib headers are present, which is the real gate,
+   because with WITH_WSREP on the server's own sql_class.h pulls wsrep/client_service.hpp,
+   so enabling it without those headers would not compile.  A wsrep-enabled server install
+   ships them under server/private, on the storage-engine plugin include path, so this is on
+   against such a build and stays off against a distribution that does not carry them. */
+#if !defined(WITH_WSREP) && defined(__has_include)
+#if __has_include(<wsrep/client_service.hpp>)
+#define WITH_WSREP 1
+#endif
+#endif
+
 #ifdef WITH_WSREP
 /* the certification key type enum and the wsrep_on / thread service that the galera participation
    methods declared on the handler take, pulled in under the same build guard the galera translation

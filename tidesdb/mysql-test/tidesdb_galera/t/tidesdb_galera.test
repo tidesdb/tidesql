@@ -18,6 +18,11 @@ call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
 CREATE TABLE t1 (id INT PRIMARY KEY, v VARCHAR(32), KEY k_v (v)) ENGINE=TidesDB;
 
 --connection node_2
+# The table charset and collation follow the server default, which differs across
+# MariaDB versions (latin1 before the utf8mb4 default, and the uca1400 collations do
+# not exist before 11.5), so normalize the charset/collation clause to keep the
+# replicated-DDL check portable across the versions TidesDB is built against.
+--replace_regex / DEFAULT CHARSET=[a-z0-9_]+( COLLATE=[a-z0-9_]+)?//
 SHOW CREATE TABLE t1;
 
 --echo #

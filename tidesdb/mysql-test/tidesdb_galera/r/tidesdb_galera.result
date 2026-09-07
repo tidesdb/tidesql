@@ -16,7 +16,7 @@ t1	CREATE TABLE `t1` (
   `v` varchar(32) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `k_v` (`v`)
-) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci
+) ENGINE=TidesDB
 #
 # 2. Rows written on node 1 apply on node 2.
 #

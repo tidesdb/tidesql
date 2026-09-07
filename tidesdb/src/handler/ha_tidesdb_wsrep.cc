@@ -34,7 +34,9 @@
 
 /* wsrep_key_t and wsrep_buf_t, the certification key shape the provider expects.
    The service header only forward declares them, so pull the full definition from
-   the wsrep API that is already on the plugin include path. */
+   the wsrep API that is already on the plugin include path.  A wsrep-enabled server
+   install ships it under server/private alongside the wsrep-lib headers that gate
+   WITH_WSREP, so it is present wherever this translation unit is compiled. */
 #include "wsrep_api.h"
 
 /* The cluster position lives under one key in a dedicated internal column family,
