@@ -62,6 +62,20 @@ extern "C"
 #include <tidesdb/db.h>
 }
 
+/* Store a value into a PLUGIN_VAR_MEMALLOC string system variable from a custom update callback.
+   The framework hands the callback the new value in a temporary buffer and frees that buffer once
+   the callback returns, so a callback that just stored the temporary would leave the variable
+   pointing at freed memory, which then reads back as an empty string or, where the freed slot has
+   been reused, as an unrelated chunk of server memory.  Take an owned copy the way the framework's
+   own default string update does, freeing the previous one, so the variable keeps the value the
+   user set until the next change or plugin shutdown, where the framework frees it. */
+static inline void tdb_memalloc_sysvar_set(void *var_ptr, const char *value)
+{
+    char *old = *static_cast<char **>(var_ptr);
+    *static_cast<char **>(var_ptr) = value ? my_strdup(PSI_INSTRUMENT_ME, value, MYF(0)) : nullptr;
+    my_free(old);
+}
+
 /* The TideSQL plugin's own version, reported through tidesdb_version / _version_hex and the
    maria_declare_plugin block.  Distinct from the vendored library version (TIDESDB_VERSION). */
 #define TIDESQL_VERSION_STR "5.0.0"

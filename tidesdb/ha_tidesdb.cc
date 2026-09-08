@@ -547,8 +547,8 @@ static void tidesdb_backup_dir_update(THD *thd, struct st_mysql_sys_var *, void 
 
     if (!new_dir || !new_dir[0])
     {
-        /* Empty string -- we just clear the variable */
-        *static_cast<char **>(var_ptr) = NULL;
+        /* Empty string clears the variable, freeing the previous value. */
+        tdb_memalloc_sysvar_set(var_ptr, nullptr);
         return;
     }
 
@@ -604,9 +604,9 @@ static void tidesdb_backup_dir_update(THD *thd, struct st_mysql_sys_var *, void 
         return;
     }
 
-    /* For PLUGIN_VAR_MEMALLOC strings, the framework manages memory.
-       We set var_ptr to the save value so the framework copies it. */
-    *static_cast<const char **>(var_ptr) = new_dir;
+    /* Keep the directory the backup ran to as the variable's value, taking an owned copy so it
+       survives the framework freeing the temporary buffer it passed in. */
+    tdb_memalloc_sysvar_set(var_ptr, new_dir);
 }
 
 static MYSQL_SYSVAR_STR(backup_dir, srv_backup_dir, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
@@ -626,7 +626,7 @@ static void tidesdb_checkpoint_dir_update(THD *thd, struct st_mysql_sys_var *, v
 
     if (!new_dir || !new_dir[0])
     {
-        *static_cast<char **>(var_ptr) = NULL;
+        tdb_memalloc_sysvar_set(var_ptr, nullptr);
         return;
     }
 
@@ -680,7 +680,7 @@ static void tidesdb_checkpoint_dir_update(THD *thd, struct st_mysql_sys_var *, v
         return;
     }
 
-    *static_cast<const char **>(var_ptr) = new_dir;
+    tdb_memalloc_sysvar_set(var_ptr, new_dir);
 }
 
 static MYSQL_SYSVAR_STR(checkpoint_dir, srv_checkpoint_dir,

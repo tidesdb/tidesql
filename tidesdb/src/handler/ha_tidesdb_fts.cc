@@ -213,7 +213,7 @@ void tdb_fts_blend_chars_update(MYSQL_THD thd, struct st_mysql_sys_var *var, voi
     mysql_rwlock_wrlock(&tdb_blend_lock);
     tdb_rebuild_blend_map(new_val);
     mysql_rwlock_unlock(&tdb_blend_lock);
-    *static_cast<const char **>(var_ptr) = new_val;
+    tdb_memalloc_sysvar_set(var_ptr, new_val);
     if (new_val && new_val[0])
         sql_print_information("[TIDESDB] FTS blend_chars set to '%s'", new_val);
     else
@@ -391,7 +391,7 @@ void tdb_ft_stopword_table_update(MYSQL_THD thd, struct st_mysql_sys_var *var, v
         }
     }
 
-    *static_cast<const char **>(var_ptr) = new_val;
+    tdb_memalloc_sysvar_set(var_ptr, new_val);
     mysql_rwlock_unlock(&tdb_stopword_lock);
 }
 

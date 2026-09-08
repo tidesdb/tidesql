@@ -225,7 +225,6 @@ def project_version(doc_dir: Path, manual: dict) -> str | None:
         return str(stated)
     versioning = doc_dir.parent / "VERSIONING.md"
     if versioning.is_file():
-        # VERSIONING.md states the pairing: "TideSQL 5.0.0 pairs with TidesDB v10.0.0"
         m = re.search(r"TideSQL\s+v?([0-9]+(?:\.[0-9]+)+)",
                       versioning.read_text(encoding="utf-8", errors="replace"))
         if m:

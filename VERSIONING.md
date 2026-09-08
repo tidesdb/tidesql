@@ -11,10 +11,10 @@ but inherits whole from the TidesDB release it links.
 variables, and the observable SQL behavior of the engine. Anything reachable
 only by editing plugin source carries no compatibility guarantee.
 
-## TideSQL 5.0.0 pairs with TidesDB v10.0.0
+## TideSQL 5.0.0 pairs with TidesDB v10.x.x
 
 Each TideSQL release links exactly one TidesDB release and stores data in that
-library's on-disk format. TideSQL 5.0.0 links TidesDB v10.0.0 and writes the
+library's on-disk format. TideSQL 5.0.0 links TidesDB v10.x.x and writes the
 v10 format line. The plugin version and the library version keep their own
 cadence, so the pairing is recorded here and surfaced at runtime through the
 `tidesdb_version` status variable for the plugin and `tidesdb_library_version`
@@ -55,9 +55,9 @@ format line.
 
 | TideSQL | TidesDB library | On-disk format | Rollback boundary            |
 |---------|-----------------|----------------|------------------------------|
-| 5.0.0   | 10.0.0          | 10             | any TideSQL linking format 10 |
+| 5.0.0   | 10.x.x          | 10             | any TideSQL linking format 10 |
 
-- **TideSQL 5.0.0 opens the v10 format line** by linking TidesDB v10.0.0. It
+- **TideSQL 5.0.0 opens the v10 format line** by linking TidesDB v10.x.x. It
   reads only the v10 format, so a database created by an earlier release line
   does not open in place and no in-place migration ships for that step. A
   database from an earlier release moves across by dumping with `mysqldump` and

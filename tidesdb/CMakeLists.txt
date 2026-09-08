@@ -98,8 +98,8 @@ FIND_PATH(TIDESDB_INCLUDE_DIR
 )
 
 # When no system library or headers are found, build the library from source and link it
-# statically, so the plugin has no run-time dynamic dependency.  TidesQL 5.0 is pinned to TidesDB
-# library v10.0.0, so the fallback fetches exactly that release.  When a system library is present
+# statically, so the plugin has no run-time dynamic dependency.  TidesQL 5.x.x is pinned to TidesDB
+# library v10.x.x, so the fallback fetches exactly that release.  When a system library is present
 # this whole block is skipped and the plugin links it as before.
 IF(NOT TIDESDB_LIB OR NOT TIDESDB_INCLUDE_DIR)
   INCLUDE(ExternalProject)
@@ -118,7 +118,7 @@ IF(NOT TIDESDB_LIB OR NOT TIDESDB_INCLUDE_DIR)
 
   ExternalProject_Add(
     tidesdblib_ext
-    URL "https://github.com/tidesdb/tidesdb/archive/refs/tags/v10.0.0.tar.gz"
+    URL "https://github.com/tidesdb/tidesdb/archive/refs/tags/v10.0.1.tar.gz"
     INSTALL_COMMAND ""
     CMAKE_ARGS "-DBUILD_SHARED_LIBS=OFF"
     BUILD_BYPRODUCTS ${file}
