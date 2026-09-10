@@ -1,0 +1,58 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # Index-condition pushdown (ICP).  The engine advertises
+--echo # HA_DO_INDEX_COND_PUSHDOWN and evaluates the pushed predicate on the
+--echo # index entry before the primary-key row fetch.  A wrong pushed-condition
+--echo # evaluation would silently drop matching rows, so the pushed-down result
+--echo # must equal the same query with ICP turned off.
+--echo #
+
+CREATE TABLE t (
+  id INT PRIMARY KEY,
+  a INT,
+  b INT,
+  c VARCHAR(20),
+  KEY k_ab (a, b)
+) ENGINE=TidesDB;
+
+INSERT INTO t VALUES
+  (1, 1, 10, 'apple'), (2, 1, 20, 'apricot'), (3, 1, 30, 'banana'),
+  (4, 2, 10, 'avocado'), (5, 2, 25, 'blueberry'), (6, 3, 15, 'cherry'),
+  (7, 3, 40, 'apple'), (8, 2, 20, 'almond');
+
+--echo # The predicate on the trailing index part (b) is pushable; c is not
+--echo # indexed and stays a table condition.
+--replace_column 9 #
+EXPLAIN SELECT id, a, b FROM t FORCE INDEX (k_ab) WHERE a = 2 AND b > 15;
+
+--echo #
+--echo # ICP on vs off must return identical rows.
+--echo #
+SET @save_switch = @@optimizer_switch;
+
+SET optimizer_switch = 'index_condition_pushdown=on';
+--sorted_result
+SELECT id, a, b FROM t FORCE INDEX (k_ab) WHERE a = 2 AND b > 15;
+--sorted_result
+SELECT id, a, b, c FROM t FORCE INDEX (k_ab) WHERE a IN (1, 3) AND b >= 30;
+
+SET optimizer_switch = 'index_condition_pushdown=off';
+--sorted_result
+SELECT id, a, b FROM t FORCE INDEX (k_ab) WHERE a = 2 AND b > 15;
+--sorted_result
+SELECT id, a, b, c FROM t FORCE INDEX (k_ab) WHERE a IN (1, 3) AND b >= 30;
+
+SET optimizer_switch = @save_switch;
+
+--echo #
+--echo # A pushed condition combined with a residual (non-indexed) predicate.
+--echo #
+--sorted_result
+SELECT id FROM t FORCE INDEX (k_ab) WHERE a = 1 AND b < 30 AND c LIKE 'ap%';
+
+DROP TABLE t;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

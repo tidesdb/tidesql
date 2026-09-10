@@ -1,0 +1,65 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connect  node_2b, 127.0.0.1, root, , test, $NODE_MYPORT_2;
+connection node_1;
+CREATE TABLE t (id INT PRIMARY KEY, v INT, u INT, UNIQUE KEY k_u (u)) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 0, 10), (2, 0, 20);
+#
+# 1. Same primary key changed on both nodes; first committer wins.
+#
+connection node_2;
+SET AUTOCOMMIT=OFF;
+START TRANSACTION;
+UPDATE t SET v = 2 WHERE id = 1;
+connection node_1;
+SET AUTOCOMMIT=OFF;
+START TRANSACTION;
+UPDATE t SET v = 1 WHERE id = 1;
+COMMIT;
+connection node_2b;
+connection node_2;
+COMMIT;
+Got one of the listed errors
+SET AUTOCOMMIT=ON;
+# node 1's value stands on both nodes
+connection node_1;
+SELECT v FROM t WHERE id = 1;
+v
+1
+connection node_2b;
+SELECT v FROM t WHERE id = 1;
+v
+1
+#
+# 2. Conflicting insert of the same unique secondary key across nodes.
+#
+connection node_2;
+SET AUTOCOMMIT=OFF;
+START TRANSACTION;
+INSERT INTO t VALUES (4, 0, 99);
+connection node_1;
+SET AUTOCOMMIT=OFF;
+START TRANSACTION;
+INSERT INTO t VALUES (3, 0, 99);
+COMMIT;
+connection node_2b;
+connection node_2;
+COMMIT;
+Got one of the listed errors
+SET AUTOCOMMIT=ON;
+# only node 1's row for the unique value survives, cluster-wide
+connection node_1;
+SELECT id, u FROM t WHERE u = 99;
+id	u
+3	99
+connection node_2b;
+SELECT id, u FROM t WHERE u = 99;
+id	u
+3	99
+connection node_1;
+DROP TABLE t;
+disconnect node_2;
+disconnect node_1;

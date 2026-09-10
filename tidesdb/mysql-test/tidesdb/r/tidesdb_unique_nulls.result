@@ -1,0 +1,76 @@
+#
+# UNIQUE index with NULLs -- SQL gives NULL no identity, so a UNIQUE
+# index never constrains a row whose indexed value is NULL in any part.
+# Multiple NULL rows must be allowed on INSERT, on ALTER ... ADD UNIQUE,
+# and when an UPDATE sets an indexed column to NULL.  A non-NULL
+# duplicate must still be rejected.
+#
+#
+# 1. INSERT: multiple NULLs into a single-column UNIQUE index.
+#
+CREATE TABLE t1 (id INT PRIMARY KEY, u INT, UNIQUE KEY uq (u)) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, NULL), (2, NULL), (3, 5), (4, NULL);
+SELECT COUNT(*) AS rows_expected_4 FROM t1;
+rows_expected_4
+4
+# a real duplicate of a non-NULL value is still rejected
+INSERT INTO t1 VALUES (5, 5);
+ERROR 23000: Duplicate entry '5' for key 'uq'
+SELECT id, u FROM t1 ORDER BY id;
+id	u
+1	NULL
+2	NULL
+3	5
+4	NULL
+#
+# 2. Composite UNIQUE index: NULL in any part exempts the row.
+#
+CREATE TABLE t2 (id INT PRIMARY KEY, a INT, b INT, UNIQUE KEY uq_ab (a, b)) ENGINE=TidesDB;
+INSERT INTO t2 VALUES (1, 1, NULL), (2, 1, NULL), (3, NULL, 2), (4, NULL, 2), (5, 1, 2);
+SELECT COUNT(*) AS rows_expected_5 FROM t2;
+rows_expected_5
+5
+# a fully non-NULL duplicate is rejected
+INSERT INTO t2 VALUES (6, 1, 2);
+ERROR 23000: Duplicate entry '1-2' for key 'uq_ab'
+SELECT id, a, b FROM t2 ORDER BY id;
+id	a	b
+1	1	NULL
+2	1	NULL
+3	NULL	2
+4	NULL	2
+5	1	2
+#
+# 3. ALTER ... ADD UNIQUE over existing rows that contain NULLs succeeds.
+#
+CREATE TABLE t3 (id INT PRIMARY KEY, u INT) ENGINE=TidesDB;
+INSERT INTO t3 VALUES (1, NULL), (2, NULL), (3, 7), (4, NULL);
+ALTER TABLE t3 ADD UNIQUE KEY uq (u);
+SELECT COUNT(*) AS rows_expected_4 FROM t3;
+rows_expected_4
+4
+# after the index exists, a non-NULL duplicate is rejected but a NULL is fine
+INSERT INTO t3 VALUES (5, 7);
+ERROR 23000: Duplicate entry '7' for key 'uq'
+INSERT INTO t3 VALUES (6, NULL);
+SELECT COUNT(*) AS rows_expected_5 FROM t3;
+rows_expected_5
+5
+#
+# 4. UPDATE an indexed column to NULL -- two rows can hold NULL.
+#
+CREATE TABLE t4 (id INT PRIMARY KEY, u INT, UNIQUE KEY uq (u)) ENGINE=TidesDB;
+INSERT INTO t4 VALUES (1, 10), (2, 20), (3, 30);
+UPDATE t4 SET u = NULL WHERE id = 1;
+UPDATE t4 SET u = NULL WHERE id = 2;
+SELECT id, u FROM t4 ORDER BY id;
+id	u
+1	NULL
+2	NULL
+3	30
+# setting a value back to an existing non-NULL one is still a duplicate
+UPDATE t4 SET u = 30 WHERE id = 1;
+ERROR 23000: Duplicate entry '30' for key 'uq'
+DROP TABLE t1, t2, t3, t4;
+#
+# Done.

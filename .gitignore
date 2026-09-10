@@ -28,3 +28,4 @@ build
 .vscode
 vcpkg_installed
 .vs
+doc/*.pdf

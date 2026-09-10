@@ -1,0 +1,66 @@
+include/master-slave.inc
+[connection master]
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection slave;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection master;
+#
+# 1. A primary-key table replicates insert, update, and delete
+#
+CREATE TABLE t1 (id INT PRIMARY KEY, v INT, s VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 10, 'one'), (2, 20, 'two'), (3, 30, 'three');
+UPDATE t1 SET v = 25, s = 'two-b' WHERE id = 2;
+DELETE FROM t1 WHERE id = 3;
+connection slave;
+connection slave;
+# slave rows after insert/update/delete
+SELECT id, v, s FROM t1 ORDER BY id;
+id	v	s
+1	10	one
+2	25	two-b
+SELECT COUNT(*) AS n FROM t1;
+n
+2
+#
+# 2. A table without a user primary key also replicates correctly
+#
+connection master;
+CREATE TABLE t2 (a INT, b VARCHAR(16), KEY (a)) ENGINE=TidesDB;
+INSERT INTO t2 VALUES (1, 'x'), (1, 'y'), (2, 'z');
+UPDATE t2 SET b = 'Y' WHERE a = 1 AND b = 'y';
+DELETE FROM t2 WHERE a = 2;
+connection slave;
+connection slave;
+# slave rows for the pk-less table
+SELECT a, b FROM t2 ORDER BY a, b;
+a	b
+1	x
+1	Y
+#
+# 3. A multi-row transaction replicates atomically
+#
+connection master;
+BEGIN;
+INSERT INTO t1 VALUES (10, 100, 'ten'), (11, 110, 'eleven');
+UPDATE t1 SET v = v + 1 WHERE id = 1;
+COMMIT;
+connection slave;
+connection slave;
+SELECT id, v, s FROM t1 ORDER BY id;
+id	v	s
+1	11	one
+2	25	two-b
+10	100	ten
+11	110	eleven
+#
+# 4. Slave and master data are identical
+#
+connection master;
+connection slave;
+connection slave;
+connection master;
+# checksums match on master and slave
+connection master;
+DROP TABLE t1, t2;
+connection slave;
+include/rpl_end.inc

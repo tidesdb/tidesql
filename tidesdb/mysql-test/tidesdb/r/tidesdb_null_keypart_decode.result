@@ -1,0 +1,32 @@
+# ---- ascending index, one key part after a NULL part ----
+CREATE TABLE t (id INT PRIMARY KEY, a INT, b INT, KEY k (a,b)) ENGINE=TIDESDB;
+INSERT INTO t VALUES (3, NULL, 2), (5, 10, 20), (7, NULL, 8);
+# covering-index read: b after a NULL a must survive (expect 2 and 8, never NULL)
+SELECT id, a, b FROM t FORCE INDEX (k) WHERE a IS NULL;
+id	a	b
+3	NULL	2
+7	NULL	8
+# index condition pushdown: the pushed predicate on b must see b's own bytes
+SELECT id, a, b FROM t FORCE INDEX (k) WHERE a IS NULL AND b = 8;
+id	a	b
+7	NULL	8
+# a non-null a still reads both parts correctly
+SELECT id, a, b FROM t FORCE INDEX (k) WHERE a = 10;
+id	a	b
+5	10	20
+DROP TABLE t;
+# ---- two key parts after a NULL part, alignment must hold across both ----
+CREATE TABLE t3 (id INT PRIMARY KEY, a INT, b INT, c INT, KEY k (a,b,c)) ENGINE=TIDESDB;
+INSERT INTO t3 VALUES (1, NULL, 20, 30), (2, 5, 6, 7);
+SELECT id, a, b, c FROM t3 FORCE INDEX (k) WHERE a IS NULL;
+id	a	b	c
+1	NULL	20	30
+DROP TABLE t3;
+# ---- descending index: the null indicator is stored inverted, width is unchanged ----
+CREATE TABLE td (id INT PRIMARY KEY, a INT, b INT, KEY k (a DESC, b)) ENGINE=TIDESDB;
+INSERT INTO td VALUES (3, NULL, 2), (5, 10, 20), (7, NULL, 8);
+SELECT id, a, b FROM td FORCE INDEX (k) WHERE a IS NULL;
+id	a	b
+3	NULL	2
+7	NULL	8
+DROP TABLE td;

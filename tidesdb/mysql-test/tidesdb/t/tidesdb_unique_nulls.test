@@ -1,0 +1,62 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # UNIQUE index with NULLs -- SQL gives NULL no identity, so a UNIQUE
+--echo # index never constrains a row whose indexed value is NULL in any part.
+--echo # Multiple NULL rows must be allowed on INSERT, on ALTER ... ADD UNIQUE,
+--echo # and when an UPDATE sets an indexed column to NULL.  A non-NULL
+--echo # duplicate must still be rejected.
+--echo #
+
+--echo #
+--echo # 1. INSERT: multiple NULLs into a single-column UNIQUE index.
+--echo #
+CREATE TABLE t1 (id INT PRIMARY KEY, u INT, UNIQUE KEY uq (u)) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, NULL), (2, NULL), (3, 5), (4, NULL);
+SELECT COUNT(*) AS rows_expected_4 FROM t1;
+--echo # a real duplicate of a non-NULL value is still rejected
+--error ER_DUP_ENTRY
+INSERT INTO t1 VALUES (5, 5);
+SELECT id, u FROM t1 ORDER BY id;
+
+--echo #
+--echo # 2. Composite UNIQUE index: NULL in any part exempts the row.
+--echo #
+CREATE TABLE t2 (id INT PRIMARY KEY, a INT, b INT, UNIQUE KEY uq_ab (a, b)) ENGINE=TidesDB;
+INSERT INTO t2 VALUES (1, 1, NULL), (2, 1, NULL), (3, NULL, 2), (4, NULL, 2), (5, 1, 2);
+SELECT COUNT(*) AS rows_expected_5 FROM t2;
+--echo # a fully non-NULL duplicate is rejected
+--error ER_DUP_ENTRY
+INSERT INTO t2 VALUES (6, 1, 2);
+SELECT id, a, b FROM t2 ORDER BY id;
+
+--echo #
+--echo # 3. ALTER ... ADD UNIQUE over existing rows that contain NULLs succeeds.
+--echo #
+CREATE TABLE t3 (id INT PRIMARY KEY, u INT) ENGINE=TidesDB;
+INSERT INTO t3 VALUES (1, NULL), (2, NULL), (3, 7), (4, NULL);
+ALTER TABLE t3 ADD UNIQUE KEY uq (u);
+SELECT COUNT(*) AS rows_expected_4 FROM t3;
+--echo # after the index exists, a non-NULL duplicate is rejected but a NULL is fine
+--error ER_DUP_ENTRY
+INSERT INTO t3 VALUES (5, 7);
+INSERT INTO t3 VALUES (6, NULL);
+SELECT COUNT(*) AS rows_expected_5 FROM t3;
+
+--echo #
+--echo # 4. UPDATE an indexed column to NULL -- two rows can hold NULL.
+--echo #
+CREATE TABLE t4 (id INT PRIMARY KEY, u INT, UNIQUE KEY uq (u)) ENGINE=TidesDB;
+INSERT INTO t4 VALUES (1, 10), (2, 20), (3, 30);
+UPDATE t4 SET u = NULL WHERE id = 1;
+UPDATE t4 SET u = NULL WHERE id = 2;
+SELECT id, u FROM t4 ORDER BY id;
+--echo # setting a value back to an existing non-NULL one is still a duplicate
+--error ER_DUP_ENTRY
+UPDATE t4 SET u = 30 WHERE id = 1;
+
+DROP TABLE t1, t2, t3, t4;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

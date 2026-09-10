@@ -1,0 +1,41 @@
+--source include/have_tidesdb.inc
+
+#
+# A nullable indexed column that is NULL is stored in the comparable key as a one-byte null
+# indicator plus kp->length zeroed value bytes, so a key part after it sits at a fixed offset.
+# The sort-key decoders must skip that full width for a NULL part; skipping only the indicator
+# byte decodes every later part from the wrong offset and silently loses or corrupts its value.
+# This exercises the covering-index reader and the index-condition-pushdown reader, the two paths
+# that decode the key instead of reading the base row, on both ascending and descending indexes.
+#
+
+--echo # ---- ascending index, one key part after a NULL part ----
+CREATE TABLE t (id INT PRIMARY KEY, a INT, b INT, KEY k (a,b)) ENGINE=TIDESDB;
+INSERT INTO t VALUES (3, NULL, 2), (5, 10, 20), (7, NULL, 8);
+
+--echo # covering-index read: b after a NULL a must survive (expect 2 and 8, never NULL)
+--sorted_result
+SELECT id, a, b FROM t FORCE INDEX (k) WHERE a IS NULL;
+
+--echo # index condition pushdown: the pushed predicate on b must see b's own bytes
+SELECT id, a, b FROM t FORCE INDEX (k) WHERE a IS NULL AND b = 8;
+
+--echo # a non-null a still reads both parts correctly
+SELECT id, a, b FROM t FORCE INDEX (k) WHERE a = 10;
+DROP TABLE t;
+
+--echo # ---- two key parts after a NULL part, alignment must hold across both ----
+CREATE TABLE t3 (id INT PRIMARY KEY, a INT, b INT, c INT, KEY k (a,b,c)) ENGINE=TIDESDB;
+INSERT INTO t3 VALUES (1, NULL, 20, 30), (2, 5, 6, 7);
+--sorted_result
+SELECT id, a, b, c FROM t3 FORCE INDEX (k) WHERE a IS NULL;
+DROP TABLE t3;
+
+--echo # ---- descending index: the null indicator is stored inverted, width is unchanged ----
+CREATE TABLE td (id INT PRIMARY KEY, a INT, b INT, KEY k (a DESC, b)) ENGINE=TIDESDB;
+INSERT INTO td VALUES (3, NULL, 2), (5, 10, 20), (7, NULL, 8);
+--sorted_result
+SELECT id, a, b FROM td FORCE INDEX (k) WHERE a IS NULL;
+DROP TABLE td;
+
+--source include/cleanup_tidesdb.inc

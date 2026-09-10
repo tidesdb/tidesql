@@ -1,0 +1,2 @@
+--loose-tidesdb-memtable-sync-mode=NONE
+--loose-tidesdb-default-sync-mode=NONE

@@ -1,5 +1,0 @@
--- This is an example initialisation script. Copy it (using a different name)
--- and edit the copy to run SQL statements when a new container starts.
--- Any .sql or .sh file placed in this directory is executed in alphabetical
--- order once MariaDB is up and ready. Files in this directory (other than
--- this example) are not versioned.

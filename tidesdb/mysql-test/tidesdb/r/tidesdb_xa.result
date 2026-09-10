@@ -1,0 +1,58 @@
+#
+# External XA (two-phase commit) on a single running server.
+#
+# Exercises the handlerton XA surface wired in ha_tidesdb_txn.cc:
+# XA PREPARE durably prepares the transaction's write batch under its
+# XID, XA COMMIT / XA ROLLBACK resolve it, and XA RECOVER lists the
+# transactions that are prepared but not yet decided.  A committed XID
+# keeps its rows and a rolled-back one leaves none.
+#
+CREATE TABLE xa_t (id INT PRIMARY KEY, v VARCHAR(32)) ENGINE=TidesDB;
+#
+# 1. XA COMMIT keeps the prepared rows.
+#
+XA START 'x1';
+INSERT INTO xa_t VALUES (1, 'one'), (2, 'two');
+XA END 'x1';
+XA PREPARE 'x1';
+XA COMMIT 'x1';
+SELECT * FROM xa_t ORDER BY id;
+id	v
+1	one
+2	two
+#
+# 2. XA ROLLBACK discards the prepared rows.
+#
+XA START 'x2';
+INSERT INTO xa_t VALUES (3, 'three');
+XA END 'x2';
+XA PREPARE 'x2';
+XA ROLLBACK 'x2';
+SELECT * FROM xa_t ORDER BY id;
+id	v
+1	one
+2	two
+#
+# 3. XA RECOVER lists a prepared-but-undecided transaction, and it
+#    disappears once decided.
+#
+XA START 'x3';
+INSERT INTO xa_t VALUES (4, 'four');
+XA END 'x3';
+XA PREPARE 'x3';
+# expect one in-doubt transaction with gtrid 'x3'
+XA RECOVER;
+formatID	gtrid_length	bqual_length	data
+1	2	0	x3
+XA COMMIT 'x3';
+# expect no in-doubt transactions
+XA RECOVER;
+formatID	gtrid_length	bqual_length	data
+SELECT * FROM xa_t ORDER BY id;
+id	v
+1	one
+2	two
+4	four
+DROP TABLE xa_t;
+#
+# Done.

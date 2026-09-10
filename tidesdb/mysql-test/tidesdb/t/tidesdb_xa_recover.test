@@ -1,0 +1,48 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # XA crash-recovery: a transaction prepared before a restart survives
+--echo # it and stays in-doubt until decided.
+--echo #
+--echo # XA PREPARE durably logs the write batch under its XID.  After the
+--echo # server restarts, the library recovers the prepared-but-undecided
+--echo # transaction, the handlerton recover() callback hands its XID back to
+--echo # the server, XA RECOVER lists it, and XA COMMIT applies the rows that
+--echo # were prepared before the restart.
+--echo #
+
+CREATE TABLE xa_r (id INT PRIMARY KEY, v VARCHAR(32)) ENGINE=TidesDB;
+
+INSERT INTO xa_r VALUES (1, 'before');
+
+XA START 'r1';
+INSERT INTO xa_r VALUES (2, 'prepared');
+XA END 'r1';
+XA PREPARE 'r1';
+
+--echo # Restart the server -- the prepared transaction must persist.
+--source include/restart_mysqld.inc
+
+# Recovering an in-doubt XA transaction at startup logs an expected warning.
+--disable_query_log
+call mtr.add_suppression("Found [0-9]+ prepared XA transaction");
+--enable_query_log
+
+--echo # The prepared rows are not visible yet.
+SELECT * FROM xa_r ORDER BY id;
+
+--echo # The recovered transaction is listed as in-doubt.
+XA RECOVER;
+
+--echo # Deciding it applies the rows prepared before the restart.
+XA COMMIT 'r1';
+SELECT * FROM xa_r ORDER BY id;
+
+--echo # Nothing is left in-doubt.
+XA RECOVER;
+
+DROP TABLE xa_r;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

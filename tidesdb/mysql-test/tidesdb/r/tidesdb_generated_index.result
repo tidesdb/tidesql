@@ -1,0 +1,105 @@
+#
+# Secondary indexes on GENERATED columns (virtual and stored / the
+# MariaDB functional-index idiom).  The engine maintains index keys for
+# a column with no stored base value, so a base-column UPDATE must both
+# delete the old index entry and insert the new one -- a stale entry
+# would silently return wrong rows through the index.
+#
+#
+# 1. Index on a VIRTUAL generated column; base UPDATE must re-key it.
+#
+CREATE TABLE v (
+id INT PRIMARY KEY,
+base INT,
+dbl INT AS (base * 2) VIRTUAL,
+KEY k_dbl (dbl)
+) ENGINE=TidesDB;
+INSERT INTO v (id, base) VALUES (1, 10), (2, 20), (3, 30);
+SELECT id, base, dbl FROM v ORDER BY id;
+id	base	dbl
+1	10	20
+2	20	40
+3	30	60
+# query through the virtual-column index
+SELECT id FROM v FORCE INDEX (k_dbl) WHERE dbl = 40 ORDER BY id;
+id
+2
+# update the base: dbl for id=1 goes 20 -> 100
+UPDATE v SET base = 50 WHERE id = 1;
+# the row now appears under the new key and is gone under the old
+SELECT id FROM v FORCE INDEX (k_dbl) WHERE dbl = 100 ORDER BY id;
+id
+1
+SELECT id FROM v FORCE INDEX (k_dbl) WHERE dbl = 20 ORDER BY id;
+id
+# full ordered scan through the index reflects the update
+SELECT id, dbl FROM v FORCE INDEX (k_dbl) ORDER BY dbl;
+id	dbl
+2	40
+3	60
+1	100
+# delete via the index key too
+DELETE FROM v WHERE id = 2;
+SELECT id, dbl FROM v FORCE INDEX (k_dbl) ORDER BY dbl;
+id	dbl
+3	60
+1	100
+#
+# 2. Functional index: VIRTUAL column over a string expression.
+#
+CREATE TABLE fx (
+id INT PRIMARY KEY,
+email VARCHAR(100),
+domain VARCHAR(100) AS (SUBSTRING_INDEX(email, '@', -1)) VIRTUAL,
+KEY k_dom (domain)
+) ENGINE=TidesDB;
+Warnings:
+Note	1071	Specified key was too long; max key length is 255 bytes
+INSERT INTO fx (id, email) VALUES
+(1, 'a@gmail.com'), (2, 'b@yahoo.com'), (3, 'c@gmail.com'), (4, 'd@proton.me');
+SELECT id, domain FROM fx FORCE INDEX (k_dom) WHERE domain = 'gmail.com' ORDER BY id;
+id	domain
+1	gmail.com
+3	gmail.com
+UPDATE fx SET email = 'a@yahoo.com' WHERE id = 1;
+# id 1 moved from gmail.com to yahoo.com in the index
+SELECT id FROM fx FORCE INDEX (k_dom) WHERE domain = 'gmail.com' ORDER BY id;
+id
+3
+SELECT id FROM fx FORCE INDEX (k_dom) WHERE domain = 'yahoo.com' ORDER BY id;
+id
+1
+2
+#
+# 3. STORED generated column in a UNIQUE index enforces on the
+#    materialized value, and a base UPDATE that collides is rejected.
+#
+CREATE TABLE su (
+id INT PRIMARY KEY,
+a INT,
+b INT,
+s INT AS (a + b) PERSISTENT,
+UNIQUE KEY uq_s (s)
+) ENGINE=TidesDB;
+INSERT INTO su (id, a, b) VALUES (1, 1, 1), (2, 2, 2), (3, 3, 3);
+SELECT id, s FROM su ORDER BY id;
+id	s
+1	2
+2	4
+3	6
+# a duplicate materialized value is rejected on INSERT
+INSERT INTO su (id, a, b) VALUES (4, 4, 0);
+ERROR 23000: Duplicate entry '4' for key 'uq_s'
+# ... and on an UPDATE that would collide (id 1 s=2 -> s=4 collides with id 2)
+UPDATE su SET a = 3, b = 1 WHERE id = 1;
+ERROR 23000: Duplicate entry '4' for key 'uq_s'
+# a non-colliding base UPDATE re-keys the unique entry
+UPDATE su SET a = 10, b = 10 WHERE id = 1;
+SELECT id, s FROM su FORCE INDEX (uq_s) ORDER BY s;
+id	s
+2	4
+3	6
+1	20
+DROP TABLE v, fx, su;
+#
+# Done.

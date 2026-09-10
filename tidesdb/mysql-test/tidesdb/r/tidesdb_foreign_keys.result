@@ -1,0 +1,239 @@
+#
+# 1. A foreign key is persisted and reported through SHOW CREATE TABLE
+#
+CREATE TABLE fk_parent (id INT PRIMARY KEY, label VARCHAR(32)) ENGINE=TidesDB;
+CREATE TABLE fk_child (
+cid INT PRIMARY KEY,
+pid INT,
+KEY pid_idx (pid),
+CONSTRAINT fk_c FOREIGN KEY (pid) REFERENCES fk_parent (id)
+) ENGINE=TidesDB;
+SHOW CREATE TABLE fk_child;
+Table	Create Table
+fk_child	CREATE TABLE `fk_child` (
+  `cid` int(11) NOT NULL,
+  `pid` int(11) DEFAULT NULL,
+  PRIMARY KEY (`cid`),
+  KEY `pid_idx` (`pid`),
+  CONSTRAINT `fk_c` FOREIGN KEY (`pid`) REFERENCES `fk_parent` (`id`)
+) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
+#
+# 2. information_schema reports the referential constraint and columns
+#
+SELECT constraint_name, referenced_table_name, delete_rule, update_rule
+FROM information_schema.referential_constraints
+WHERE table_name = 'fk_child';
+constraint_name	referenced_table_name	delete_rule	update_rule
+fk_c	fk_parent	RESTRICT	RESTRICT
+SELECT column_name, referenced_table_name, referenced_column_name
+FROM information_schema.key_column_usage
+WHERE table_name = 'fk_child' AND referenced_table_name IS NOT NULL;
+column_name	referenced_table_name	referenced_column_name
+pid	fk_parent	id
+#
+# 3. A child row referencing a missing parent is rejected
+#
+INSERT INTO fk_parent VALUES (1, 'one'), (2, 'two');
+INSERT INTO fk_child VALUES (10, 99);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint fails (fk_c)
+INSERT INTO fk_child VALUES (10, 1);
+SELECT * FROM fk_child;
+cid	pid
+10	1
+#
+# 4. A NULL referencing column is allowed (MATCH SIMPLE)
+#
+INSERT INTO fk_child VALUES (11, NULL);
+SELECT * FROM fk_child ORDER BY cid;
+cid	pid
+10	1
+11	NULL
+#
+# 5. Updating a child to a missing parent is rejected, to an existing one is allowed
+#
+UPDATE fk_child SET pid = 77 WHERE cid = 10;
+ERROR 23000: Cannot add or update a child row: a foreign key constraint fails (fk_c)
+UPDATE fk_child SET pid = 2 WHERE cid = 10;
+SELECT * FROM fk_child ORDER BY cid;
+cid	pid
+10	2
+11	NULL
+#
+# 6. Deleting a still-referenced parent is blocked (RESTRICT)
+#
+DELETE FROM fk_parent WHERE id = 2;
+ERROR 23000: Cannot delete or update a parent row: a foreign key constraint fails (fk_c)
+# a parent with no children can be deleted
+DELETE FROM fk_parent WHERE id = 1;
+SELECT * FROM fk_parent ORDER BY id;
+id	label
+2	two
+#
+# 7. Updating a referenced parent key is blocked while referenced
+#
+UPDATE fk_parent SET id = 3 WHERE id = 2;
+ERROR 23000: Cannot delete or update a parent row: a foreign key constraint fails (fk_c)
+#
+# 8. foreign_key_checks = 0 bypasses enforcement
+#
+SET foreign_key_checks = 0;
+INSERT INTO fk_child VALUES (12, 88);
+DELETE FROM fk_parent WHERE id = 2;
+SET foreign_key_checks = 1;
+SELECT * FROM fk_child ORDER BY cid;
+cid	pid
+10	2
+11	NULL
+12	88
+#
+# 9. Multi-column foreign key
+#
+CREATE TABLE fk_p2 (a INT, b INT, PRIMARY KEY (a, b)) ENGINE=TidesDB;
+CREATE TABLE fk_c2 (
+id INT PRIMARY KEY,
+a INT, b INT,
+KEY ab_idx (a, b),
+CONSTRAINT fk_c2c FOREIGN KEY (a, b) REFERENCES fk_p2 (a, b)
+) ENGINE=TidesDB;
+INSERT INTO fk_p2 VALUES (1, 1), (1, 2);
+INSERT INTO fk_c2 VALUES (1, 1, 1);
+INSERT INTO fk_c2 VALUES (2, 9, 9);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint fails (fk_c2c)
+DELETE FROM fk_p2 WHERE a = 1 AND b = 1;
+ERROR 23000: Cannot delete or update a parent row: a foreign key constraint fails (fk_c2c)
+SELECT * FROM fk_c2 ORDER BY id;
+id	a	b
+1	1	1
+DROP TABLE fk_c2, fk_p2, fk_child, fk_parent;
+#
+# 10. ON DELETE CASCADE removes the referencing children
+#
+CREATE TABLE cas_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE cas_c (
+cid INT PRIMARY KEY,
+pid INT,
+KEY pid_idx (pid),
+CONSTRAINT fk_cas FOREIGN KEY (pid) REFERENCES cas_p (id) ON DELETE CASCADE
+) ENGINE=TidesDB;
+INSERT INTO cas_p VALUES (1), (2);
+INSERT INTO cas_c VALUES (10, 1), (11, 1), (12, 2);
+# deleting parent 1 removes its two children, parent 2's child stays
+DELETE FROM cas_p WHERE id = 1;
+SELECT * FROM cas_c ORDER BY cid;
+cid	pid
+12	2
+#
+# 11. ON DELETE SET NULL nulls the child columns
+#
+CREATE TABLE sn_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE sn_c (
+cid INT PRIMARY KEY,
+pid INT,
+KEY pid_idx (pid),
+CONSTRAINT fk_sn FOREIGN KEY (pid) REFERENCES sn_p (id) ON DELETE SET NULL
+) ENGINE=TidesDB;
+INSERT INTO sn_p VALUES (1);
+INSERT INTO sn_c VALUES (10, 1), (11, 1);
+DELETE FROM sn_p WHERE id = 1;
+# the children survive with pid set to NULL
+SELECT * FROM sn_c ORDER BY cid;
+cid	pid
+10	NULL
+11	NULL
+#
+# 12. ON UPDATE CASCADE follows the parent key change
+#
+CREATE TABLE uc_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE uc_c (
+cid INT PRIMARY KEY,
+pid INT,
+KEY pid_idx (pid),
+CONSTRAINT fk_uc FOREIGN KEY (pid) REFERENCES uc_p (id) ON UPDATE CASCADE
+) ENGINE=TidesDB;
+INSERT INTO uc_p VALUES (1);
+INSERT INTO uc_c VALUES (10, 1), (11, 1);
+UPDATE uc_p SET id = 5 WHERE id = 1;
+# the children now reference the new parent key
+SELECT * FROM uc_c ORDER BY cid;
+cid	pid
+10	5
+11	5
+#
+# 13. Nested cascade runs through a chain of tables
+#
+CREATE TABLE gp (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE pr (
+id INT PRIMARY KEY,
+gid INT,
+KEY gid_idx (gid),
+CONSTRAINT fk_pr FOREIGN KEY (gid) REFERENCES gp (id) ON DELETE CASCADE
+) ENGINE=TidesDB;
+CREATE TABLE ch (
+id INT PRIMARY KEY,
+prid INT,
+KEY prid_idx (prid),
+CONSTRAINT fk_ch FOREIGN KEY (prid) REFERENCES pr (id) ON DELETE CASCADE
+) ENGINE=TidesDB;
+INSERT INTO gp VALUES (1);
+INSERT INTO pr VALUES (100, 1), (101, 1);
+INSERT INTO ch VALUES (1000, 100), (1001, 101);
+# deleting the grandparent cascades through parents to the children
+DELETE FROM gp WHERE id = 1;
+SELECT COUNT(*) AS parents_left FROM pr;
+parents_left
+0
+SELECT COUNT(*) AS children_left FROM ch;
+children_left
+0
+DROP TABLE ch, pr, gp, uc_c, uc_p, sn_c, sn_p, cas_c, cas_p;
+#
+# 14. A descending foreign key column is rejected rather than enforced wrong
+#
+CREATE TABLE dsc_p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE dsc_c (
+cid INT PRIMARY KEY,
+pid INT,
+KEY pid_idx (pid DESC),
+CONSTRAINT fk_dsc FOREIGN KEY (pid) REFERENCES dsc_p (id)
+) ENGINE=TidesDB;
+ERROR HY000: TidesDB does not support a descending column in the foreign key fk_dsc
+DROP TABLE dsc_p;
+#
+# 15. A foreign key may reference a NOT NULL unique key, not only the PK
+#
+CREATE TABLE uq_p (id INT PRIMARY KEY, u INT NOT NULL, UNIQUE KEY u_idx (u)) ENGINE=TidesDB;
+CREATE TABLE uq_c (
+cid INT PRIMARY KEY,
+uref INT,
+KEY uref_idx (uref),
+CONSTRAINT fk_uq FOREIGN KEY (uref) REFERENCES uq_p (u)
+) ENGINE=TidesDB;
+INSERT INTO uq_p VALUES (1, 100), (2, 200);
+# referencing an existing unique value is accepted
+INSERT INTO uq_c VALUES (10, 100);
+# referencing a missing unique value is rejected
+INSERT INTO uq_c VALUES (11, 999);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint fails (fk_uq)
+# deleting a parent row still referenced by its unique value is blocked
+DELETE FROM uq_p WHERE u = 100;
+ERROR 23000: Cannot delete or update a parent row: a foreign key constraint fails (fk_uq)
+# an unreferenced unique value can be deleted
+DELETE FROM uq_p WHERE u = 200;
+SELECT * FROM uq_c ORDER BY cid;
+cid	uref
+10	100
+DROP TABLE uq_c, uq_p;
+#
+# 16. A reference to a NULLable unique key is rejected rather than mis-enforced
+#
+CREATE TABLE nu_p (id INT PRIMARY KEY, u INT, UNIQUE KEY u_idx (u)) ENGINE=TidesDB;
+CREATE TABLE nu_c (
+cid INT PRIMARY KEY,
+uref INT,
+KEY uref_idx (uref),
+CONSTRAINT fk_nu FOREIGN KEY (uref) REFERENCES nu_p (u)
+) ENGINE=TidesDB;
+ERROR HY000: TidesDB foreign key fk_nu must reference a NOT NULL unique key or the primary key
+DROP TABLE nu_p;
+#
+# Done.

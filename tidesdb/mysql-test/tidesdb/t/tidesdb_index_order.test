@@ -1,0 +1,59 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # Secondary-index ordering edge cases that a filesort would otherwise
+--echo # mask: forward and backward index-provided order, NULL placement in
+--echo # index order, partial composite-key ranges, and duplicate-key walking
+--echo # via index_next_same.
+--echo #
+
+CREATE TABLE t (id INT PRIMARY KEY, k INT, KEY k_idx (k)) ENGINE=TidesDB;
+INSERT INTO t VALUES
+  (1, 30), (2, 10), (3, 20), (4, 10), (5, 30), (6, 20), (7, 10);
+
+--echo #
+--echo # 1. Ascending and descending order delivered by the index.
+--echo #    A covering read keeps the plan index-only so the order comes from
+--echo #    the index walk (index_next / index_prev), not a filesort.
+--echo #
+--replace_column 9 #
+EXPLAIN SELECT k FROM t FORCE INDEX (k_idx) ORDER BY k;
+SELECT k FROM t FORCE INDEX (k_idx) ORDER BY k;
+--replace_column 9 #
+EXPLAIN SELECT k FROM t FORCE INDEX (k_idx) ORDER BY k DESC;
+SELECT k FROM t FORCE INDEX (k_idx) ORDER BY k DESC;
+
+--echo #
+--echo # 2. index_next_same: all rows sharing one secondary key, in the
+--echo #    index's natural (pk-ascending) order, terminating at the prefix.
+--echo #
+SELECT id, k FROM t FORCE INDEX (k_idx) WHERE k = 10;
+
+--echo #
+--echo # 3. NULL ordering through the index: NULLs sort first ascending,
+--echo #    last descending.
+--echo #
+CREATE TABLE n (id INT PRIMARY KEY, v INT, KEY k_v (v)) ENGINE=TidesDB;
+INSERT INTO n VALUES (1, 5), (2, NULL), (3, 1), (4, NULL), (5, 3);
+SELECT id, v FROM n FORCE INDEX (k_v) ORDER BY v;
+SELECT id, v FROM n FORCE INDEX (k_v) ORDER BY v DESC;
+
+--echo #
+--echo # 4. Composite key partial-range scans: leading-equal + trailing range,
+--echo #    and open/closed bounds.
+--echo #
+CREATE TABLE c (id INT PRIMARY KEY, a INT, b INT, KEY k_ab (a, b)) ENGINE=TidesDB;
+INSERT INTO c VALUES
+  (1, 1, 5), (2, 1, 10), (3, 1, 15), (4, 2, 5), (5, 2, 10), (6, 3, 1);
+--echo # a = 2 AND b > 5 must exclude a=1 and a=3 rows entirely
+SELECT id, a, b FROM c FORCE INDEX (k_ab) WHERE a = 2 AND b > 5 ORDER BY a, b;
+--echo # leading part range
+SELECT id, a, b FROM c FORCE INDEX (k_ab) WHERE a >= 2 ORDER BY a, b;
+--echo # closed range on the trailing part
+SELECT id, a, b FROM c FORCE INDEX (k_ab) WHERE a = 1 AND b BETWEEN 10 AND 15 ORDER BY a, b;
+
+DROP TABLE t, n, c;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

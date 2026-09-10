@@ -1,0 +1,32 @@
+#
+# tidesdb_skip_unique_check bypasses the PK and UNIQUE-secondary
+# duplicate checks on INSERT/UPDATE (a bulk-load fast path where the
+# caller guarantees uniqueness).  With it on, a colliding write
+# overwrites silently; with it off, the duplicate is rejected again.
+#
+CREATE TABLE t (id INT PRIMARY KEY, u INT, v VARCHAR(16), UNIQUE KEY uq (u)) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 100, 'orig');
+# default: duplicate PK and duplicate UNIQUE are both rejected
+INSERT INTO t VALUES (1, 200, 'dup_pk');
+ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+INSERT INTO t VALUES (2, 100, 'dup_uq');
+ERROR 23000: Duplicate entry '100' for key 'uq'
+SELECT id, u, v FROM t ORDER BY id;
+id	u	v
+1	100	orig
+# with the check skipped, a duplicate PK overwrites the row in place
+SET SESSION tidesdb_skip_unique_check = 1;
+INSERT INTO t VALUES (1, 100, 'overwritten');
+SELECT id, u, v FROM t ORDER BY id;
+id	u	v
+1	100	overwritten
+SET SESSION tidesdb_skip_unique_check = 0;
+# turning it back off restores duplicate rejection
+INSERT INTO t VALUES (1, 100, 'dup_again');
+ERROR 23000: Duplicate entry '1' for key 'PRIMARY'
+SELECT id, u, v FROM t ORDER BY id;
+id	u	v
+1	100	overwritten
+DROP TABLE t;
+#
+# Done.

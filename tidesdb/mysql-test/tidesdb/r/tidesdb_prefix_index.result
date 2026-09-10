@@ -1,0 +1,52 @@
+#
+# Prefix indexes KEY(col(N)) on string columns.  make_comparable_key
+# truncates the sort key to the key-part length, so the index narrows
+# to the prefix and the engine must re-check the full value.  Rows that
+# share a prefix but differ later must not be conflated.
+#
+CREATE TABLE t (
+id INT PRIMARY KEY,
+name VARCHAR(64),
+KEY k_name (name(4))
+) ENGINE=TidesDB;
+INSERT INTO t VALUES
+(1, 'abcdefg'), (2, 'abcdxyz'), (3, 'abcd'), (4, 'abce'), (5, 'zzzz1'), (6, 'zzzz2');
+# exact lookup on a value whose prefix is shared by several rows returns
+# only the full match (index narrows by prefix, engine re-checks)
+SELECT id, name FROM t FORCE INDEX (k_name) WHERE name = 'abcdefg';
+id	name
+1	abcdefg
+SELECT id, name FROM t FORCE INDEX (k_name) WHERE name = 'abcd';
+id	name
+3	abcd
+# prefix range
+SELECT id, name FROM t FORCE INDEX (k_name) WHERE name LIKE 'abcd%';
+id	name
+1	abcdefg
+2	abcdxyz
+3	abcd
+# ordering delivered through the prefix index
+SELECT id, name FROM t FORCE INDEX (k_name) ORDER BY name;
+id	name
+3	abcd
+1	abcdefg
+2	abcdxyz
+4	abce
+5	zzzz1
+6	zzzz2
+#
+# Prefix UNIQUE index: uniqueness is enforced on the prefix, so two full
+# values sharing the indexed prefix collide.
+#
+CREATE TABLE u (id INT PRIMARY KEY, s VARCHAR(64), UNIQUE KEY uq_s (s(3))) ENGINE=TidesDB;
+INSERT INTO u VALUES (1, 'foobar');
+INSERT INTO u VALUES (2, 'foobaz');
+ERROR 23000: Duplicate entry 'foo' for key 'uq_s'
+INSERT INTO u VALUES (3, 'barbaz');
+SELECT id, s FROM u ORDER BY id;
+id	s
+1	foobar
+3	barbaz
+DROP TABLE t, u;
+#
+# Done.

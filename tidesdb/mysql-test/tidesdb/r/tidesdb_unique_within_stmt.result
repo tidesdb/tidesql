@@ -1,0 +1,39 @@
+DROP TABLE IF EXISTS t;
+CREATE TABLE t (pk INT PRIMARY KEY, u INT, UNIQUE KEY uq (u)) ENGINE=TIDESDB;
+# multi-row INSERT, internal duplicate on the UNIQUE secondary:
+INSERT INTO t VALUES (1,100),(2,100);
+ERROR 23000: Duplicate entry '100' for key 'uq'
+# nothing landed (statement rolled back atomically):
+SELECT COUNT(*) AS cnt FROM t;
+cnt
+0
+# multi-row INSERT, internal duplicate on the PRIMARY KEY:
+INSERT INTO t VALUES (5,50),(5,60);
+ERROR 23000: Duplicate entry '5' for key 'PRIMARY'
+SELECT COUNT(*) AS cnt FROM t;
+cnt
+0
+# a clean multi-row INSERT still works:
+INSERT INTO t VALUES (1,10),(2,20),(3,30);
+SELECT * FROM t ORDER BY pk;
+pk	u
+1	10
+2	20
+3	30
+# UPDATE that collides two rows on the UNIQUE secondary:
+UPDATE t SET u = 999 WHERE pk IN (1,2);
+ERROR 23000: Duplicate entry '999' for key 'uq'
+# rows unchanged after the failed UPDATE:
+SELECT * FROM t ORDER BY pk;
+pk	u
+1	10
+2	20
+3	30
+# INSERT ... SELECT staging an internal duplicate on the UNIQUE secondary:
+INSERT INTO t SELECT pk + 100, 77 FROM t;
+ERROR 23000: Duplicate entry '77' for key 'uq'
+SELECT COUNT(*) AS cnt FROM t;
+cnt
+3
+DROP TABLE t;
+# Done.

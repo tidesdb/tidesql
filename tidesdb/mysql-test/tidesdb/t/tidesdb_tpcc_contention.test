@@ -1,0 +1,181 @@
+--source include/have_tidesdb.inc
+#
+# TidesDB TPC-C contention test -- the NEWORD district counter read-modify-write
+# pattern.  Every New Order transaction increments district.d_next_o_id.  Under
+# TidesDB's optimistic MVCC there are no row-blocking locks, so two concurrent
+# increments both read the same value and the second to commit fails with
+# TDB_ERR_CONFLICT (ER_LOCK_DEADLOCK / ER_ERROR_DURING_COMMIT).  The correct
+# application response is to retry, and with retry the counter is exact with no
+# lost updates -- the same final result pessimistic locking would give, reached
+# by retry instead of blocking.
+#
+
+# Concurrent conflicts are expected and retried, so suppress their log noise.
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_CONFLICT");
+call mtr.add_suppression("\\[TIDESDB\\].*TDB_ERR_LOCKED");
+
+--echo #
+--echo # === Setup: TPC-C district table (simplified) ===
+--echo #
+
+CREATE TABLE district (
+  d_w_id INT NOT NULL,
+  d_id   INT NOT NULL,
+  d_next_o_id INT NOT NULL,
+  d_tax  DECIMAL(4,4),
+  PRIMARY KEY (d_w_id, d_id)
+) ENGINE=TIDESDB;
+
+INSERT INTO district VALUES (1, 1, 3001, 0.1000);
+
+CREATE TABLE orders (
+  o_id   INT NOT NULL,
+  o_w_id INT NOT NULL,
+  o_d_id INT NOT NULL,
+  o_c_id INT NOT NULL,
+  PRIMARY KEY (o_w_id, o_d_id, o_id)
+) ENGINE=TIDESDB;
+
+CREATE TABLE new_order (
+  no_w_id INT NOT NULL,
+  no_d_id INT NOT NULL,
+  no_o_id INT NOT NULL,
+  PRIMARY KEY (no_w_id, no_d_id, no_o_id)
+) ENGINE=TIDESDB;
+
+# One NEWORD district increment, retried until it commits.  A conflict rolls the
+# attempt back and loops; the bound keeps a pathological run from hanging.  A
+# losing attempt rolls back without an fsync, so under disk pressure it can spin
+# through the whole retry bound while the winners are still fsyncing their
+# commits, dropping its increment.  A short randomized backoff after a conflict
+# lets the contention drain before the next attempt, the same way a real TPC-C
+# client backs off, so every increment still lands.
+delimiter |;
+CREATE PROCEDURE neword_incr()
+BEGIN
+  DECLARE committed INT DEFAULT 0;
+  DECLARE tries INT DEFAULT 0;
+  WHILE committed = 0 AND tries < 1000 DO
+    BEGIN
+      DECLARE CONTINUE HANDLER FOR 1180, 1213, 1205 SET committed = -1;
+      SET committed = 1;
+      SET tries = tries + 1;
+      START TRANSACTION;
+      UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id = 1 AND d_id = 1;
+      COMMIT;
+    END;
+    IF committed = -1 THEN
+      ROLLBACK;
+      SET committed = 0;
+      DO SLEEP(0.001 + RAND() * 0.004);
+    END IF;
+  END WHILE;
+END|
+delimiter ;|
+
+--echo #
+--echo # === TEST 1: Single-session NEWORD (baseline) ===
+--echo #
+
+BEGIN;
+SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1 FOR UPDATE;
+UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
+INSERT INTO orders VALUES (3001, 1, 1, 42);
+INSERT INTO new_order VALUES (1, 1, 3001);
+COMMIT;
+
+SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1;
+
+--echo #
+--echo # === TEST 2: Two concurrent NEWORD increments ===
+--echo # Both retry on conflict, so both increments land with no lost update.
+--echo #
+
+connect (connA, localhost, root,,);
+connect (connB, localhost, root,,);
+
+connection connA;
+send CALL neword_incr();
+connection connB;
+send CALL neword_incr();
+connection connA;
+reap;
+connection connB;
+reap;
+
+connection default;
+--echo # Both increments applied via retry: 3002 + 2 = 3004
+SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1;
+
+--echo #
+--echo # === TEST 3: Serial counter increment (10 iterations) ===
+--echo #
+
+--disable_query_log
+let $i= 0;
+while ($i < 10)
+{
+  BEGIN;
+  eval UPDATE district SET d_next_o_id = d_next_o_id + 1 WHERE d_w_id=1 AND d_id=1;
+  COMMIT;
+  inc $i;
+}
+--enable_query_log
+
+--echo # Initial(3004) + 10 = 3014
+SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1;
+
+--echo #
+--echo # === TEST 4: 4 concurrent NEWORD increments on the same row ===
+--echo # Every connection retries on conflict, so the counter advances by 4.
+--echo #
+
+# Reset counter
+UPDATE district SET d_next_o_id = 5001 WHERE d_w_id=1 AND d_id=1;
+
+connect (storm1, localhost, root,,);
+connect (storm2, localhost, root,,);
+connect (storm3, localhost, root,,);
+connect (storm4, localhost, root,,);
+
+connection storm1;
+send CALL neword_incr();
+connection storm2;
+send CALL neword_incr();
+connection storm3;
+send CALL neword_incr();
+connection storm4;
+send CALL neword_incr();
+
+connection storm1;
+reap;
+connection storm2;
+reap;
+connection storm3;
+reap;
+connection storm4;
+reap;
+
+connection default;
+--echo # All 4 increments applied via retry: 5001 + 4 = 5005
+SELECT d_next_o_id FROM district WHERE d_w_id=1 AND d_id=1;
+
+--echo #
+--echo # === Cleanup ===
+--echo #
+
+disconnect connA;
+disconnect connB;
+disconnect storm1;
+disconnect storm2;
+disconnect storm3;
+disconnect storm4;
+
+connection default;
+DROP PROCEDURE neword_incr;
+DROP TABLE district;
+DROP TABLE orders;
+DROP TABLE new_order;
+
+--source include/cleanup_tidesdb.inc
+--echo # Done.

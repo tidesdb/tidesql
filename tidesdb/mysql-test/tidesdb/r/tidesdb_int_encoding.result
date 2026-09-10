@@ -1,0 +1,100 @@
+#
+# Integer sort-key encoding: signed values flip the sign bit and
+# unsigned values do not, so both must order correctly through a
+# secondary index (memcmp on the comparable key) and decode back
+# exactly on a covering index-only read.  Values straddle the
+# signed/unsigned boundary and include the extremes.
+#
+#
+# 1. Signed INT with negatives orders correctly via the index.
+#
+CREATE TABLE si (id INT PRIMARY KEY, s INT, KEY k_s (s)) ENGINE=TidesDB;
+INSERT INTO si VALUES
+(1, -2147483648), (2, -1), (3, 0), (4, 1), (5, 2147483647), (6, -100), (7, 100);
+# ascending order straight from the index (forward scan)
+SELECT s FROM si FORCE INDEX (k_s) ORDER BY s;
+s
+-2147483648
+-100
+-1
+0
+1
+100
+2147483647
+# descending order from the index (backward scan: index_last/index_prev)
+SELECT s FROM si FORCE INDEX (k_s) ORDER BY s DESC;
+s
+2147483647
+100
+1
+0
+-1
+-100
+-2147483648
+# range across the sign boundary
+SELECT s FROM si FORCE INDEX (k_s) WHERE s BETWEEN -100 AND 100 ORDER BY s;
+s
+-100
+-1
+0
+1
+100
+# covering point read of a negative value decodes back exactly
+SELECT s FROM si FORCE INDEX (k_s) WHERE s = -2147483648;
+s
+-2147483648
+#
+# 2. BIGINT UNSIGNED straddling 2^63 orders correctly (no sign flip).
+#
+CREATE TABLE ui (id INT PRIMARY KEY, u BIGINT UNSIGNED, KEY k_u (u)) ENGINE=TidesDB;
+INSERT INTO ui VALUES
+(1, 0), (2, 1), (3, 9223372036854775807), (4, 9223372036854775808),
+(5, 18446744073709551615), (6, 100);
+# the two middle values straddle the signed max; a wrong sign flip
+# would sort 2^63 below 2^63-1
+SELECT u FROM ui FORCE INDEX (k_u) ORDER BY u;
+u
+0
+1
+100
+9223372036854775807
+9223372036854775808
+18446744073709551615
+SELECT u FROM ui FORCE INDEX (k_u) ORDER BY u DESC;
+u
+18446744073709551615
+9223372036854775808
+9223372036854775807
+100
+1
+0
+# range above the signed boundary returns only the high values
+SELECT u FROM ui FORCE INDEX (k_u) WHERE u > 9223372036854775807 ORDER BY u;
+u
+9223372036854775808
+18446744073709551615
+# covering read of the max unsigned value decodes back exactly
+SELECT u FROM ui FORCE INDEX (k_u) WHERE u = 18446744073709551615;
+u
+18446744073709551615
+#
+# 3. TINYINT / SMALLINT signed negatives via index.
+#
+CREATE TABLE ti (id INT PRIMARY KEY, t TINYINT, sm SMALLINT, KEY k_t (t), KEY k_sm (sm))
+ENGINE=TidesDB;
+INSERT INTO ti VALUES (1, -128, -32768), (2, 0, 0), (3, 127, 32767), (4, -1, -1);
+SELECT t FROM ti FORCE INDEX (k_t) ORDER BY t;
+t
+-128
+-1
+0
+127
+SELECT sm FROM ti FORCE INDEX (k_sm) ORDER BY sm DESC;
+sm
+32767
+0
+-1
+-32768
+DROP TABLE si, ui, ti;
+#
+# Done.

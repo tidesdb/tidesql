@@ -1,0 +1,42 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # System-versioned tables on ENGINE=TidesDB.  The server manages the
+--echo # row_start/row_end period columns and history; the engine stores them
+--echo # as ordinary columns via its self-describing row format.  This checks
+--echo # that current-version queries and history queries return the right
+--echo # rows across INSERT / UPDATE / DELETE.
+--echo #
+
+CREATE TABLE t (
+  id INT PRIMARY KEY,
+  v INT
+) WITH SYSTEM VERSIONING ENGINE=TidesDB;
+
+INSERT INTO t VALUES (1, 10), (2, 20), (3, 30);
+
+--echo # current view: 3 live rows
+SELECT id, v FROM t ORDER BY id;
+
+--echo # update creates a historical version of id=1
+UPDATE t SET v = 11 WHERE id = 1;
+--echo # delete makes id=3 historical
+DELETE FROM t WHERE id = 3;
+
+--echo # current view: id=1 updated, id=3 gone
+SELECT id, v FROM t ORDER BY id;
+
+--echo # full history (current + historical) sees every version:
+--echo #   id=1 v=10 (old) and v=11 (current), id=2 v=20, id=3 v=30 (deleted)
+SELECT id, v FROM t FOR SYSTEM_TIME ALL ORDER BY id, v;
+
+--echo # count of historical (non-current) rows = 2 (old id=1, deleted id=3)
+SELECT COUNT(*) AS history_expected_2
+  FROM t FOR SYSTEM_TIME ALL
+  WHERE row_end < '2038-01-01 00:00:00';
+
+DROP TABLE t;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

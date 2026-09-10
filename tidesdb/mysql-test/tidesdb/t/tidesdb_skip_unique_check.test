@@ -1,0 +1,35 @@
+--source include/have_tidesdb.inc
+
+--echo #
+--echo # tidesdb_skip_unique_check bypasses the PK and UNIQUE-secondary
+--echo # duplicate checks on INSERT/UPDATE (a bulk-load fast path where the
+--echo # caller guarantees uniqueness).  With it on, a colliding write
+--echo # overwrites silently; with it off, the duplicate is rejected again.
+--echo #
+
+CREATE TABLE t (id INT PRIMARY KEY, u INT, v VARCHAR(16), UNIQUE KEY uq (u)) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 100, 'orig');
+
+--echo # default: duplicate PK and duplicate UNIQUE are both rejected
+--error ER_DUP_ENTRY
+INSERT INTO t VALUES (1, 200, 'dup_pk');
+--error ER_DUP_ENTRY
+INSERT INTO t VALUES (2, 100, 'dup_uq');
+SELECT id, u, v FROM t ORDER BY id;
+
+--echo # with the check skipped, a duplicate PK overwrites the row in place
+SET SESSION tidesdb_skip_unique_check = 1;
+INSERT INTO t VALUES (1, 100, 'overwritten');
+SELECT id, u, v FROM t ORDER BY id;
+SET SESSION tidesdb_skip_unique_check = 0;
+
+--echo # turning it back off restores duplicate rejection
+--error ER_DUP_ENTRY
+INSERT INTO t VALUES (1, 100, 'dup_again');
+SELECT id, u, v FROM t ORDER BY id;
+
+DROP TABLE t;
+
+--echo #
+--source include/cleanup_tidesdb.inc
+--echo # Done.

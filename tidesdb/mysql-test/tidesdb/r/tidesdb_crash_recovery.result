@@ -1,0 +1,50 @@
+CREATE TABLE cr (id INT PRIMARY KEY, v VARCHAR(32)) ENGINE=TidesDB;
+INSERT INTO cr VALUES (1, 'committed-a'), (2, 'committed-b');
+#
+# A two-phase transaction prepared before the crash must survive it.
+#
+XA START 'x1';
+INSERT INTO cr VALUES (10, 'prepared');
+XA END 'x1';
+XA PREPARE 'x1';
+#
+# Kill the server outright, then bring it back.
+#
+# Kill and restart
+#
+# Committed rows survived the crash; the prepared row is not visible yet.
+#
+SELECT id, v FROM cr ORDER BY id;
+id	v
+1	committed-a
+2	committed-b
+#
+# The prepared transaction is recovered and still in-doubt.
+#
+XA RECOVER;
+formatID	gtrid_length	bqual_length	data
+1	2	0	x1
+#
+# Deciding it applies the row that was prepared before the crash.
+#
+XA COMMIT 'x1';
+SELECT id, v FROM cr ORDER BY id;
+id	v
+1	committed-a
+2	committed-b
+10	prepared
+XA RECOVER;
+formatID	gtrid_length	bqual_length	data
+#
+# A fresh write after recovery works normally.
+#
+INSERT INTO cr VALUES (20, 'after');
+SELECT id, v FROM cr ORDER BY id;
+id	v
+1	committed-a
+2	committed-b
+10	prepared
+20	after
+DROP TABLE cr;
+#
+# Done.
