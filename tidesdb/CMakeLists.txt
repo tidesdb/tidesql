@@ -118,7 +118,7 @@ IF(NOT TIDESDB_LIB OR NOT TIDESDB_INCLUDE_DIR)
 
   ExternalProject_Add(
     tidesdblib_ext
-    URL "https://github.com/tidesdb/tidesdb/archive/refs/tags/v10.0.1.tar.gz"
+    URL "https://github.com/tidesdb/tidesdb/archive/refs/tags/v10.0.2.tar.gz"
     INSTALL_COMMAND ""
     CMAKE_ARGS "-DBUILD_SHARED_LIBS=OFF"
     BUILD_BYPRODUCTS ${file}
