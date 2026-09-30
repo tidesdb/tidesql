@@ -346,6 +346,9 @@ static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
     /* This connection is resolving its own transaction, so no by-XID resolver should reach it. */
     tdb_drop_prepared_entry(trx);
 
+    /* The transactions a bulk statement stepped off are done with once the transaction ends. */
+    tdb_trx_free_retired(trx);
+
     /* Real commit -- flush to storage.
        After a successful commit, we keep the txn object alive and let
        get_or_create_trx() call tidesdb_txn_reset() to get a fresh
@@ -537,6 +540,7 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
     /* Full rollback -- we keep txn alive for reuse via reset on next use.  A transaction that was
        XA PREPAREd on this same connection takes the phase-two rollback path. */
     tdb_txn_rollback_stateful(trx->txn);
+    tdb_trx_free_retired(trx);
     trx->txn_generation++;
 #ifdef WITH_WSREP
     /* the transaction resolved, so drop its galera write-intent keys from the shared map. */
@@ -568,6 +572,7 @@ static int tidesdb_close_connection(handlerton *, THD *thd)
             tidesdb_txn_rollback(trx->txn);
             tidesdb_txn_free(trx->txn);
         }
+        tdb_trx_free_retired(trx);
         delete trx;
         thd_set_ha_data(thd, tidesdb_hton, NULL);
     }
@@ -717,25 +722,21 @@ int ha_tidesdb::external_lock_acquire(THD *thd)
 
 void ha_tidesdb::external_lock_release(THD *thd)
 {
-    /* For multi-statement transactions (BEGIN...COMMIT), the txn stays the
-       same across statements.  Preserve the cached scan iterator across
-       read-only statements so the next statement reuses it (avoids the
-       O(sstables) merge-heap rebuild).  After a write statement it must be
-       freed: an iterator snapshots the txn's writeset when created, so one
-       built before this statement's puts/deletes would not see them.  For
-       autocommit, always free. */
-    bool in_multi_stmt = cached_stmt_shape_valid_
-                             ? !cached_is_autocommit_
-                             : (bool)thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
-    if (!in_multi_stmt || stmt_txn_dirty)
+    /* The scan iterator is freed at the end of every statement, here, on the thread that owns the
+       transaction it was opened under.  Keeping it for the next read-only statement of a
+       multi-statement transaction saved one merge-heap rebuild, but when the statement ends the
+       server hands this handler back to the shared table cache, and another connection can open it
+       while the iterator is still linked into this connection's transaction.  That connection then
+       freed it on its own thread, unlinking it from a transaction list this connection was
+       committing, freeing or detaching at the same moment, which crashed the server under a
+       contended run. */
+    (void)thd;
+    if (scan_iter)
     {
-        if (scan_iter)
-        {
-            tidesdb_iter_free(scan_iter);
-            scan_iter = NULL;
-            scan_iter_cf_ = NULL;
-            scan_iter_txn_ = NULL;
-        }
+        tidesdb_iter_free(scan_iter);
+        scan_iter = NULL;
+        scan_iter_cf_ = NULL;
+        scan_iter_txn_ = NULL;
     }
 
     /* We bump update_time once per write-statement for information_schema.

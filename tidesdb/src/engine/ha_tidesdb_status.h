@@ -35,4 +35,22 @@ bool tidesdb_show_status(handlerton *hton, THD *thd, stat_print_fn *print, enum 
    in the maria_declare_plugin block. */
 extern struct st_mysql_show_var tidesdb_status_variables[];
 
+#include <atomic>
+
+/* Engine error counters, bumped in tdb_rc_to_ha where every library error is mapped, and read by
+   SHOW STATUS straight from the atomics, which is fine for an aligned 64-bit counter.
+   commit_conflicts is the number of COMMIT statements that failed with a conflict-class error, a
+   deadlock or a lock wait timeout, so a client-side transactions-per-minute figure can subtract it
+   from Com_commit, which the server increments for a failed COMMIT as much as a successful one.
+   The stmt_ counters classify the errors raised inside a statement by the library cause behind
+   them, a write conflict, transient contention reported as locked, memtable backpressure, a
+   transaction that outlived its timeout, and a galera brute-force abort, so a run can tell real
+   contention from engine churn without guessing.  Defined in ha_tidesdb_status.cc. */
+extern std::atomic<long long> tdb_stat_commit_conflicts;
+extern std::atomic<long long> tdb_stat_stmt_conflicts;
+extern std::atomic<long long> tdb_stat_stmt_locked;
+extern std::atomic<long long> tdb_stat_stmt_memory_limit;
+extern std::atomic<long long> tdb_stat_stmt_txn_expired;
+extern std::atomic<long long> tdb_stat_stmt_bf_aborted;
+
 #endif /* HA_TIDESDB_STATUS_H */

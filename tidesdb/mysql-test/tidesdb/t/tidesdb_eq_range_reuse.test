@@ -1,0 +1,53 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# The values of k IN (...) reach the engine as one equality range each.  These reuse one unbounded
+# iterator across the statement and only seek it, while ranges that span more than one value keep a
+# bounded iterator of their own, and once a statement has written through the handler every range
+# gets a fresh iterator again.  This pins that the results are unchanged in all of those cases:
+# equality lookups on a non-unique index with duplicate and missing values, equality and real ranges
+# mixed in one statement, reuse across the primary key, and updates and deletes driven by IN lists
+# whose own writes must not disturb the rest of the scan.
+#
+
+CREATE TABLE t (id INT PRIMARY KEY, k INT, c VARCHAR(10), KEY kk (k)) ENGINE=TIDESDB;
+INSERT INTO t VALUES (1,10,'a'),(2,20,'b'),(3,20,'c'),(4,30,'d'),(5,40,'e'),(6,40,'f'),(7,40,'g'),
+                     (8,50,'h'),(9,60,'i'),(10,70,'j');
+
+--echo # equality ranges only, with duplicates, a missing value and out-of-order values
+SELECT id, k FROM t FORCE INDEX (kk) WHERE k IN (40, 20, 999, 10) ORDER BY id;
+SELECT COUNT(*) FROM t FORCE INDEX (kk) WHERE k IN (20, 40, 60);
+
+--echo # equality and real ranges in one statement
+SELECT id, k FROM t FORCE INDEX (kk) WHERE k IN (10, 70) OR k BETWEEN 30 AND 50 ORDER BY id;
+SELECT id, k FROM t FORCE INDEX (kk) WHERE k BETWEEN 15 AND 25 OR k IN (60, 999) ORDER BY id;
+
+--echo # the same shape on the primary key
+SELECT id, c FROM t WHERE id IN (9, 2, 5, 42) ORDER BY id;
+SELECT id FROM t WHERE id IN (1, 10) OR id BETWEEN 4 AND 6 ORDER BY id;
+
+--echo # a join whose inner side is probed with equality ranges per outer row
+CREATE TABLE p (k INT PRIMARY KEY) ENGINE=TIDESDB;
+INSERT INTO p VALUES (20), (40), (80);
+SELECT p.k, t.id FROM p JOIN t FORCE INDEX (kk) ON t.k = p.k ORDER BY p.k, t.id;
+
+--echo # an UPDATE driven by an IN list on the index it changes
+UPDATE t FORCE INDEX (kk) SET k = k + 1 WHERE k IN (20, 40);
+SELECT id, k FROM t ORDER BY id;
+SELECT id, k FROM t FORCE INDEX (kk) WHERE k IN (21, 41, 20, 40) ORDER BY id;
+
+--echo # a DELETE driven by an IN list
+DELETE FROM t WHERE k IN (21, 70, 999);
+SELECT id, k FROM t FORCE INDEX (kk) WHERE k IN (10, 21, 30, 41, 50, 60, 70) ORDER BY id;
+
+--echo # inside a transaction, a read after the transaction's own writes sees them
+BEGIN;
+INSERT INTO t VALUES (11, 30, 'x'), (12, 30, 'y');
+SELECT id FROM t FORCE INDEX (kk) WHERE k IN (30, 50) ORDER BY id;
+ROLLBACK;
+SELECT id FROM t FORCE INDEX (kk) WHERE k IN (30, 50) ORDER BY id;
+
+DROP TABLE t, p;
+
+--source include/cleanup_tidesdb.inc

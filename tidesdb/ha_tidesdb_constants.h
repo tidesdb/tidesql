@@ -50,6 +50,22 @@ static constexpr uint AUTOINC_META_KEY_LEN = 5;
 static constexpr uint AUTOINC_META_VALUE_LEN = 8;
 static constexpr uint8_t KEY_NS_DATA = 0x01;
 
+/* Uniqueness sentinels.  A secondary index entry carries the row's primary key as its suffix, so
+   two transactions inserting the same UNIQUE value write two different index keys and the
+   commit-time conflict check, which works key by key, never sees them collide; the insert-time
+   probe cannot catch it either, since each reads at its own snapshot.  So every write that creates
+   a unique value also writes one sentinel key naming just the table, the index and the value, in a
+   reserved column family shared by every table, and two writers of the same value then collide on
+   that one key and first-committer-wins settles it.  The sentinel is never read for the uniqueness
+   check itself, that stays with the index probe, and it lives outside the data column family so row
+   estimates are not inflated by it.  The key is the data column family name, a NUL, one byte of
+   index number, then the comparable value, so a table's sentinels can be purged by prefix when it
+   is dropped, truncated or renamed.  The __tidesdb prefix marks it as an internal family, which
+   keeps it out of the per-table listing in SHOW ENGINE TIDESDB STATUS along with the other
+   engine-owned families. */
+static constexpr const char TIDESDB_UNIQ_SENTINEL_CF[] = "__tidesdb_uniq";
+static constexpr uint TIDESDB_UNIQ_SENTINEL_BUF_LEN = FN_REFLEN + 2 + MAX_KEY_LENGTH;
+
 /* Size of the namespace prefix that every TidesDB key starts with. */
 static constexpr uint KEY_NAMESPACE_LEN = 1;
 

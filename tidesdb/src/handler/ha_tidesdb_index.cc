@@ -127,6 +127,23 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
     else if (find_flag == HA_READ_KEY_OR_PREV || find_flag == HA_READ_BEFORE_KEY ||
              find_flag == HA_READ_PREFIX_LAST || find_flag == HA_READ_PREFIX_LAST_OR_PREV)
     {
+        /* A backward seek on a partial primary key has to land on the last entry that
+           shares the prefix, which is what MAX on an index prefix asks for.  Every full
+           key carrying the prefix sorts after the bare prefix bytes, so seeking for prev
+           on the prefix itself stops one entry too early, on the tail of the previous
+           prefix group, and the lookup comes back empty.  Pad the pk portion with 0xFF
+           out to the full comparable length so the seek target is the greatest key the
+           prefix can take, the same upper bound the secondary index path builds.
+           BEFORE_KEY keeps the bare prefix because it wants the entry strictly before
+           the whole group. */
+        uint full_pk_comp_len = share->idx_comp_key_len[share->pk_index];
+        if (find_flag != HA_READ_BEFORE_KEY && comp_len < full_pk_comp_len)
+        {
+            uchar padded[DATA_KEY_BUF_LEN];
+            memcpy(padded, comp_key, comp_len);
+            memset(padded + comp_len, KEY_INF_HI_BYTE, full_pk_comp_len - comp_len);
+            seek_len = build_data_key(padded, full_pk_comp_len, seek_key);
+        }
         tidesdb_iter_seek_for_prev(scan_iter, seek_key, seek_len);
         if (find_flag == HA_READ_BEFORE_KEY && tidesdb_iter_valid(scan_iter))
         {
@@ -583,7 +600,8 @@ int ha_tidesdb::index_last(uchar *buf)
 
             uint8_t *ik = NULL;
             size_t iks = 0;
-            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS)
+                DBUG_RETURN(HA_ERR_END_OF_FILE);
             tdb_owned_buf ik_g(ik);
 
             if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);

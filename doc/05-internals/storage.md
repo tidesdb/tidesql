@@ -9,9 +9,11 @@ Understanding the physical layout helps when reading `ANALYZE TABLE` output or d
 performance. The storage mechanics below the column family, SSTables, compaction, and recovery,
 belong to the library and are covered in the [TidesDB library manual](/internals/architecture).
 
-Each table's data lives in a column family, an independent LSM-tree. Writes go to a skip-list
-memtable. When the memtable fills it becomes immutable and is flushed as a sorted SSTable, and
-compaction merges overlapping SSTables into higher levels while keeping the sorted invariant.
+Each table's data lives in a column family, an LSM-tree with its own SSTables and levels. Writes go
+to a skip-list memtable, which in TidesDB 10 is database-level and shared by every column family,
+as is the write-ahead log. When the memtable fills it becomes immutable and is flushed to sorted
+SSTables in each column family it holds keys for, and compaction merges overlapping SSTables into
+higher levels while keeping the sorted invariant.
 
 ## Keys
 
@@ -36,7 +38,8 @@ bitmap, then each non-null field serialized with `Field::pack()`. On read, `Fiel
 restores the fields. A row written with fewer fields than the current schema, from before a column
 was added, fills the missing fields with their `DEFAULT`, and a row written with more fields, from
 before a column was dropped, has the extra data skipped. This is more compact than the raw record
-buffer, especially for `VARCHAR` and `CHAR` columns.
+buffer, especially for `VARCHAR` and `CHAR` columns. On an `ENCRYPTED` table the whole packed row
+is then wrapped in an encryption envelope before it is stored.
 
 ## Secondary index entries
 
@@ -46,4 +49,16 @@ the information is in the key. To resolve a lookup the engine seeks into the ind
 splits off the trailing PK bytes, and does a point-get into the data CF. When the query needs only
 indexed columns and each is of a reconstructable type, integers, temporal types, or fixed
 `CHAR`/`BINARY` in binary or latin1, the row is decoded straight from the index key bytes and the
-data-CF point-get is skipped.
+data-CF point-get is skipped. This covering read applies to tables with an explicit primary key.
+
+Because the key carries the primary key as its suffix, two rows with the same value in a `UNIQUE`
+secondary index store two different keys. So every write that creates a non-NULL value in a
+`UNIQUE` secondary index also writes a sentinel key, the table's data CF name, a NUL byte, one byte
+of index number, and the comparable value, into a reserved column family named `__tidesdb_uniq`
+that every table shares. Two transactions writing the same value then collide on that one key, and
+at SNAPSHOT isolation or higher the commit-time conflict check lets only the first committer
+through. The sentinel is skipped along with the uniqueness check when the session sets
+`tidesdb_skip_unique_check`. The sentinel is never read for the uniqueness check itself, which stays
+with the index probe, and a table's sentinels are purged by prefix when it is dropped, truncated, or
+renamed. Internal families whose names begin with `__tidesdb` are left out of the per-family listing
+in `SHOW ENGINE TIDESDB STATUS`.

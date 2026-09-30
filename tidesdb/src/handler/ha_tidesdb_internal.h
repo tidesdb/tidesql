@@ -22,9 +22,10 @@
 
 /* shared plumbing the split handler translation units lean on. these are thin forwarders onto the
    library transaction api, kept as named wrappers so the many historical call sites stay unchanged.
-   tidesdb owns transaction semantics, locking, and write back-pressure, so each wrapper is a direct
-   pass; the THD parameter is unused now that the library blocks internally rather than the plugin
-   retrying. include after ha_tidesdb.h so the library and server types are already visible. */
+   tidesdb owns transaction semantics, locking, and write back-pressure; the one thing the wrappers
+   add is a short bounded retry when the library reports transient contention as TDB_ERR_LOCKED,
+   which is what the THD parameter is for, so a killed session stops retrying. include after
+   ha_tidesdb.h so the library and server types are already visible. */
 
 /* the process-wide tidesdb database handle, opened at plugin init and shared by every column
    family and transaction. defined in ha_tidesdb.cc. */
@@ -80,12 +81,121 @@ static inline int tidesdb_txn_delete_cf(tidesdb_txn_t *txn, tidesdb_column_famil
                              : tidesdb_txn_delete(txn, cf, key, key_size);
 }
 
+#include <unistd.h>
+
+/* The library reports transient contention on its read, iterator and write paths as
+   TDB_ERR_LOCKED, which its own contract describes as nothing having been written and asking
+   again being the remedy, typically a memtable rotation that outran the pin retries of a single
+   call.  Handing that straight to the client as a lock wait timeout turned a few milliseconds of
+   internal churn into a failed statement, which is what the mid-statement 1205 errors under a
+   contended OLTP run were.  So each wrapper below asks again a bounded number of times with a
+   short growing backoff, about sixty milliseconds in all, and stops early when the session is
+   killed.  Commit is deliberately not retried, a failed commit leaves the transaction aborted and
+   the caller has to roll back. */
+static constexpr int TDB_LOCKED_RETRY_MAX = 16;
+static constexpr unsigned TDB_LOCKED_BACKOFF_START_US = 50;
+static constexpr unsigned TDB_LOCKED_BACKOFF_CAP_US = 4000;
+
+template <typename Op>
+static inline int tdb_retry_locked(THD *thd, Op &&op)
+{
+    unsigned wait_us = TDB_LOCKED_BACKOFF_START_US;
+    for (int attempt = 0;; attempt++)
+    {
+        int rc = op();
+        if (rc != TDB_ERR_LOCKED || attempt >= TDB_LOCKED_RETRY_MAX) return rc;
+        if (thd && thd_killed(thd)) return rc;
+        usleep(wait_us);
+        if (wait_us < TDB_LOCKED_BACKOFF_CAP_US) wait_us *= 2;
+    }
+}
+
+/* The reserved column family holding uniqueness sentinels, see TIDESDB_UNIQ_SENTINEL_CF.  Created
+   on first use the way the galera meta family is; a racer that loses the create sees
+   TDB_ERR_EXISTS and simply looks it up.  With create false this only looks it up, for the purge
+   paths, which must not bring it into being on a database that never needed it. */
+static inline tidesdb_column_family_t *tdb_unique_sentinel_cf(bool create)
+{
+    if (!tdb_global) return NULL;
+    tidesdb_column_family_t *cf = tidesdb_get_column_family(tdb_global, TIDESDB_UNIQ_SENTINEL_CF);
+    if (cf || !create) return cf;
+    tidesdb_column_family_config_t cfg = tidesdb_default_column_family_config();
+    int rc = tidesdb_create_column_family(tdb_global, TIDESDB_UNIQ_SENTINEL_CF, &cfg);
+    if (rc != TDB_SUCCESS && rc != TDB_ERR_EXISTS)
+    {
+        sql_print_error("[TIDESDB] cannot create the uniqueness sentinel column family (err=%d)",
+                        rc);
+        return NULL;
+    }
+    return tidesdb_get_column_family(tdb_global, TIDESDB_UNIQ_SENTINEL_CF);
+}
+
+/* Drop every sentinel a table wrote, keyed by its data column family name, when the table is
+   dropped, truncated or renamed away.  Stale sentinels never affect correctness, a later writer of
+   the value overwrites one and a committed occupant below a snapshot never conflicts, so this is
+   space hygiene and a failure only warns. */
+static inline void tdb_unique_sentinel_purge(const std::string &cf_name)
+{
+    tidesdb_column_family_t *ucf = tdb_unique_sentinel_cf(false);
+    if (!ucf) return;
+    std::string prefix = cf_name;
+    prefix.push_back('\0');
+    tidesdb_txn_t *txn = NULL;
+    if (tidesdb_txn_begin_with_isolation(tdb_global, TDB_ISOLATION_READ_COMMITTED, &txn) !=
+            TDB_SUCCESS ||
+        !txn)
+        return;
+    int rc = tidesdb_txn_delete_prefix(txn, ucf, (const uint8_t *)prefix.data(), prefix.size());
+    if (rc == TDB_SUCCESS) rc = tidesdb_txn_commit(txn);
+    if (rc != TDB_SUCCESS)
+    {
+        tidesdb_txn_rollback(txn);
+        sql_print_warning("[TIDESDB] could not purge the uniqueness sentinels of '%s' (err=%d)",
+                          cf_name.c_str(), rc);
+    }
+    tidesdb_txn_free(txn);
+}
+
+/* Move the connection onto a fresh library transaction at the given level and keep the one it
+   leaves in retired_txns, so iterators other handlers still have open under the old one keep
+   reading, see the note on retired_txns.  On failure the connection stays where it was. */
+static inline int tdb_trx_retire_and_begin(tidesdb_trx_t *trx, tidesdb_isolation_level_t iso)
+{
+    tidesdb_txn_t *fresh = NULL;
+    int rc = tidesdb_txn_begin_with_isolation(tdb_global, iso, &fresh);
+    if (rc != TDB_SUCCESS || !fresh) return rc != TDB_SUCCESS ? rc : TDB_ERR_MEMORY;
+    trx->retired_txns.push_back(trx->txn);
+    trx->txn = fresh;
+    return TDB_SUCCESS;
+}
+
+/* Free the transactions retired during the statement or transaction that just ended.  A retired
+   transaction is either committed or clean, so rolling it back first only settles a clean one. */
+static inline void tdb_trx_free_retired(tidesdb_trx_t *trx)
+{
+    if (!trx) return;
+    for (tidesdb_txn_t *t : trx->retired_txns)
+    {
+        (void)tidesdb_txn_rollback(t);
+        tidesdb_txn_free(t);
+    }
+    trx->retired_txns.clear();
+}
+
+static inline int tdb_txn_get_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
+                                       const uint8_t *key, size_t key_size, uint8_t **value,
+                                       size_t *value_size)
+{
+    return tdb_retry_locked(
+        thd, [&] { return tidesdb_txn_get(txn, cf, key, key_size, value, value_size); });
+}
+
 static inline int tdb_txn_put_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
                                        const uint8_t *key, size_t key_size, const uint8_t *value,
                                        size_t value_size, time_t ttl)
 {
-    (void)thd;
-    return tidesdb_txn_put(txn, cf, key, key_size, value, value_size, ttl);
+    return tdb_retry_locked(
+        thd, [&] { return tidesdb_txn_put(txn, cf, key, key_size, value, value_size, ttl); });
 }
 
 static inline int tdb_txn_commit_blocking(THD *thd, tidesdb_txn_t *txn)
@@ -98,15 +208,14 @@ static inline int tdb_txn_delete_cf_blocking(THD *thd, tidesdb_txn_t *txn,
                                              tidesdb_column_family_t *cf, const uint8_t *key,
                                              size_t key_size, bool use_single_delete)
 {
-    (void)thd;
-    return tidesdb_txn_delete_cf(txn, cf, key, key_size, use_single_delete);
+    return tdb_retry_locked(
+        thd, [&] { return tidesdb_txn_delete_cf(txn, cf, key, key_size, use_single_delete); });
 }
 
 static inline int tdb_iter_new_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
                                         tidesdb_iter_t **out)
 {
-    (void)thd;
-    return tidesdb_iter_new(txn, cf, out);
+    return tdb_retry_locked(thd, [&] { return tidesdb_iter_new(txn, cf, out); });
 }
 
 /* Range-bounded iterator.  Opens only the sstables whose own key range can
@@ -118,8 +227,9 @@ static inline int tdb_iter_new_range_blocking(THD *thd, tidesdb_txn_t *txn,
                                               size_t lower_size, const uint8_t *upper,
                                               size_t upper_size, tidesdb_iter_t **out)
 {
-    (void)thd;
-    return tidesdb_iter_new_range(txn, cf, lower, lower_size, upper, upper_size, out);
+    return tdb_retry_locked(
+        thd,
+        [&] { return tidesdb_iter_new_range(txn, cf, lower, lower_size, upper, upper_size, out); });
 }
 
 #endif /* HA_TIDESDB_INTERNAL_H */

@@ -8,8 +8,8 @@ description: The per-table options that configure a table's column family at CRE
 Per-table options set at `CREATE TABLE` are baked into the column family at creation time and shown
 in `SHOW CREATE TABLE`. Most have a `tidesdb_default_*` session variable, so a deployment can set
 the policy once and let every `CREATE TABLE` inherit it, with an explicit option overriding the
-default for one table. The exceptions, noted below, are `TTL`, `ENCRYPTED`, `ENCRYPTION_KEY_ID`, and
-`ISOLATION_LEVEL`, which are covered in their own chapters.
+default for one table. The exceptions are `TTL`, `ENCRYPTED`, and `ENCRYPTION_KEY_ID`, which have no
+session default. These three and `ISOLATION_LEVEL` are covered in their own chapters.
 
 The complete set of options is `COMPRESSION`, `BLOOM_FILTER`, `BLOOM_FPR`, `KEEP_VALUES_INLINE`,
 `BTREE_KLOG_BLOCK_SIZE`, `LEVEL_SIZE_RATIO`, `MIN_LEVELS`, `DIVIDING_LEVEL_OFFSET`,
@@ -109,7 +109,7 @@ covers how this fits with the single-delete optimization.
 
 - `TTL` at the table level and `` `TTL` `` on a column set row expiration. See [Time-To-Live](/reference/ttl).
 - `ENCRYPTED` and `ENCRYPTION_KEY_ID` turn on data-at-rest encryption. See [Data-at-Rest Encryption](/reference/encryption).
-- `ISOLATION_LEVEL` pins the per-table isolation level. See [Transactions and Isolation](/concepts/transactions).
+- `ISOLATION_LEVEL` pins the per-table isolation level, default `REPEATABLE_READ`, session default `tidesdb_default_isolation_level`. See [Transactions and Isolation](/concepts/transactions).
 
 ## Combining options
 

@@ -44,11 +44,12 @@ locality, geographically close geometries tend to have numerically adjacent valu
 in the LSM-tree and read sequentially.
 
 A spatial query uses Hilbert range decomposition instead of scanning the whole index. The query
-bounding box is mapped to a coarse grid on the curve, only the cells overlapping the box are kept,
-those cells are merged into contiguous Hilbert ranges, and the engine seeks directly to each range.
-Each candidate then passes exact MBR filtering to drop false positives from the curve approximation.
-For a box covering about 1% of the coordinate space this is typically tens of targeted seeks rather
-than a full scan. The one predicate this cannot accelerate is `MBRDisjoint`, because a
+bounding box is mapped to a coarse 256 by 256 grid on the curve, only the cells overlapping the box
+are kept, those cells are merged into contiguous Hilbert ranges, and the engine seeks directly to
+each range. Each candidate then passes exact MBR filtering to drop false positives from the curve
+approximation. A box that covers more than 4096 grid cells skips the decomposition and scans the
+whole curve as one range, since the MBR filter drops the extra rows anyway. The one predicate this
+cannot accelerate is `MBRDisjoint`, because a
 non-overlapping geometry can lie anywhere on the curve, so a disjoint query scans the full index and
 filters. INSERT, UPDATE, and DELETE maintain the spatial index transactionally alongside the row,
 the same as secondary and full-text indexes.

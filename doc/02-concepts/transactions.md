@@ -57,33 +57,43 @@ a large scan from accumulating an unbounded read set.
 
 This is the architectural difference from InnoDB, and it is worth stating plainly. TideSQL does not
 take pessimistic row locks. Concurrency is optimistic MVCC in the library. Readers never block
-writers and writers never block readers. When two transactions modify the same row, both proceed,
-and the second one to commit fails with a conflict rather than waiting.
+writers and writers never block readers. When two transactions at `SNAPSHOT` or higher modify the
+same row, both proceed, and the second one to commit fails with a conflict rather than waiting.
 
-Write-write conflict detection is a property of the higher isolation levels. At `SNAPSHOT` and
-`SERIALIZABLE` the library validates each write against the version the transaction actually read,
-recorded in its conflict footprint, and runs a first-committer-wins check before the write log, so
-two transactions that modify the same row cannot both commit. At `READ_COMMITTED` the library does
-no write-write checking, which is why every autocommit statement, having no concurrent modification
-of its own, runs there.
+Write-write conflict detection is a property of the higher isolation levels. At `SNAPSHOT` a
+commit claims each key it writes on a first-committer-wins basis rather than validating what it
+read, so two transactions that modify the same row cannot both commit. `SERIALIZABLE` keeps that
+check and adds the one the library's own `REPEATABLE_READ` level runs, validating at commit that
+every key the transaction read still holds the version it read and that no key appeared inside a
+range it scanned. At `READ_COMMITTED` the library does no write-write checking, which is why every
+autocommit statement, having no concurrent modification of its own, runs there.
 
 The check runs inside `tidesdb_txn_commit()`, so a detected conflict fails the losing transaction's
-`COMMIT`. The engine maps `TDB_ERR_CONFLICT` to `HA_ERR_LOCK_DEADLOCK`, but because MariaDB reports
-any error raised from the commit callback as `ER_ERROR_DURING_COMMIT` (ERROR 1180) rather than
-`ER_LOCK_DEADLOCK` (1213), a commit-time conflict reaches the application as 1180. The transaction
-is rolled back cleanly and should be retried. MariaDB retries autocommit statements automatically
-but does not re-run an explicit `BEGIN ... COMMIT` block, so an application that uses explicit
-transactions at `REPEATABLE READ` or higher needs retry logic for 1180. A cross-node conflict in a
-Galera cluster is surfaced differently, as a clean `ER_LOCK_DEADLOCK` (1213), described in
-[Replication and High Availability](/administration/replication-ha).
+`COMMIT`. The engine maps `TDB_ERR_CONFLICT` to `HA_ERR_LOCK_DEADLOCK` (handler error 149), but
+because MariaDB reports any error raised from the commit callback as `ER_ERROR_DURING_COMMIT`
+(ERROR 1180) rather than `ER_LOCK_DEADLOCK` (1213), a commit-time conflict reaches the application
+as 1180 wrapping 149, as in `Got error 149 "Lock deadlock; Retry transaction" during COMMIT`.
+Transient contention or memory backpressure that fails a commit maps instead to
+`HA_ERR_LOCK_WAIT_TIMEOUT`, so it arrives as 1180 wrapping 146. The engine does not retry a failed
+commit. The transaction is rolled back and should be retried by the application, since MariaDB does
+not re-run an explicit `BEGIN ... COMMIT` block, so an application that uses explicit transactions
+at `REPEATABLE READ` or higher needs retry logic for 1180.
 
-Plain reads never take a lock at any isolation level, matching InnoDB's non-locking reads. Whether a
-read is recorded into the conflict footprint depends on the isolation level, not on `FOR UPDATE` or
-`LOCK IN SHARE MODE`, which the engine treats as ordinary reads. At the default level, which maps to
-the library's snapshot isolation, reads are not tracked and only write-write conflicts are caught. At
-`SERIALIZABLE` the engine also tracks the read set, so a concurrent write to a row this transaction
-only read makes it lose the first-committer-wins check at commit. There is no lock wait and no
-wait-for-graph deadlock, only the commit-time conflict.
+An error the library reports inside a statement, before `COMMIT`, reaches the client as the plain
+server error, `ER_LOCK_DEADLOCK` (1213) for a conflict and `ER_LOCK_WAIT_TIMEOUT` (1205) for
+transient contention or memory backpressure. The engine first retries a transient contention error
+from a read, iterator, or write call a bounded number of times with a short backoff, about sixty
+milliseconds in all, so 1205 only surfaces when that retry runs out. A cross-node conflict in a
+Galera cluster is described in [Replication and High Availability](/administration/replication-ha).
+
+Plain reads never take a lock at any isolation level, matching InnoDB's non-locking reads.
+`SELECT ... FOR UPDATE` and `LOCK IN SHARE MODE` take no lock either, and the engine treats them as
+ordinary reads. Whether a read is recorded for the commit-time check depends on the isolation level
+alone. At the default level, which maps to the library's snapshot isolation, reads are not tracked
+and only write-write conflicts are caught. At `SERIALIZABLE` the library also validates the read
+set, so a concurrent commit that changed a row this transaction only read makes its `COMMIT` fail.
+A transaction that wrote nothing never conflicts, because the engine ends it with a rollback rather
+than a commit. There is no lock wait and no wait-for-graph deadlock, only the commit-time conflict.
 
 Neither model is strictly better. Optimistic MVCC removes all lock waits and lock-manager overhead,
 and a low-contention workload where most rows are touched by at most one writer at a time sees
@@ -119,7 +129,9 @@ and range `UPDATE` or `DELETE`, keep the transaction from growing without bound 
 mid-statement in fixed-size batches. The engine hooks `start_bulk_insert`, `start_bulk_update`, and
 `start_bulk_delete`, counts row operations (the data write plus secondary-index maintenance)
 against a batch size of 500 operations, and at each threshold commits the current transaction and
-resets it at `READ_COMMITTED` for the next batch. Statement memory stays bounded regardless of
+carries on in a fresh transaction at `READ_COMMITTED` for the next batch. A bulk insert whose
+expected row count will reach the threshold, inside a transaction that holds no writes yet, moves to
+`READ_COMMITTED` before its first batch. Statement memory stays bounded regardless of
 statement size, autocommit semantics are preserved so a failure rolls back only the current batch,
 and the statement reports the first error it hit. The mid-statement commit is shared across insert,
 update, and delete through one helper, so the threshold and the iterator and dup-cache invalidation

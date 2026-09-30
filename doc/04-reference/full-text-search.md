@@ -43,7 +43,7 @@ SELECT * FROM articles WHERE MATCH(title, body) AGAINST('+"management system" -t
 ```
 
 A phrase query uses the inverted index to find candidate documents containing all phrase words, then
-verifies the exact sequence by re-tokenizing the document, the same approach InnoDB's FTS uses.
+verifies the exact sequence by re-tokenizing the document.
 
 ## BM25 ranking
 
@@ -71,7 +71,8 @@ longer than `tidesdb_fts_max_word_len` (default 84) are excluded from the index 
 Common words are excluded from the index. By default TidesDB uses the same default list as InnoDB
 (`information_schema.INNODB_FT_DEFAULT_STOPWORD`). Stop words are filtered during tokenization, so
 they are never stored and never match. The list is customizable with `tidesdb_ft_stopword_table`,
-which names a `db_name/table_name` table that must have a `value` VARCHAR column of one word per row.
+which names a `db_name/table_name` table whose only column is a `value` VARCHAR holding one word
+per row, since the loader reads each stored row as that single packed column.
 The stop-word table must itself be a TidesDB table, since the loader resolves it as a TidesDB column
 family. Pointing the variable at a table on another engine logs a warning and leaves the previous
 list in place rather than taking effect. Setting it to NULL or empty restores the default:

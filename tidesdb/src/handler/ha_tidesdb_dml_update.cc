@@ -373,6 +373,34 @@ int ha_tidesdb::update_regular_index(uint i, const uchar *old_data, const uchar 
     rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], new_ik, new_ik_len,
                               &tdb_empty_val, sizeof(tdb_empty_val), row_ttl);
     if (rc != TDB_SUCCESS) return rc;
+
+    /* Move the uniqueness sentinel with the value.  A value that did not change keeps its sentinel
+       as is; otherwise the old value's sentinel goes and the new value's is written, so a
+       concurrent writer of that new value collides with this one at commit. */
+    if (share->uniq_cf && !cached_skip_unique_)
+    {
+        uchar old_sk[TIDESDB_UNIQ_SENTINEL_BUF_LEN];
+        uchar new_sk[TIDESDB_UNIQ_SENTINEL_BUF_LEN];
+        uint old_sk_len = unique_sentinel_key(i, old_data, old_sk);
+        uint new_sk_len = unique_sentinel_key(i, new_data, new_sk);
+        bool same_value =
+            old_sk_len && old_sk_len == new_sk_len && memcmp(old_sk, new_sk, old_sk_len) == 0;
+        if (!same_value)
+        {
+            if (old_sk_len)
+            {
+                rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->uniq_cf, old_sk,
+                                                old_sk_len, false);
+                if (rc != TDB_SUCCESS) return rc;
+            }
+            if (new_sk_len)
+            {
+                rc = tdb_txn_put_blocking(cached_thd_, txn, share->uniq_cf, new_sk, new_sk_len,
+                                          &tdb_empty_val, sizeof(tdb_empty_val), row_ttl);
+                if (rc != TDB_SUCCESS) return rc;
+            }
+        }
+    }
     return TDB_SUCCESS;
 }
 

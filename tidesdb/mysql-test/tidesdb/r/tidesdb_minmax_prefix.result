@@ -1,0 +1,88 @@
+#
+# ============================================
+# TPC-C orders shape, composite PK with an equality prefix
+# ============================================
+#
+CREATE TABLE orders (o_id INT, o_d_id INT, o_w_id INT, o_c_id INT,
+PRIMARY KEY (o_w_id, o_d_id, o_id),
+KEY orders_i2 (o_w_id, o_d_id, o_c_id, o_id)) ENGINE=TIDESDB;
+INSERT INTO orders VALUES
+(1,1,1,10), (2,1,1,11), (3,1,1,12), (9775,1,1,13),
+(1,2,1,20), (5,2,1,21),
+(1,1,2,30), (7,1,2,31);
+# MIN and MAX together must both resolve, 1 and 9775
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=1;
+MIN(o_id)	MAX(o_id)
+1	9775
+# each alone
+SELECT MIN(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=1;
+MIN(o_id)
+1
+SELECT MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=1;
+MAX(o_id)
+9775
+# the optimizer answers this from the index, no table scan
+EXPLAIN SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=1;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Select tables optimized away
+# other prefix groups are unaffected and independent
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=2;
+MIN(o_id)	MAX(o_id)
+1	5
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=2 AND o_d_id=1;
+MIN(o_id)	MAX(o_id)
+1	7
+#
+# ============================================
+# Single-column prefix, MAX spans every district of the warehouse
+# ============================================
+#
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1;
+MIN(o_id)	MAX(o_id)
+1	9775
+SELECT MAX(o_id) FROM orders WHERE o_w_id=2;
+MAX(o_id)
+7
+#
+# ============================================
+# Empty prefix group must stay NULL, not borrow the previous group's tail
+# ============================================
+#
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=3;
+MIN(o_id)	MAX(o_id)
+NULL	NULL
+SELECT MAX(o_id) FROM orders WHERE o_w_id=3;
+MAX(o_id)
+NULL
+SELECT MAX(o_id) FROM orders WHERE o_w_id=0;
+MAX(o_id)
+NULL
+#
+# ============================================
+# Secondary index prefix takes the other seek path and must agree
+# ============================================
+#
+SELECT MAX(o_id) FROM orders FORCE INDEX (orders_i2) WHERE o_w_id=1 AND o_d_id=1 AND o_c_id=13;
+MAX(o_id)
+9775
+SELECT MIN(o_id), MAX(o_id) FROM orders FORCE INDEX (orders_i2) WHERE o_w_id=1 AND o_d_id=1;
+MIN(o_id)	MAX(o_id)
+1	9775
+#
+# ============================================
+# Backward scan with a prefix, the same seek that DESC LIMIT 1 uses
+# ============================================
+#
+SELECT o_id FROM orders WHERE o_w_id=1 AND o_d_id=1 ORDER BY o_id DESC LIMIT 1;
+o_id
+9775
+SELECT o_id FROM orders WHERE o_w_id=1 AND o_d_id=1 ORDER BY o_id DESC;
+o_id
+9775
+3
+2
+1
+SELECT o_id FROM orders WHERE o_w_id=1 ORDER BY o_d_id DESC, o_id DESC LIMIT 1;
+o_id
+5
+DROP TABLE orders;

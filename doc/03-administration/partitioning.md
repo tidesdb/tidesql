@@ -6,8 +6,9 @@ description: How MariaDB partitioning maps onto TidesDB column families, and how
 # Partitioning
 
 TidesDB tables can be partitioned with MariaDB's standard partitioning syntax. Each partition
-becomes a separate TidesDB table, and therefore a separate column family, so compaction and flushes
-happen independently per partition.
+becomes a separate TidesDB table, and therefore a separate column family with its own SSTables, so
+compaction runs independently per partition. The memtable and write-ahead log are database-level and
+shared by every column family, so a flush is not per partition.
 
 ```sql
 CREATE TABLE metrics (

@@ -1,0 +1,48 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# A row that cannot be decrypted must fail the statement that reads it.  It used to come back
+# with every column zeroed and no error, wrong data a client could not tell apart from a real row.
+# Rows are written under key id 2 from keys2.txt, the server is restarted with keys.txt, whose key
+# id 2 has different bytes, and every read of those rows must now report the decryption failure.
+# An in-place ADD INDEX over them must stop rather than build an index from zeroed rows.  Restoring
+# the original key file makes the same rows readable again, unchanged.
+#
+
+call mtr.add_suppression("\\[TIDESDB\\] encryption_crypt\\(decrypt\\) failed");
+call mtr.add_suppression("\\[TIDESDB\\] encryption_key_get failed");
+call mtr.add_suppression("\\[TIDESDB\\] could not decrypt the last row");
+call mtr.add_suppression("Got error 192");
+
+CREATE TABLE t1 (id INT PRIMARY KEY, v VARCHAR(20), n INT) ENGINE=TIDESDB ENCRYPTED=YES ENCRYPTION_KEY_ID=2;
+INSERT INTO t1 VALUES (1,'one',10),(2,'two',20),(3,'three',30),(4,'four',40),(5,'five',50),
+                      (6,'six',60),(7,'seven',70),(8,'eight',80),(9,'nine',90),(10,'ten',100),
+                      (11,'eleven',110),(12,'twelve',120),(13,'thirteen',130),(14,'fourteen',140),
+                      (15,'fifteen',150),(16,'sixteen',160);
+SELECT COUNT(*), SUM(n) FROM t1;
+
+--echo # restart with a key file whose key id 2 has different bytes
+--let $restart_parameters=--file-key-management-filename=$MYSQL_TEST_DIR/std_data/keys.txt
+--source include/restart_mysqld.inc
+
+--echo # a full scan fails instead of returning zeroed rows
+--error ER_GET_ERRNO
+SELECT * FROM t1;
+--echo # a primary key point read fails too
+--error ER_GET_ERRNO
+SELECT * FROM t1 WHERE id = 7;
+--echo # an in-place index build stops instead of indexing zeroed rows
+--error ER_INTERNAL_ERROR
+ALTER TABLE t1 ADD INDEX iv (v), ALGORITHM=INPLACE;
+SHOW CREATE TABLE t1;
+
+--echo # restore the original key file, the rows read back unchanged
+--let $restart_parameters=--file-key-management-filename=$MYSQL_TEST_DIR/std_data/keys2.txt
+--source include/restart_mysqld.inc
+SELECT COUNT(*), SUM(n) FROM t1;
+SELECT * FROM t1 WHERE id = 7;
+
+DROP TABLE t1;
+
+--source include/cleanup_tidesdb.inc

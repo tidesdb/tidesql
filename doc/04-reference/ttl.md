@@ -37,8 +37,8 @@ INSERT INTO cache VALUES (2, 'long-lived', 86400);   -- expires in a day
 INSERT INTO cache VALUES (3, 'permanent', 0);        -- 0 defers to session and table TTL, unset here, so no expiry
 ```
 
-A non-zero per-row value takes precedence. If it is zero, resolution falls through to the session
-TTL and then the table TTL. Updating a row recomputes its TTL from the new column value, which
+A positive per-row value takes precedence. If it is zero, negative, or NULL, resolution falls
+through to the session TTL and then the table TTL. Only the first column marked `` `TTL` `` is used. Updating a row recomputes its TTL from the new column value, which
 refreshes the expiration.
 
 ## Session-level TTL
@@ -62,7 +62,7 @@ SET STATEMENT tidesdb_ttl = 60 FOR INSERT INTO events (id, data) VALUES (2, 'one
 
 For each written row the lifetime is resolved in this order, taking the first that is set:
 
-1. The per-row `` `TTL` `` column value, when non-zero.
+1. The per-row `` `TTL` `` column value, when positive.
 2. The session `tidesdb_ttl`, when non-zero.
 3. The table-level `TTL` option, when non-zero.
 4. Otherwise the row never expires.

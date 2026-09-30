@@ -43,8 +43,13 @@ compress, the engine forces the data column family's compression to `NONE` regar
 `COMPRESSION` option, and the index CFs are unaffected. See [Table Options](/reference/table-options)
 for the compression interaction.
 
-If `encryption_key_get()` cannot return the requested key, a rotation hole, a keyring plugin that
-is not loaded, or a version that never existed, the encrypt or decrypt call fails closed. The engine
-logs the failure and returns an error to the SQL layer rather than feeding uninitialized bytes into
-the cipher. A row written with a key version no longer in the keyring is unreadable until the key is
-restored, and the engine never silently mis-encrypts or returns zeroed plaintext.
+Opening an encrypted table fails if the key management plugin has no current version of the
+table's key id, and the error log records `encryption key N not available`. If
+`encryption_key_get()` cannot return the requested key for a single row, a rotation hole, a keyring
+plugin that is not loaded, or a version that never existed, the encrypt or decrypt call fails closed
+and logs the failure rather than feeding uninitialized bytes into the cipher. On the write path the
+INSERT or UPDATE then fails with an error, so the engine never stores a row it could not encrypt. On
+the read path the statement fails with handler error 192, decryption failed, so a row written with a
+key version no longer in the keyring cannot be read until the key is restored, and no statement ever
+returns it with wrong contents. An in-place ADD INDEX that meets such a row stops and leaves the table
+unchanged. Watch the error log for `encryption_key_get failed` after a key rotation.

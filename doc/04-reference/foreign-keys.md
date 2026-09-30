@@ -8,8 +8,9 @@ description: How TideSQL enforces referential integrity in the engine, the refer
 TideSQL enforces foreign keys inside the engine rather than leaving them to the application. A
 `FOREIGN KEY` clause is checked on every INSERT, UPDATE, and DELETE, and the constraint is persisted
 so it survives a restart and shows up in `SHOW CREATE TABLE` and the information schema the same way
-InnoDB's does. The handler advertises the capability to the server, so the optimizer and the
-replication layer treat these tables as referentially constrained.
+InnoDB's does. The handler advertises the capability to the server and reports each constraint from
+both the child and the parent side, which is what lets the server open the child tables a cascade
+needs.
 
 ## Defining a foreign key
 
@@ -35,14 +36,15 @@ An INSERT or UPDATE on `orders` whose `customer_id` has no matching `customers.i
 still referenced by an order is rejected with `ER_ROW_IS_REFERENCED_2` (ERROR 1451), unless a
 referential action says otherwise.
 
-Composite foreign keys over several columns are supported, and a table may reference itself.
+Composite foreign keys over several columns are supported.
 
 ## Referential actions
 
 `ON DELETE` and `ON UPDATE` accept `RESTRICT`, `CASCADE`, and `SET NULL`. `RESTRICT` is the default
 and is also what `NO ACTION` resolves to, matching InnoDB. `CASCADE` propagates the parent's delete
 or key change down to the children, recursing through further foreign keys. `SET NULL` clears the
-referencing columns, which requires them to be nullable.
+referencing columns, which requires them to be nullable. `SET DEFAULT` has no action of its own
+and is checked the same way as `RESTRICT`.
 
 ```sql
 CREATE TABLE order_items (
@@ -90,7 +92,8 @@ Two constraint shapes are rejected at `CREATE TABLE` and `ALTER TABLE`:
 - A foreign key that references a nullable unique key, because the value-only child probe cannot
   reproduce the null indicator that key stores.
 
-Both are reported as an unsupported constraint at create time rather than being silently dropped.
+Both fail the statement with `ER_CANT_CREATE_TABLE` (ERROR 1005) and a message naming the
+constraint, rather than being silently dropped.
 
 ## Disabling the checks
 

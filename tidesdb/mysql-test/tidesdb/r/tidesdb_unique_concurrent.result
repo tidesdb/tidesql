@@ -1,0 +1,192 @@
+CREATE TABLE t (id INT PRIMARY KEY, u INT, UNIQUE KEY ku (u)) ENGINE=TIDESDB;
+CREATE TABLE tp (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+connect  con1, localhost, root,,test;
+connect  con2, localhost, root,,test;
+#
+# ============================================
+# Two transactions insert the same UNIQUE value, the second to commit loses
+# ============================================
+#
+connection con1;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+0
+connection con2;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+0
+INSERT INTO t VALUES (20, 7);
+COMMIT;
+connection con1;
+# con2's row is invisible at con1's snapshot, so the insert is accepted here
+INSERT INTO t VALUES (10, 7);
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+connection default;
+SELECT * FROM t ORDER BY id;
+id	u
+20	7
+#
+# ============================================
+# Same race, other commit order
+# ============================================
+#
+connection con1;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+1
+connection con2;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+1
+connection con1;
+INSERT INTO t VALUES (30, 8);
+COMMIT;
+connection con2;
+INSERT INTO t VALUES (40, 8);
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+connection default;
+SELECT * FROM t ORDER BY id;
+id	u
+20	7
+30	8
+#
+# ============================================
+# Concurrent updates onto the same new value collide too
+# ============================================
+#
+INSERT INTO t VALUES (50, 50), (60, 60);
+connection con1;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+4
+connection con2;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+4
+UPDATE t SET u = 99 WHERE id = 60;
+COMMIT;
+connection con1;
+UPDATE t SET u = 99 WHERE id = 50;
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+connection default;
+SELECT * FROM t ORDER BY id;
+id	u
+20	7
+30	8
+50	50
+60	99
+#
+# ============================================
+# NULL carries no identity, concurrent NULLs both commit
+# ============================================
+#
+connection con1;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+4
+connection con2;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+4
+INSERT INTO t VALUES (70, NULL);
+COMMIT;
+connection con1;
+INSERT INTO t VALUES (80, NULL);
+COMMIT;
+connection default;
+SELECT id, u FROM t WHERE u IS NULL ORDER BY id;
+id	u
+70	NULL
+80	NULL
+#
+# ============================================
+# A duplicate visible at the snapshot is still a duplicate key, not a conflict
+# ============================================
+#
+INSERT INTO t VALUES (90, 7);
+ERROR 23000: Duplicate entry '7' for key 'ku'
+#
+# ============================================
+# Different values never collide
+# ============================================
+#
+connection con1;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+6
+connection con2;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+6
+INSERT INTO t VALUES (100, 100);
+COMMIT;
+connection con1;
+INSERT INTO t VALUES (110, 110);
+COMMIT;
+connection default;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+8
+#
+# ============================================
+# The primary key path, a commit-time conflict as before
+# ============================================
+#
+connection con1;
+BEGIN;
+SELECT COUNT(*) FROM tp;
+COUNT(*)
+0
+connection con2;
+INSERT INTO tp VALUES (1, 200);
+connection con1;
+INSERT INTO tp VALUES (1, 100);
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+connection default;
+SELECT * FROM tp;
+id	v
+1	200
+#
+# ============================================
+# Enforcement survives TRUNCATE
+# ============================================
+#
+TRUNCATE TABLE t;
+connection con1;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+0
+connection con2;
+BEGIN;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+0
+INSERT INTO t VALUES (1, 7);
+COMMIT;
+connection con1;
+INSERT INTO t VALUES (2, 7);
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+connection default;
+SELECT * FROM t;
+id	u
+1	7
+disconnect con1;
+disconnect con2;
+connection default;
+DROP TABLE t, tp;

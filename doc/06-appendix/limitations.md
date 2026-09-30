@@ -23,8 +23,11 @@ see stale row counts. `ANALYZE TABLE` forces an immediate refresh.
 
 **Write conflicts surface at commit and are the application's to retry.** Concurrency is optimistic
 MVCC, so a multi-statement transaction at `REPEATABLE READ` or higher can fail at commit with a
-first-committer-wins conflict, which reaches the client as `ER_ERROR_DURING_COMMIT` (ERROR 1180). An
-application that uses explicit `BEGIN ... COMMIT` blocks at those levels should retry on that error.
-MariaDB retries autocommit statements automatically. There are no pessimistic row locks, so there
-are no lock waits and no lock-wait deadlocks to tune. See
-[Transactions and Isolation](/concepts/transactions).
+first-committer-wins conflict, which reaches the client as `ER_ERROR_DURING_COMMIT` (ERROR 1180)
+wrapping handler error 149, or 146 for transient contention. An error raised inside a statement
+instead arrives as `ER_LOCK_DEADLOCK` (1213) or `ER_LOCK_WAIT_TIMEOUT` (1205). An application that
+uses explicit `BEGIN ... COMMIT` blocks at those levels should retry on these errors. Autocommit
+statements run at `READ COMMITTED`, where the library does no write-write checking, and a
+transaction that wrote nothing never conflicts. There are no pessimistic row locks, and
+`SELECT ... FOR UPDATE` takes none, so there are no lock waits and no lock-wait deadlocks to tune.
+See [Transactions and Isolation](/concepts/transactions).

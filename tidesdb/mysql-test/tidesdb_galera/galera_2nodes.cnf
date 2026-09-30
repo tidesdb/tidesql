@@ -37,6 +37,10 @@ wsrep_sst_receive_address='127.0.0.1:@mysqld.2.#sst_port'
 
 [sst]
 sst-log-archive-dir=@ENV.MYSQLTEST_VARDIR/log
+# The test servers carry SSL certificates, and without this the rsync SST script derives
+# ssl-mode=VERIFY_CA from them and refuses to run unless stunnel is installed.  The server's own
+# galera suite disables it the same way.
+ssl-mode=DISABLED
 
 [ENV]
 NODE_MYPORT_1= @mysqld.1.port

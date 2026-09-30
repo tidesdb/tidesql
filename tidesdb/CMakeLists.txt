@@ -116,11 +116,30 @@ IF(NOT TIDESDB_LIB OR NOT TIDESDB_INCLUDE_DIR)
     CMAKE_POLICY(SET CMP0135 NEW)
   ENDIF()
 
+  # The library builds every compression backend by default and fails outright when one is missing,
+  # while the plugin treats them all as optional.  So the fallback build enables a backend only when
+  # both its library and its header are present here, and a machine without any of them gets a
+  # library that stores data uncompressed rather than a failed build.  The plugin links the same
+  # backends below from the same FIND_LIBRARY results, so the two always agree.
+  FIND_PATH(ZSTD_INCLUDE_DIR NAMES zstd.h)
+  FIND_PATH(LZ4_INCLUDE_DIR NAMES lz4.h)
+  FIND_PATH(SNAPPY_INCLUDE_DIR NAMES snappy-c.h)
+  SET(TIDESDB_FETCH_ARGS "-DBUILD_SHARED_LIBS=OFF")
+  FOREACH(codec ZSTD LZ4 SNAPPY)
+    IF(${codec}_LIBRARY AND ${codec}_INCLUDE_DIR)
+      LIST(APPEND TIDESDB_FETCH_ARGS "-DTIDESDB_WITH_${codec}=ON")
+    ELSE()
+      LIST(APPEND TIDESDB_FETCH_ARGS "-DTIDESDB_WITH_${codec}=OFF")
+      SET(${codec}_LIBRARY "")
+      MESSAGE(STATUS "TidesDB: ${codec} not found, building the library without it")
+    ENDIF()
+  ENDFOREACH()
+
   ExternalProject_Add(
     tidesdblib_ext
-    URL "https://github.com/tidesdb/tidesdb/archive/refs/tags/v10.0.2.tar.gz"
+    URL "https://github.com/tidesdb/tidesdb/archive/refs/tags/v10.1.0.tar.gz"
     INSTALL_COMMAND ""
-    CMAKE_ARGS "-DBUILD_SHARED_LIBS=OFF"
+    CMAKE_ARGS ${TIDESDB_FETCH_ARGS}
     BUILD_BYPRODUCTS ${file}
   )
 ENDIF()
@@ -200,7 +219,7 @@ SET(TIDESDB_HANDLER_SOURCES
 IF(COMMAND MARIADB_ADD_PLUGIN)
   MARIADB_ADD_PLUGIN(tidesdb ha_tidesdb.cc ${TIDESDB_CORE_SOURCES} ${TIDESDB_HANDLER_SOURCES}
           STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS}
-          VERSION "5.0.0"
+          VERSION "5.1.0"
           AUTHOR "TidesDB Corp"
           DESCRIPTION "LSM B-tree engine with ACID transactions, MVCC concurrency, replication, and secondary, spatial, full-text and vector indexes")
 ELSE()
@@ -249,4 +268,12 @@ IF(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
   ELSE()
     MESSAGE(STATUS "TidesDB: -Wmaybe-uninitialized enabled for plugin (warning only)")
   ENDIF()
+ENDIF()
+
+# Packaging.  Inside the server source tree the server's own top-level CMakeLists includes CPack
+# once every plugin is added, so the plugin must leave it alone there.  Built out of tree, as the
+# MariaDB Foundry builds it, nothing else includes CPack, and mariadb_add_plugin no longer does it
+# for us because that breaks projects that add several plugins, so the plugin includes it itself.
+IF(NOT EXISTS "${CMAKE_SOURCE_DIR}/sql/mysqld.cc")
+  INCLUDE(CPack)
 ENDIF()

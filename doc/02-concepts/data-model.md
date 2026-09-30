@@ -58,15 +58,22 @@ CREATE TABLE logs (ts DATETIME, message TEXT) ENGINE=TIDESDB;
 
 ## Secondary indexes
 
-Secondary indexes live in their own column families, and the entry layout depends on whether the
-index is unique. A non-unique index puts the comparable index-column bytes followed by the
-comparable primary-key bytes in the key, with a single zero byte for the value, so the engine
-recovers the primary key from the key's tail. A unique index with no nullable column puts the
-comparable index-column bytes alone in the key and the primary key in the value, so two rows with
-the same indexed value land on one key. That collision is what lets the first-committer-wins check
-at commit catch a concurrent duplicate, and it is the key the cluster write-intent map uses to
-resolve a cross-node conflict. Either way the engine recovers the primary key and performs a point
-lookup into the data CF for the full row.
+Secondary indexes live in their own column families, and every entry, unique or not, has the same
+layout. The key is the comparable index-column bytes followed by the comparable primary-key bytes,
+with a single zero byte for the value, so the engine recovers the primary key from the key's tail
+and performs a point lookup into the data CF for the full row.
+
+Because of that primary-key suffix, two rows with the same value in a `UNIQUE` index write two
+different index keys, which the commit-time conflict check, working key by key, would never see
+collide. So every write of a value into a `UNIQUE` secondary index also writes a sentinel key
+naming just the table, the index, and the value into a reserved column family, `__tidesdb_uniq`,
+shared by every table. Two concurrent transactions that write the same unique value collide on
+that one sentinel key, and when the second to commit runs at `SNAPSHOT` or higher the
+first-committer-wins check fails its `COMMIT` with `ER_ERROR_DURING_COMMIT` (ERROR 1180) wrapping
+handler error 149. A row whose indexed value is `NULL` in any part writes no sentinel, since SQL
+gives `NULL` no identity, and neither does a session that sets `tidesdb_skip_unique_check`. The
+same comparable unique value is the key the cluster write-intent map uses to resolve a cross-node
+conflict.
 
 On insert, update, or delete the engine maintains every secondary index inside the same
 transaction. For an update, it builds the old and new comparable index key for each index and

@@ -70,6 +70,23 @@ extern "C"
   contention and memtable backpressure map instead to HA_ERR_LOCK_WAIT_TIMEOUT,
   which rolls back only the current statement rather than the whole transaction.
 */
+/* The commit and prepare callbacks report under the hton_commit and hton_prepare contexts, and
+   those prefixes are what separate a failed COMMIT from an error raised inside a statement when the
+   counters are bumped.  Prepare counts as a commit because with the binary log on the server runs a
+   two-phase commit, so a conflict on an ordinary COMMIT surfaces at prepare. */
+static inline bool tdb_is_commit_ctx(const char *ctx)
+{
+    return ctx && (strncmp(ctx, "hton_commit", 11) == 0 || strncmp(ctx, "hton_prepare", 12) == 0);
+}
+
+static inline void tdb_count_error(const char *ctx, std::atomic<long long> &stmt_counter)
+{
+    if (tdb_is_commit_ctx(ctx))
+        tdb_stat_commit_conflicts.fetch_add(1, std::memory_order_relaxed);
+    else
+        stmt_counter.fetch_add(1, std::memory_order_relaxed);
+}
+
 int tdb_rc_to_ha(int rc, const char *ctx)
 {
     switch (rc)
@@ -80,6 +97,7 @@ int tdb_rc_to_ha(int rc, const char *ctx)
         /* Transient concurrency errors -- mapped to deadlock so MariaDB
            rolls back the transaction and the application can retry. */
         case TDB_ERR_CONFLICT:
+            tdb_count_error(ctx, tdb_stat_stmt_conflicts);
             return HA_ERR_LOCK_DEADLOCK;
 
         /* A galera applier brute-force aborted this local transaction so a higher-priority cluster
@@ -87,16 +105,19 @@ int tdb_rc_to_ha(int rc, const char *ctx)
            TDB_ERR_TXN_ABORTED.  Surface it as a deadlock so the losing side rolls back and retries,
            the same outcome InnoDB produces for the same cross-node race. */
         case TDB_ERR_TXN_ABORTED:
+            tdb_count_error(ctx, tdb_stat_stmt_bf_aborted);
             return HA_ERR_LOCK_DEADLOCK;
 
         /* The transaction outlived its timeout and the library aborted it; a lock-wait timeout is
            the closest server error and drives the same statement-level retry. */
         case TDB_ERR_TXN_EXPIRED:
+            tdb_count_error(ctx, tdb_stat_stmt_txn_expired);
             return HA_ERR_LOCK_WAIT_TIMEOUT;
 
         /* Lock wait timeout -- rolls back the current statement only
            (not the whole transaction), less disruptive than full deadlock. */
         case TDB_ERR_LOCKED:
+            tdb_count_error(ctx, tdb_stat_stmt_locked);
             return HA_ERR_LOCK_WAIT_TIMEOUT;
 
         /* Soft memtable-capacity backpressure from the library (memtable,
@@ -106,6 +127,7 @@ int tdb_rc_to_ha(int rc, const char *ctx)
            plugin it is a transient signal to retry.  Map it to lock-wait-timeout,
            which is the accurate name here (not deadlock; nothing is locked). */
         case TDB_ERR_MEMORY_LIMIT:
+            tdb_count_error(ctx, tdb_stat_stmt_memory_limit);
             return HA_ERR_LOCK_WAIT_TIMEOUT;
 
         /* Hard out-of-memory.  Distinct from TDB_ERR_MEMORY_LIMIT above
@@ -154,6 +176,7 @@ int tdb_rc_to_ha(int rc, const char *ctx)
            Map to HA_ERR_LOCK_DEADLOCK so MariaDB triggers its deadlock
            retry path instead of surfacing an opaque ER_GET_ERRNO 1030. */
         case TDB_ERR_UNKNOWN:
+            tdb_count_error(ctx, tdb_stat_stmt_conflicts);
             return HA_ERR_LOCK_DEADLOCK;
 
         default:
@@ -182,7 +205,7 @@ static ulong srv_flush_threads = 4;
 static ulong srv_compaction_threads = 4;
 static ulong srv_log_level = 0;                                      /* TDB_LOG_TRACE */
 static ulonglong srv_block_cache_size = TIDESDB_DEFAULT_BLOCK_CACHE; /* 256M */
-static ulong srv_max_open_sstables = 256;
+static ulong srv_max_open_sstables = 0;
 static my_bool srv_log_to_file = 1; /* write TidesDB logs to file (default is yes) */
 static ulonglong srv_log_truncation_at = 24ULL * 1024 * 1024; /* log file truncation size (24MB) */
 static ulonglong srv_memtable_write_buffer_size = 256ULL * 1024 * 1024; /* 256MB */
@@ -403,7 +426,7 @@ static MYSQL_SYSVAR_STR(ft_stopword_table, srv_ft_stopword_table,
                         "The table must have a VARCHAR column named 'value'. "
                         "When NULL (default), uses the same default stop words as "
                         "information_schema.INNODB_FT_DEFAULT_STOPWORD. "
-                        "Set to empty string to disable stop word filtering entirely",
+                        "Setting it to an empty string also restores the default list",
                         NULL, tdb_ft_stopword_table_update, NULL);
 
 static MYSQL_SYSVAR_ULONGLONG(block_cache_size, srv_block_cache_size,
@@ -411,11 +434,13 @@ static MYSQL_SYSVAR_ULONGLONG(block_cache_size, srv_block_cache_size,
                               "TidesDB global block cache size in bytes", NULL, NULL,
                               TIDESDB_DEFAULT_BLOCK_CACHE, 0, ULONGLONG_MAX, 0);
 
-static MYSQL_SYSVAR_ULONG(max_open_sstables, srv_max_open_sstables,
-                          PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Max cached SSTable structures in LRU cache.  0 means unlimited, "
-                          "bounded only by the process open-file limit",
-                          NULL, NULL, 256, 0, 65536, 0);
+static MYSQL_SYSVAR_ULONG(
+    max_open_sstables, srv_max_open_sstables, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+    "Maximum SSTable files kept open at once.  0 uses the library default of "
+    "1024.  The cap is lowered at open to fit the process open-file limit, and "
+    "a read that needs an unopened SSTable while the cap is full waits briefly "
+    "and then fails with a lock wait timeout",
+    NULL, NULL, 0, 0, 65536, 0);
 
 static MYSQL_SYSVAR_BOOL(log_to_file, srv_log_to_file, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                          "Write TidesDB logs to a LOG file in the data directory "
@@ -436,16 +461,16 @@ static MYSQL_SYSVAR_ULONGLONG(memtable_write_buffer_size, srv_memtable_write_buf
 
 static ulong srv_memtable_sync_mode = 2; /* FULL */
 
-static MYSQL_SYSVAR_ENUM(memtable_sync_mode, srv_memtable_sync_mode,
-                         PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                         "Sync mode for the WAL.  "
-                         "NONE keeps each commit staged in the log's in-process ring without handing "
-                         "it to the operating system, the fastest and least durable, so a process "
-                         "crash loses acknowledged commits.  INTERVAL hands each commit to the "
-                         "operating system and fsyncs periodically on the memtable_sync_interval "
-                         "timer.  FULL fsyncs on every commit and is the most durable.  This setting "
-                         "governs WAL durability for every commit",
-                         NULL, NULL, 2 /* FULL */, &sync_mode_typelib);
+static MYSQL_SYSVAR_ENUM(
+    memtable_sync_mode, srv_memtable_sync_mode, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
+    "Sync mode for the WAL.  "
+    "NONE keeps each commit staged in the log's in-process ring without handing "
+    "it to the operating system, the fastest and least durable, so a process "
+    "crash loses acknowledged commits.  INTERVAL hands each commit to the "
+    "operating system and fsyncs periodically on the memtable_sync_interval "
+    "timer.  FULL fsyncs on every commit and is the most durable.  This setting "
+    "governs WAL durability for every commit",
+    NULL, NULL, 2 /* FULL */, &sync_mode_typelib);
 
 static ulonglong srv_memtable_sync_interval = 128000;
 
@@ -565,6 +590,7 @@ static void tidesdb_backup_dir_update(THD *thd, struct st_mysql_sys_var *, void 
        self-deadlocks waiting for our own txn. */
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
+        if (trx) tdb_trx_free_retired(trx);
         if (trx && trx->txn)
         {
             tidesdb_txn_rollback(trx->txn);
@@ -646,6 +672,7 @@ static void tidesdb_checkpoint_dir_update(THD *thd, struct st_mysql_sys_var *, v
        this connection's still-open txn. */
     {
         tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
+        if (trx) tdb_trx_free_retired(trx);
         if (trx && trx->txn)
         {
             tidesdb_txn_rollback(trx->txn);
@@ -1104,8 +1131,8 @@ static struct st_mysql_storage_engine tidesdb_storage_engine = {MYSQL_HANDLERTON
 #define PLUGIN_AUTHOR "TidesDB Corp"
 #endif
 #ifndef PLUGIN_DESCRIPTION
-#define PLUGIN_DESCRIPTION                                                             \
-    "LSM B-tree engine with ACID transactions, MVCC concurrency, replication, and "    \
+#define PLUGIN_DESCRIPTION                                                          \
+    "LSM B-tree engine with ACID transactions, MVCC concurrency, replication, and " \
     "secondary, spatial, full-text and vector indexes"
 #endif
 #ifndef PLUGIN_LICENSE

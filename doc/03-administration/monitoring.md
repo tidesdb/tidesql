@@ -36,19 +36,25 @@ The report is organized into sections:
   totals, the segment count with how many are drainable or retired, and the reclaim calls and passes.
 - **Write Stalls** - writes throttled, writes blocked, total stall time, and admission ceiling hits.
 - **Block Cache** - enabled, entries, size, hits, misses, hit rate, and partitions.
-- **IO Device Writes** - per-device write count, bytes, and average and worst write latency for the
-  three devices the descriptor manager meters, the SSTable, WAL, and value-log devices, and these
-  are write-side figures only.
+- **IO Device Writes** - per-class write count, bytes, and average and worst write latency for the
+  SSTable, WAL, and value-log classes. Only files opened through the library's descriptor manager are
+  metered, which is every key log and write-ahead log, so the value-log line reads zero (its bytes
+  are in the Value Log and Write Amplification sections), and these are write-side figures only.
 - **Write Stalls By Reason** - the stall count with total and worst time for each cause a commit can
   stall on, splitting the aggregate stall time above across WAL append, memtable rotation, admission
   backlog, and manifest commit.
 - **Key Log Encoding** and **Value Log Encoding** - the chain count with the logical and stored byte
   totals and the realized compression ratio for each log.
 - **Tombstones** - total tombstones, the database-wide tombstone ratio, and the worst per-SSTable
-  density with the level it sits at.
+  density with the level it sits at. These aggregates are computed when the tombstone status
+  variables below are read, and this block prints the last values computed, so read
+  `SHOW GLOBAL STATUS LIKE 'tidesdb%tombstone%'` first when you need them current.
 - **Column Families** - a per-family breakdown after the aggregate sections, with each family's
-  level distribution, read amplification, B-tree shape, unflushed key count, and tombstone ratio,
-  followed by a per-level line of SSTable count, keys, tombstones, and bytes.
+  level count, keys and unflushed keys, bytes, read amplification, average key and value size,
+  B-tree shape, and tombstone ratio, followed by a per-level line of SSTable count, keys,
+  tombstones, and bytes, and the family's WAL bytes and compaction count. Internal families whose
+  names start with `__tidesdb` are left out, and families past the report's 32 KiB buffer are
+  truncated with a trailing note.
 
 ## The numbers to watch
 
@@ -99,5 +105,27 @@ gap is the signal to find and end that transaction.
 Divide `Tidesdb_klog_logical_bytes` by `Tidesdb_klog_stored_bytes`, and the value-log pair the same
 way, for the realized compression ratio of each log. A ratio near 1.0 on data you expected to
 compress means the codec is spending CPU for little gain, so the encoding pipeline is worth revisiting
-for that workload. The per-chain codec breakdown in `SHOW ENGINE TIDESDB STATUS` shows which codecs
-are in play.
+for that workload. The Key Log Encoding and Value Log Encoding blocks of `SHOW ENGINE TIDESDB STATUS`
+show the same totals with the number of codec chains in use.
+
+### commit_conflicts and the stmt_ counters
+
+Every library error the engine hands back to the server passes through one mapping, which also
+counts it. `Tidesdb_commit_conflicts` counts COMMIT statements that failed with a conflict-class
+error, a deadlock or a lock wait timeout. The client sees these as error 1180 ("Got error N during
+COMMIT"), wrapping handler error 149 (deadlock) for a write-write conflict. The server increments
+`Com_commit` for a failed COMMIT as well as a successful one, so subtract this counter to get
+committed transactions. When the transaction goes through two-phase commit, as it does with the
+binary log enabled, the conflict check runs in the prepare phase instead, and a conflict found there
+reaches the client as the same 1180 and is counted here as well.
+
+Errors raised inside a statement are counted by cause instead. `Tidesdb_stmt_conflicts` counts
+write-write conflicts, which reach the client as a deadlock (1213). `Tidesdb_stmt_bf_aborted` counts
+local transactions a Galera applier aborted, also a deadlock. `Tidesdb_stmt_locked` counts transient
+library contention that reached a statement, after the engine has retried a locked read, write,
+delete, or iterator open up to 16 times with a short growing backoff (a commit is never retried).
+`Tidesdb_stmt_memory_limit` counts memtable backpressure that outlasted the library's admission
+policy, and `Tidesdb_stmt_txn_expired` counts transactions that outlived their timeout. All three
+reach the client as a lock wait timeout (1205). A rising `stmt_conflicts` or `commit_conflicts` is
+real contention between transactions, while a rising `stmt_locked` or `stmt_memory_limit` points at
+the engine falling behind rather than at the workload.
