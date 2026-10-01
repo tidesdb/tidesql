@@ -155,7 +155,27 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
                 tidesdb_iter_prev(scan_iter);
         }
 
+        /* Data keys share one namespace that sorts after the table's meta keys, so a backward
+           seek that finds no row at or below the target lands on a meta key or off the front.
+           Either way there is no row.  iter_read_current would step forward past the meta keys
+           to the first row of the table, a row above the target, so answer here instead. */
+        if (!tidesdb_iter_valid(scan_iter)) return HA_ERR_KEY_NOT_FOUND;
+        {
+            uint8_t *bk = NULL;
+            size_t bks = 0;
+            tdb_owned_buf bk_g(bk);
+            if (tidesdb_iter_key(scan_iter, &bk, &bks) != TDB_SUCCESS || !is_data_key(bk, bks))
+                return HA_ERR_KEY_NOT_FOUND;
+        }
+
         int ret = iter_read_current(buf);
+        /* PREFIX_LAST asks for the last row carrying the prefix and nothing else.  When the
+           prefix has no rows the backward seek lands on a row of some other prefix, which the
+           handler contract does not allow us to return; older servers re-checked the prefix
+           themselves, newer ones rely on the engine. */
+        if (ret == 0 && find_flag == HA_READ_PREFIX_LAST &&
+            (current_pk_len_ < comp_len || memcmp(current_pk_buf_, comp_key, comp_len) != 0))
+            return HA_ERR_KEY_NOT_FOUND;
         if (ret == 0) scan_dir_ = DIR_BACKWARD;
         return ret;
     }
@@ -288,8 +308,9 @@ int ha_tidesdb::index_read_secondary(uchar *buf, const uchar *comp_key, uint com
         if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) return HA_ERR_KEY_NOT_FOUND;
         tdb_owned_buf ik_g(ik);
 
-        /* For EXACT match, we verify the index prefix matches */
-        if (find_flag == HA_READ_KEY_EXACT)
+        /* For EXACT and PREFIX_LAST, we verify the index prefix matches, since an empty prefix
+           leaves the seek on a neighbouring value the caller did not ask for */
+        if (find_flag == HA_READ_KEY_EXACT || find_flag == HA_READ_PREFIX_LAST)
         {
             if (iks < comp_len || memcmp(ik, comp_key, comp_len) != 0) return HA_ERR_KEY_NOT_FOUND;
         }

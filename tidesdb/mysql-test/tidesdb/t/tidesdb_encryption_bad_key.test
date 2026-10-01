@@ -6,6 +6,8 @@
 # with every column zeroed and no error, wrong data a client could not tell apart from a real row.
 # Rows are written under key id 2 from keys2.txt, the server is restarted with keys.txt, whose key
 # id 2 has different bytes, and every read of those rows must now report the decryption failure.
+# The checks read the handler error number from the diagnostics area and whether the index exists
+# from information_schema, since servers format the error text and SHOW CREATE TABLE differently.
 # An in-place ADD INDEX over them must stop rather than build an index from zeroed rows.  Restoring
 # the original key file makes the same rows readable again, unchanged.
 #
@@ -27,15 +29,27 @@ SELECT COUNT(*), SUM(n) FROM t1;
 --source include/restart_mysqld.inc
 
 --echo # a full scan fails instead of returning zeroed rows
+--disable_result_log
 --error ER_GET_ERRNO
 SELECT * FROM t1;
---echo # a primary key point read fails too
+--enable_result_log
+GET DIAGNOSTICS CONDITION 1 @msg = MESSAGE_TEXT;
+SELECT @msg LIKE 'Got error 192 %' AS decryption_failed;
+--echo # primary key point reads fail too.  The row envelope carries no integrity check, so a wrong
+--echo # key can decrypt one row to garbage that still passes the cipher's padding check, roughly
+--echo # one row in 256.  Reading every row by key keeps that from making the test pass by chance.
+--disable_result_log
 --error ER_GET_ERRNO
-SELECT * FROM t1 WHERE id = 7;
+SELECT * FROM t1 WHERE id IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16);
+--enable_result_log
+GET DIAGNOSTICS CONDITION 1 @msg = MESSAGE_TEXT;
+SELECT @msg LIKE 'Got error 192 %' AS decryption_failed;
 --echo # an in-place index build stops instead of indexing zeroed rows
 --error ER_INTERNAL_ERROR
 ALTER TABLE t1 ADD INDEX iv (v), ALGORITHM=INPLACE;
-SHOW CREATE TABLE t1;
+--echo # the table is left without the index
+SELECT COUNT(*) AS iv_index_parts FROM information_schema.statistics
+  WHERE table_schema = 'test' AND table_name = 't1' AND index_name = 'iv';
 
 --echo # restore the original key file, the rows read back unchanged
 --let $restart_parameters=--file-key-management-filename=$MYSQL_TEST_DIR/std_data/keys2.txt

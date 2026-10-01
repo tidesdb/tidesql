@@ -81,8 +81,6 @@ static inline int tidesdb_txn_delete_cf(tidesdb_txn_t *txn, tidesdb_column_famil
                              : tidesdb_txn_delete(txn, cf, key, key_size);
 }
 
-#include <unistd.h>
-
 /* The library reports transient contention on its read, iterator and write paths as
    TDB_ERR_LOCKED, which its own contract describes as nothing having been written and asking
    again being the remedy, typically a memtable rotation that outran the pin retries of a single
@@ -105,7 +103,7 @@ static inline int tdb_retry_locked(THD *thd, Op &&op)
         int rc = op();
         if (rc != TDB_ERR_LOCKED || attempt >= TDB_LOCKED_RETRY_MAX) return rc;
         if (thd && thd_killed(thd)) return rc;
-        usleep(wait_us);
+        my_sleep(wait_us); /* mysys, portable, microseconds */
         if (wait_us < TDB_LOCKED_BACKOFF_CAP_US) wait_us *= 2;
     }
 }
