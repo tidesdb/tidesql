@@ -54,6 +54,12 @@ SELECT MAX(o_id) FROM orders WHERE o_w_id=2;
 SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=3;
 SELECT MAX(o_id) FROM orders WHERE o_w_id=3;
 SELECT MAX(o_id) FROM orders WHERE o_w_id=0;
+--echo # plain ref reads of a missing primary key prefix must find nothing, including one that
+--echo # sorts before every row and one that falls between two existing prefixes
+SELECT o_id FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=0;
+SELECT o_id FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=1 AND o_d_id=3;
+SELECT COUNT(*) FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=0;
+SELECT o_id FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=1 AND o_d_id=1 ORDER BY o_id;
 
 --echo #
 --echo # ============================================

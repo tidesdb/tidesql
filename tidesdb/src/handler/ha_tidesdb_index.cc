@@ -96,6 +96,13 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
         tidesdb_iter_seek(scan_iter, seek_key, seek_len);
         pk_partial_exact_active_ = true;
         int ret = iter_read_current(buf);
+        /* The seek lands on the first key at or after the prefix, which belongs to the next
+           prefix when this one has no rows.  KEY_EXACT promises only matching rows, and a ref
+           access trusts that without checking, so a missing prefix must read as not found
+           rather than hand back the first row of whatever follows it. */
+        if (ret == 0 &&
+            (current_pk_len_ < comp_len || memcmp(current_pk_buf_, comp_key, comp_len) != 0))
+            return HA_ERR_KEY_NOT_FOUND;
         if (ret == 0) scan_dir_ = DIR_FORWARD;
         return ret;
     }

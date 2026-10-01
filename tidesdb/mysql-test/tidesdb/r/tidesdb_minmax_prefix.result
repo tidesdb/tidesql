@@ -57,6 +57,21 @@ NULL
 SELECT MAX(o_id) FROM orders WHERE o_w_id=0;
 MAX(o_id)
 NULL
+# plain ref reads of a missing primary key prefix must find nothing, including one that
+# sorts before every row and one that falls between two existing prefixes
+SELECT o_id FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=0;
+o_id
+SELECT o_id FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=1 AND o_d_id=3;
+o_id
+SELECT COUNT(*) FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=0;
+COUNT(*)
+0
+SELECT o_id FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=1 AND o_d_id=1 ORDER BY o_id;
+o_id
+1
+2
+3
+9775
 #
 # ============================================
 # Secondary index prefix takes the other seek path and must agree
