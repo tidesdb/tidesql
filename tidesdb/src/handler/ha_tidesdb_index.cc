@@ -96,6 +96,13 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
         tidesdb_iter_seek(scan_iter, seek_key, seek_len);
         pk_partial_exact_active_ = true;
         int ret = iter_read_current(buf);
+        /* The seek lands on the first key at or after the prefix, which belongs to the next
+           prefix when this one has no rows.  KEY_EXACT promises only matching rows, and a ref
+           access trusts that without checking, so a missing prefix must read as not found
+           rather than hand back the first row of whatever follows it. */
+        if (ret == 0 &&
+            (current_pk_len_ < comp_len || memcmp(current_pk_buf_, comp_key, comp_len) != 0))
+            return HA_ERR_KEY_NOT_FOUND;
         if (ret == 0) scan_dir_ = DIR_FORWARD;
         return ret;
     }
@@ -127,6 +134,23 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
     else if (find_flag == HA_READ_KEY_OR_PREV || find_flag == HA_READ_BEFORE_KEY ||
              find_flag == HA_READ_PREFIX_LAST || find_flag == HA_READ_PREFIX_LAST_OR_PREV)
     {
+        /* A backward seek on a partial primary key has to land on the last entry that
+           shares the prefix, which is what MAX on an index prefix asks for.  Every full
+           key carrying the prefix sorts after the bare prefix bytes, so seeking for prev
+           on the prefix itself stops one entry too early, on the tail of the previous
+           prefix group, and the lookup comes back empty.  Pad the pk portion with 0xFF
+           out to the full comparable length so the seek target is the greatest key the
+           prefix can take, the same upper bound the secondary index path builds.
+           BEFORE_KEY keeps the bare prefix because it wants the entry strictly before
+           the whole group. */
+        uint full_pk_comp_len = share->idx_comp_key_len[share->pk_index];
+        if (find_flag != HA_READ_BEFORE_KEY && comp_len < full_pk_comp_len)
+        {
+            uchar padded[DATA_KEY_BUF_LEN];
+            memcpy(padded, comp_key, comp_len);
+            memset(padded + comp_len, KEY_INF_HI_BYTE, full_pk_comp_len - comp_len);
+            seek_len = build_data_key(padded, full_pk_comp_len, seek_key);
+        }
         tidesdb_iter_seek_for_prev(scan_iter, seek_key, seek_len);
         if (find_flag == HA_READ_BEFORE_KEY && tidesdb_iter_valid(scan_iter))
         {
@@ -138,7 +162,27 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
                 tidesdb_iter_prev(scan_iter);
         }
 
+        /* Data keys share one namespace that sorts after the table's meta keys, so a backward
+           seek that finds no row at or below the target lands on a meta key or off the front.
+           Either way there is no row.  iter_read_current would step forward past the meta keys
+           to the first row of the table, a row above the target, so answer here instead. */
+        if (!tidesdb_iter_valid(scan_iter)) return HA_ERR_KEY_NOT_FOUND;
+        {
+            uint8_t *bk = NULL;
+            size_t bks = 0;
+            tdb_owned_buf bk_g(bk);
+            if (tidesdb_iter_key(scan_iter, &bk, &bks) != TDB_SUCCESS || !is_data_key(bk, bks))
+                return HA_ERR_KEY_NOT_FOUND;
+        }
+
         int ret = iter_read_current(buf);
+        /* PREFIX_LAST asks for the last row carrying the prefix and nothing else.  When the
+           prefix has no rows the backward seek lands on a row of some other prefix, which the
+           handler contract does not allow us to return; older servers re-checked the prefix
+           themselves, newer ones rely on the engine. */
+        if (ret == 0 && find_flag == HA_READ_PREFIX_LAST &&
+            (current_pk_len_ < comp_len || memcmp(current_pk_buf_, comp_key, comp_len) != 0))
+            return HA_ERR_KEY_NOT_FOUND;
         if (ret == 0) scan_dir_ = DIR_BACKWARD;
         return ret;
     }
@@ -271,8 +315,9 @@ int ha_tidesdb::index_read_secondary(uchar *buf, const uchar *comp_key, uint com
         if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) return HA_ERR_KEY_NOT_FOUND;
         tdb_owned_buf ik_g(ik);
 
-        /* For EXACT match, we verify the index prefix matches */
-        if (find_flag == HA_READ_KEY_EXACT)
+        /* For EXACT and PREFIX_LAST, we verify the index prefix matches, since an empty prefix
+           leaves the seek on a neighbouring value the caller did not ask for */
+        if (find_flag == HA_READ_KEY_EXACT || find_flag == HA_READ_PREFIX_LAST)
         {
             if (iks < comp_len || memcmp(ik, comp_key, comp_len) != 0) return HA_ERR_KEY_NOT_FOUND;
         }
@@ -583,7 +628,8 @@ int ha_tidesdb::index_last(uchar *buf)
 
             uint8_t *ik = NULL;
             size_t iks = 0;
-            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS)
+                DBUG_RETURN(HA_ERR_END_OF_FILE);
             tdb_owned_buf ik_g(ik);
 
             if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);

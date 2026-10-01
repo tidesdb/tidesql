@@ -1,6 +1,6 @@
 ---
 title: Table Maintenance
-description: Reading ANALYZE TABLE statistics, forcing compaction with OPTIMIZE and REPAIR, and verifying integrity with CHECK.
+description: Reading ANALYZE TABLE statistics, forcing compaction with OPTIMIZE and REPAIR, and what CHECK TABLE verifies.
 ---
 
 # Table Maintenance
@@ -21,13 +21,17 @@ demand and surfaces the internals below:
 [TIDESDB] level 2  sstables=1  size=636 bytes  keys=10
 [TIDESDB] level 3  sstables=0  size=0 bytes  keys=0
 [TIDESDB] idx CF 'demo__products__idx_idx_category'  keys=10  data_size=449 bytes  levels=5
+[TIDESDB] idx 'idx_category' sampled=10 distinct=4 rec_per_key=2
 ```
 
-The summary line reports the live key count (SSTable keys plus what is still in the memtable), the
+The summary line reports the key count (SSTable entries, which can still include superseded
+versions of a key, plus what is still in the memtable), the
 data size, the number of LSM levels, and the read amplification factor. Memtable and block-cache
 figures are database-level in TidesDB 10 and appear in `SHOW ENGINE TIDESDB STATUS` rather than per
 CF. Below the summary come the average key and value sizes and a per-level breakdown of SSTable
-count, size, and keys.
+count, size, and keys. Each secondary index then gets a line with its column family's key count,
+data size, and levels, and each non-unique index a line with the entries sampled (up to 100,000),
+the distinct index prefixes seen, and the resulting `rec_per_key`.
 
 When a column family holds B+tree nodes, an extra note reports the tree shape:
 
@@ -61,12 +65,14 @@ oversized flushes, and a high ratio with many points at L0 churn or an under-siz
 ## OPTIMIZE TABLE
 
 `OPTIMIZE TABLE` runs a synchronous compaction on every column family of the table, the data CF and
-each secondary-index CF, by calling `tidesdb_compact()` on each and blocking until it finishes. When
-no compaction is already running on those column families, the table is fully compacted once the
-statement returns, and the cached statistics are invalidated so the optimizer sees the
-post-compaction state promptly. If a background compaction already holds one of the column families,
-`OPTIMIZE` does not queue behind it. It returns a status asking the client to retry rather than
-blocking, since the compaction it wanted is usually already under way.
+each secondary-index CF, by calling `tidesdb_compact()` on each and blocking until it finishes.
+`tidesdb_compact()` runs one forced compaction pass, merging even when no trigger is due, and the
+cached statistics are invalidated afterwards so the optimizer sees the post-compaction state
+promptly. If a background compaction already holds one of the column families, `tidesdb_compact()`
+does not queue behind it and reports the family busy. `OPTIMIZE` then pushes a note saying a
+compaction was already in flight and returns `HA_ADMIN_TRY_ALTER`, which MariaDB answers by
+recreating the table and analyzing it ("Table does not support optimize, doing recreate + analyze
+instead"), so on a busy table the statement can turn into a full table rebuild.
 
 ```sql
 OPTIMIZE TABLE products;
@@ -77,20 +83,22 @@ or when `ANALYZE TABLE` reports high read amplification.
 
 ## CHECK TABLE and REPAIR TABLE
 
-`CHECK TABLE` verifies that every column family of the table is readable by fetching metadata from
-all SSTables, which validates that manifests, block indexes, bloom filters, and metadata blocks are
-intact. An unreadable SSTable is reported as corruption.
+`CHECK TABLE` fetches the statistics of every column family of the table, the data CF and each
+secondary-index CF, through `tidesdb_get_cf_stats()`, and reports the table as corrupt if any of
+those calls fails. The library builds these statistics from the SSTable metadata it already holds in
+memory, so the check is cheap but shallow. It does not read data blocks or verify their checksums.
 
 ```sql
 CHECK TABLE orders;
 ```
 
-`REPAIR TABLE` runs a full compaction (`tidesdb_compact()`) of every column family, close to
-`OPTIMIZE TABLE` but stricter about failure. Unlike `OPTIMIZE`, it does not defer when a column
-family is already compacting, and it treats a failure to compact the data column family as a repair
-failure rather than something to retry. The compaction reads and re-checksums every block, so a
-block that fails its checksum fails the repair rather than being dropped, and it drops expired TTL
-data and tombstones as it merges.
+`REPAIR TABLE` runs the same forced compaction pass (`tidesdb_compact()`) on every column family,
+close to `OPTIMIZE TABLE` but stricter about failure. Any failure to compact the data column family,
+including a background compaction already holding it, fails the repair rather than falling back to
+a rebuild. A failure on a secondary-index column family is logged as a warning and the repair still
+reports OK. A read or corruption error in the SSTables the data CF merge reads fails the repair
+rather than being skipped. As with any merge, expired TTL entries are rewritten as tombstones, and
+tombstones become eligible to drop once the merge reaches the largest level.
 
 ```sql
 REPAIR TABLE orders;

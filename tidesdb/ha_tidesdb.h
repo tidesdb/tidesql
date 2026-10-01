@@ -78,8 +78,8 @@ static inline void tdb_memalloc_sysvar_set(void *var_ptr, const char *value)
 
 /* The TideSQL plugin's own version, reported through tidesdb_version / _version_hex and the
    maria_declare_plugin block.  Distinct from the vendored library version (TIDESDB_VERSION). */
-#define TIDESQL_VERSION_STR "5.0.0"
-#define TIDESQL_VERSION_HEX 0x50000
+#define TIDESQL_VERSION_STR "5.1.0"
+#define TIDESQL_VERSION_HEX 0x50100
 
 /* shared compile-time constants (key/row format, spatial, fts, cost model, library defaults) */
 #include "ha_tidesdb_constants.h"
@@ -128,6 +128,10 @@ class TidesDB_share : public Handler_share
     /* Main data CF */
     tidesdb_column_family_t *cf;
     std::string cf_name;
+    /* The shared uniqueness-sentinel CF (see TIDESDB_UNIQ_SENTINEL_CF), resolved at open; NULL
+       means sentinels are unavailable and concurrent inserts of one UNIQUE value are not
+       serialized for this table. */
+    tidesdb_column_family_t *uniq_cf{nullptr};
 
     /* Primary key info */
     bool has_user_pk;
@@ -331,6 +335,13 @@ struct tidesdb_trx_t
        statement start and restored wholesale on rollback. */
     std::vector<fts_meta_delta_t> stmt_fts_snapshot;
     bool stmt_fts_dirty_snapshot{false};
+
+    /* Library transactions this connection stepped off in the middle of a statement, a bulk batch
+       committed or a clean transaction moved to READ_COMMITTED.  They are kept rather than reset or
+       freed because either one detaches every iterator still open under the transaction, and
+       another handler of the same statement, the source table of an INSERT ... SELECT or of an
+       ALTER copy, is usually still scanning through one.  Freed once the transaction ends. */
+    std::vector<tidesdb_txn_t *> retired_txns;
 
     /* When this connection's transaction has been XA PREPAREd, the serialized XID it was registered
        in the prepared-transaction map under, so a same-connection XA COMMIT/ROLLBACK (resolved
@@ -629,7 +640,7 @@ class ha_tidesdb : public handler
     /* unpack unpack_count packed fields from [from, from_end) into buf using the field plan. */
     void deserialize_unpack_fields(uchar *buf, const uchar *from, const uchar *from_end,
                                    uint unpack_count);
-    void deserialize_row(uchar *buf, const std::string &row);
+    int deserialize_row(uchar *buf, const std::string &row);
 
     /* Build memcmp-comparable key bytes into out[]; returns byte count */
     uint make_comparable_key(KEY *key_info, const uchar *record, uint num_parts, uchar *out,
@@ -651,6 +662,7 @@ class ha_tidesdb : public handler
 
     /* Build a secondary-index entry key into out[]; returns byte count */
     uint sec_idx_key(uint idx, const uchar *record, uchar *out);
+    uint unique_sentinel_key(uint idx, const uchar *record, uchar *out);
 
     /* Fetch a row by its PK bytes into buf; sets current_pk + last_row */
     int fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len, uchar *buf);

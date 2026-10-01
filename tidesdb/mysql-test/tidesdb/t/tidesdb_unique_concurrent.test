@@ -1,0 +1,174 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# A UNIQUE secondary index has to hold across concurrent snapshot transactions.  Each index entry
+# carries the row's primary key, so two transactions inserting the same unique value used to write
+# two different index keys, neither saw the other at its own snapshot, and both committed, leaving
+# two rows with one value in a UNIQUE column.  Every write of a unique value now also writes a
+# sentinel keyed by table, index and value alone, so the two writers collide on it at commit and
+# first-committer-wins keeps the constraint.  This pins that, in both commit orders, for updates
+# that move onto the same value, that NULL stays unconstrained, that a duplicate visible at the
+# snapshot is still a duplicate-key error, that unrelated values never collide, and that the
+# primary key path behaves the same way.  Enforcement survives TRUNCATE.
+#
+
+CREATE TABLE t (id INT PRIMARY KEY, u INT, UNIQUE KEY ku (u)) ENGINE=TIDESDB;
+CREATE TABLE tp (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+
+connect (con1, localhost, root,,test);
+connect (con2, localhost, root,,test);
+
+--echo #
+--echo # ============================================
+--echo # Two transactions insert the same UNIQUE value, the second to commit loses
+--echo # ============================================
+--echo #
+--connection con1
+BEGIN;
+SELECT COUNT(*) FROM t;
+--connection con2
+BEGIN;
+SELECT COUNT(*) FROM t;
+INSERT INTO t VALUES (20, 7);
+COMMIT;
+--connection con1
+--echo # con2's row is invisible at con1's snapshot, so the insert is accepted here
+INSERT INTO t VALUES (10, 7);
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+--connection default
+SELECT * FROM t ORDER BY id;
+
+--echo #
+--echo # ============================================
+--echo # Same race, other commit order
+--echo # ============================================
+--echo #
+--connection con1
+BEGIN;
+SELECT COUNT(*) FROM t;
+--connection con2
+BEGIN;
+SELECT COUNT(*) FROM t;
+--connection con1
+INSERT INTO t VALUES (30, 8);
+COMMIT;
+--connection con2
+INSERT INTO t VALUES (40, 8);
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+--connection default
+SELECT * FROM t ORDER BY id;
+
+--echo #
+--echo # ============================================
+--echo # Concurrent updates onto the same new value collide too
+--echo # ============================================
+--echo #
+INSERT INTO t VALUES (50, 50), (60, 60);
+--connection con1
+BEGIN;
+SELECT COUNT(*) FROM t;
+--connection con2
+BEGIN;
+SELECT COUNT(*) FROM t;
+UPDATE t SET u = 99 WHERE id = 60;
+COMMIT;
+--connection con1
+UPDATE t SET u = 99 WHERE id = 50;
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+--connection default
+SELECT * FROM t ORDER BY id;
+
+--echo #
+--echo # ============================================
+--echo # NULL carries no identity, concurrent NULLs both commit
+--echo # ============================================
+--echo #
+--connection con1
+BEGIN;
+SELECT COUNT(*) FROM t;
+--connection con2
+BEGIN;
+SELECT COUNT(*) FROM t;
+INSERT INTO t VALUES (70, NULL);
+COMMIT;
+--connection con1
+INSERT INTO t VALUES (80, NULL);
+COMMIT;
+--connection default
+SELECT id, u FROM t WHERE u IS NULL ORDER BY id;
+
+--echo #
+--echo # ============================================
+--echo # A duplicate visible at the snapshot is still a duplicate key, not a conflict
+--echo # ============================================
+--echo #
+--error ER_DUP_ENTRY
+INSERT INTO t VALUES (90, 7);
+
+--echo #
+--echo # ============================================
+--echo # Different values never collide
+--echo # ============================================
+--echo #
+--connection con1
+BEGIN;
+SELECT COUNT(*) FROM t;
+--connection con2
+BEGIN;
+SELECT COUNT(*) FROM t;
+INSERT INTO t VALUES (100, 100);
+COMMIT;
+--connection con1
+INSERT INTO t VALUES (110, 110);
+COMMIT;
+--connection default
+SELECT COUNT(*) FROM t;
+
+--echo #
+--echo # ============================================
+--echo # The primary key path, a commit-time conflict as before
+--echo # ============================================
+--echo #
+--connection con1
+BEGIN;
+SELECT COUNT(*) FROM tp;
+--connection con2
+INSERT INTO tp VALUES (1, 200);
+--connection con1
+INSERT INTO tp VALUES (1, 100);
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+--connection default
+SELECT * FROM tp;
+
+--echo #
+--echo # ============================================
+--echo # Enforcement survives TRUNCATE
+--echo # ============================================
+--echo #
+TRUNCATE TABLE t;
+--connection con1
+BEGIN;
+SELECT COUNT(*) FROM t;
+--connection con2
+BEGIN;
+SELECT COUNT(*) FROM t;
+INSERT INTO t VALUES (1, 7);
+COMMIT;
+--connection con1
+INSERT INTO t VALUES (2, 7);
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+--connection default
+SELECT * FROM t;
+
+disconnect con1;
+disconnect con2;
+--connection default
+DROP TABLE t, tp;
+
+--source include/cleanup_tidesdb.inc

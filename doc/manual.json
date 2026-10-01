@@ -1,7 +1,7 @@
 {
   "$comment": "Table of contents for the TideSQL manual, in reading order. TideSQL is the MariaDB storage engine that embeds the TidesDB library, and this manual is the companion to the TidesDB library manual. It documents the TideSQL 5.x line, which pairs with TidesDB v10. Minor and patch releases extend this same manual rather than starting a new one. The exact pinned release comes from the website's versions.js and is not repeated here.",
   "title": "TideSQL Manual",
-  "tidesdb": "10.0.0",
+  "tidesdb": "10.1.0",
   "parts": [
     {
       "id": "preface",

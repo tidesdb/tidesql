@@ -72,7 +72,7 @@
 #
 # Examples:
 #  ./install.sh
-#  ./install.sh --tidesdb-version 10.0.0 --mariadb-version mariadb-13.0.1
+#  ./install.sh --tidesdb-version v10.1.0 --mariadb-version mariadb-13.0.1
 #  ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
 #  ./install.sh --mariadb-version mariadb-13.0.1
 #  ./install.sh --skip-deps --skip-tidesdb
@@ -148,7 +148,7 @@ get_latest_tidesdb_version() {
     version=$(_fetch_url "https://api.github.com/repos/tidesdb/tidesdb/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "10.0.0"  # fallback, TidesDB 10.x tags drop the leading v
+        echo "v10.1.0"  # fallback, the TidesDB release TideSQL 5.1.0 pins
     else
         echo "$version"
     fi
@@ -997,7 +997,7 @@ plugin_load_add = ha_tidesdb.${plugin_ext}
 tidesdb_flush_threads = 4
 tidesdb_compaction_threads = 4
 tidesdb_block_cache_size = 256M
-tidesdb_max_open_sstables = 256
+tidesdb_max_open_sstables = 0
 tidesdb_log_level = WARN
 tidesdb_memtable_write_buffer_size = 256M
 

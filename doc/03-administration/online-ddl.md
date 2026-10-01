@@ -22,7 +22,10 @@ When table options change, the engine applies the new configuration to every liv
 data CF and each secondary-index CF, through `tidesdb_cf_update_runtime_config()` with
 `persist_to_disk=1`. The change takes effect for new work, new SSTables and new memtable activity,
 while existing SSTables keep their original settings and are read correctly. Cached share-level
-options such as isolation level, TTL, and encryption settings are updated in memory too.
+options such as isolation level, TTL, and encryption settings are updated in memory too. The
+exception is turning `ENCRYPTED` on or off, which changes the stored row format, so the engine
+refuses it inplace ("TidesDB rewrites every row on an encryption change, which needs a table copy")
+and MariaDB runs it as a copy.
 
 Add and drop column are instant because the packed row format carries a self-describing header with
 the null bitmap size and field count at write time. Reading an old row written before the change,
@@ -41,9 +44,11 @@ ALTER TABLE events COMPRESSION='ZSTD', ALGORITHM=INSTANT;
 Adding or dropping a non-FULLTEXT, non-SPATIAL secondary index runs inplace. The engine creates a
 new column family for the index, then scans the table to populate its entries. The build runs with
 no server-level lock blocking (`HA_ALTER_INPLACE_NO_LOCK`), so reads and writes proceed during it.
-Adding a `UNIQUE` index checks for duplicates during the scan and aborts with `ER_DUP_ENTRY` if any
-are found, and if any row's index put fails the whole `ALTER` rolls back rather than shipping a
-partial index. The population commits in batches to keep the transaction's write buffer bounded.
+Adding a `UNIQUE` index checks for duplicates during the scan, ignoring rows whose indexed value is
+NULL in any part, and aborts with `ER_DUP_ENTRY` if any are found. If any row's index put or batch
+commit fails the whole `ALTER` rolls back and drops the new column family rather than shipping a
+partial index. The population runs at READ COMMITTED and commits every 100 rows to keep the
+transaction's write buffer bounded, checking for `KILL` at the same interval.
 
 ```sql
 ALTER TABLE events ADD INDEX idx_ts (ts), ALGORITHM=INPLACE;
@@ -67,5 +72,6 @@ ALTER TABLE events MODIFY COLUMN data MEDIUMTEXT;
 ALTER TABLE events DROP PRIMARY KEY, ADD PRIMARY KEY (id, ts);
 ```
 
-The engine rejects `ALGORITHM=INPLACE` for these with a clear error, so a slow copy never happens
-where an instant change was expected.
+The engine reports these as not supported inplace, so an explicit `ALGORITHM=INPLACE` or
+`ALGORITHM=INSTANT` fails with an error and a slow copy never happens where an instant change was
+expected.

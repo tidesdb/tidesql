@@ -14,17 +14,18 @@ table is one column family for its rows plus one more per secondary index.
 **Comparable key** - the memcmp-comparable byte encoding TideSQL uses for keys, so byte order equals
 logical order. Integers are big-endian with the sign bit flipped, strings use the collation sort key.
 
-**Conflict footprint** - the set of reads and writes a transaction records so the library can run its
-first-committer-wins check at commit. A concurrent write to a footprinted row makes the losing
-transaction fail its commit.
+**Conflict footprint** - the keys a transaction records so the library can check it at commit, the
+keys it writes at `SNAPSHOT` and above, plus the keys and ranges it reads at `SERIALIZABLE`. A
+concurrent commit to a footprinted key makes the losing transaction fail its commit.
 
 **Covering read** - a query whose columns are all carried by the index key, so the engine
 materializes the row from the index bytes without a point-get into the data CF.
 
 **Data CF** - the column family that holds a table's row data, as opposed to the secondary-index CFs.
 
-**Dividing level** - the LSM level the library uses as its primary compaction target, computed from
-`MIN_LEVELS`, `LEVEL_SIZE_RATIO`, and `DIVIDING_LEVEL_OFFSET`.
+**Dividing level** - the LSM level, placed relative to the largest level by `DIVIDING_LEVEL_OFFSET`,
+where a merge writes its output partitioned to the largest level's file boundaries, so later merges
+can take one group of overlapping files at a time.
 
 **First-committer-wins** - the write-write conflict rule, where the first transaction to commit a
 change to a row succeeds and a second transaction that changed the same row fails at commit. It
@@ -35,9 +36,9 @@ for full serializable isolation.
 and persisted in a reserved catalog column family, with `CASCADE`, `SET NULL`, and `RESTRICT`
 referential actions. See [Foreign Keys](/reference/foreign-keys).
 
-**Klog and vlog** - the key log and value log of an SSTable. Values smaller than the database
-`value_separation_threshold` are stored inline in the klog, larger ones go to the vlog with a
-pointer in the klog. A table set `KEEP_VALUES_INLINE` keeps every value in the klog whatever its
+**Klog and vlog** - the key log of an SSTable and the database's shared value log. Values smaller
+than the database `value_separation_threshold` are stored inline in the klog, and values at or
+above it go to the vlog with a reference in the klog. A table set `KEEP_VALUES_INLINE` keeps every value in the klog whatever its
 size.
 
 **Memtable** - the in-memory skip list that absorbs writes before they flush to an SSTable. It is
@@ -60,6 +61,11 @@ primary CF.
 
 **Tombstone** - the marker a delete writes to hide an older value until compaction reclaims it. A
 high tombstone density slows range scans, which the tombstone-density trigger acts on.
+
+**Uniqueness sentinel** - the key naming a table, a `UNIQUE` secondary index, and a value that
+every write of that value also stores in the reserved `__tidesdb_uniq` column family, so two
+concurrent writers of the same value collide on one key at commit. See
+[Data Model](/concepts/data-model).
 
 **Write-intent map** - the process-wide record of each uncommitted write's key that lets a Galera
 applier find and brute-force abort a local transaction it conflicts with, the lock-free analogue of

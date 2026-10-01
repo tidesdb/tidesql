@@ -53,6 +53,9 @@ int ha_tidesdb::rename_table(const char *from, const char *to)
                         new_cf.c_str(), rc);
         DBUG_RETURN(tdb_rc_to_ha(rc, "rename_table"));
     }
+    /* Uniqueness sentinels are keyed by the old name and would only be orphaned by the rename, so
+       drop them; writes under the new name start their own. */
+    tdb_unique_sentinel_purge(old_cf);
 
     {
         std::string prefix = old_cf + CF_INDEX_INFIX;
@@ -124,6 +127,10 @@ static int tidesdb_drop_table_impl(const char *path)
     /* Remove this table's foreign-key catalog rows, on both the child and parent
        side, so a dropped table leaves no dangling constraint metadata. */
     ha_tidesdb::fk_purge_catalog(cf_name.c_str());
+
+    /* And its uniqueness sentinels, which live in the shared sentinel family rather than in any
+       column family dropped below. */
+    tdb_unique_sentinel_purge(cf_name);
 
     /* We collect secondary index CF names before dropping so we can
        force-remove their directories afterwards. */
@@ -297,6 +304,8 @@ int ha_tidesdb::delete_all_rows(void)
                             cf_name.c_str(), rc);
             DBUG_RETURN(tdb_rc_to_ha(rc, "truncate create_cf"));
         }
+        /* The rows are gone, so their uniqueness sentinels go too. */
+        tdb_unique_sentinel_purge(cf_name);
 
         share->cf = tidesdb_get_column_family(tdb_global, cf_name.c_str());
         if (!share->cf)

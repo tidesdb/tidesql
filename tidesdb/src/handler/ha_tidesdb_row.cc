@@ -370,7 +370,7 @@ void ha_tidesdb::deserialize_unpack_fields(uchar *buf, const uchar *from, const 
     }
 }
 
-void ha_tidesdb::deserialize_row(uchar *buf, const std::string &row)
+int ha_tidesdb::deserialize_row(uchar *buf, const std::string &row)
 {
     const std::string *plain = &row;
     std::string decrypted;
@@ -380,13 +380,16 @@ void ha_tidesdb::deserialize_row(uchar *buf, const std::string &row)
         decrypted = tidesdb_decrypt_row(row.data(), row.size(), share->encryption_key_id);
         if (decrypted.empty())
         {
-            /* Decryption failed! we zero record to avoid returning garbage */
-            memset(buf, 0, table->s->reclength);
-            return;
+            /* The row cannot be decrypted, its key version is gone from the keyring or the
+               ciphertext is damaged.  Report it rather than hand back a row, since any row we
+               returned here, zeroed or not, would be wrong data the caller cannot tell apart from
+               a real one. */
+            return HA_ERR_DECRYPTION_FAILED;
         }
         last_row = std::move(decrypted);
         plain = &last_row;
     }
 
     deserialize_row(buf, (const uchar *)plain->data(), plain->size());
+    return 0;
 }

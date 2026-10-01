@@ -1,0 +1,83 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# MIN and MAX on a primary key column behind an equality prefix are answered by
+# the optimizer with a single index lookup rather than a scan.  MAX asks the
+# engine for the last entry sharing the prefix (HA_READ_PREFIX_LAST).  On the
+# primary key path a backward seek on the bare prefix used to stop one entry
+# early, on the tail of the previous prefix group, so MAX came back NULL and the
+# plan reported no matching row even though the rows were there.  MIN seeks
+# forward and was always right.  This pins the corrected behaviour on the
+# TPC-C orders shape that surfaced it, plus the single-column prefix, the
+# secondary index path, an empty prefix group, and the equivalent DESC LIMIT 1.
+#
+
+--echo #
+--echo # ============================================
+--echo # TPC-C orders shape, composite PK with an equality prefix
+--echo # ============================================
+--echo #
+CREATE TABLE orders (o_id INT, o_d_id INT, o_w_id INT, o_c_id INT,
+  PRIMARY KEY (o_w_id, o_d_id, o_id),
+  KEY orders_i2 (o_w_id, o_d_id, o_c_id, o_id)) ENGINE=TIDESDB;
+INSERT INTO orders VALUES
+  (1,1,1,10), (2,1,1,11), (3,1,1,12), (9775,1,1,13),
+  (1,2,1,20), (5,2,1,21),
+  (1,1,2,30), (7,1,2,31);
+
+--echo # MIN and MAX together must both resolve, 1 and 9775
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=1;
+--echo # each alone
+SELECT MIN(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=1;
+SELECT MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=1;
+--echo # the optimizer answers this from the index, no table scan
+EXPLAIN SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=1;
+
+--echo # other prefix groups are unaffected and independent
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=2;
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=2 AND o_d_id=1;
+
+--echo #
+--echo # ============================================
+--echo # Single-column prefix, MAX spans every district of the warehouse
+--echo # ============================================
+--echo #
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1;
+SELECT MAX(o_id) FROM orders WHERE o_w_id=2;
+
+--echo #
+--echo # ============================================
+--echo # Empty prefix group must stay NULL, not borrow the previous group's tail
+--echo # ============================================
+--echo #
+SELECT MIN(o_id), MAX(o_id) FROM orders WHERE o_w_id=1 AND o_d_id=3;
+SELECT MAX(o_id) FROM orders WHERE o_w_id=3;
+SELECT MAX(o_id) FROM orders WHERE o_w_id=0;
+--echo # plain ref reads of a missing primary key prefix must find nothing, including one that
+--echo # sorts before every row and one that falls between two existing prefixes
+SELECT o_id FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=0;
+SELECT o_id FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=1 AND o_d_id=3;
+SELECT COUNT(*) FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=0;
+SELECT o_id FROM orders FORCE INDEX (PRIMARY) WHERE o_w_id=1 AND o_d_id=1 ORDER BY o_id;
+
+--echo #
+--echo # ============================================
+--echo # Secondary index prefix takes the other seek path and must agree
+--echo # ============================================
+--echo #
+SELECT MAX(o_id) FROM orders FORCE INDEX (orders_i2) WHERE o_w_id=1 AND o_d_id=1 AND o_c_id=13;
+SELECT MIN(o_id), MAX(o_id) FROM orders FORCE INDEX (orders_i2) WHERE o_w_id=1 AND o_d_id=1;
+
+--echo #
+--echo # ============================================
+--echo # Backward scan with a prefix, the same seek that DESC LIMIT 1 uses
+--echo # ============================================
+--echo #
+SELECT o_id FROM orders WHERE o_w_id=1 AND o_d_id=1 ORDER BY o_id DESC LIMIT 1;
+SELECT o_id FROM orders WHERE o_w_id=1 AND o_d_id=1 ORDER BY o_id DESC;
+SELECT o_id FROM orders WHERE o_w_id=1 ORDER BY o_d_id DESC, o_id DESC LIMIT 1;
+
+DROP TABLE orders;
+
+--source include/cleanup_tidesdb.inc

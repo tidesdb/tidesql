@@ -169,10 +169,11 @@ void ha_tidesdb::recover_counters()
                            deserialize path so field offsets are correct even when
                            variable-length fields (CHAR/VARCHAR) precede the
                            AUTO_INCREMENT column. */
+                        bool row_ok = true;
                         if (share->has_blobs || share->encrypted)
                         {
                             std::string row_data((const char *)val, val_size);
-                            deserialize_row(table->record[1], row_data);
+                            row_ok = deserialize_row(table->record[1], row_data) == 0;
                         }
                         else
                         {
@@ -184,9 +185,22 @@ void ha_tidesdb::recover_counters()
                            normally equal but the API does not guarantee it,
                            so use the explicit subtraction the deserialize
                            path already relies on. */
-                        ulonglong max_val = table->found_next_number_field->val_int_offset(
-                            (uint)(table->record[1] - table->record[0]));
-                        share->auto_inc_val.store(max_val, std::memory_order_relaxed);
+                        /* A last row that cannot be decrypted gives no maximum to seed from.
+                           Leave the counter alone rather than seed it from a row we could not
+                           read; the table's reads report the decryption failure themselves. */
+                        if (!row_ok)
+                        {
+                            sql_print_warning(
+                                "[TIDESDB] could not decrypt the last row of '%s', the "
+                                "AUTO_INCREMENT counter is not seeded from it",
+                                share->cf_name.c_str());
+                        }
+                        else
+                        {
+                            ulonglong max_val = table->found_next_number_field->val_int_offset(
+                                (uint)(table->record[1] - table->record[0]));
+                            share->auto_inc_val.store(max_val, std::memory_order_relaxed);
+                        }
                     }
                 }
             }
@@ -296,6 +310,14 @@ void ha_tidesdb::recover_auto_inc_secondary()
 int ha_tidesdb::open_init_share_columns(const char *name)
 {
     share->cf_name = path_to_cf_name(name);
+    /* The uniqueness sentinel family is shared by every table and brought into being by the first
+       table that opens, so a database that predates it gains it here with no migration. */
+    share->uniq_cf = tdb_unique_sentinel_cf(true);
+    if (!share->uniq_cf)
+        sql_print_warning(
+            "[TIDESDB] uniqueness sentinel column family unavailable, concurrent inserts of "
+            "the same UNIQUE value in table '%s' will not be serialized",
+            name);
     share->cf = tidesdb_get_column_family(tdb_global, share->cf_name.c_str());
     if (!share->cf)
     {

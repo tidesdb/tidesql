@@ -47,7 +47,7 @@ int ha_tidesdb::fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len
 
     uint8_t *value = NULL;
     size_t value_size = 0;
-    int rc = tidesdb_txn_get(txn, share->cf, dk, dk_len, &value, &value_size);
+    int rc = tdb_txn_get_blocking(cached_thd_, txn, share->cf, dk, dk_len, &value, &value_size);
     if (rc == TDB_ERR_NOT_FOUND) return HA_ERR_KEY_NOT_FOUND;
     if (rc != TDB_SUCCESS) return tdb_rc_to_ha(rc, "fetch_row_by_pk");
 
@@ -73,7 +73,7 @@ int ha_tidesdb::fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len
         std::string &backing = is_rec1 ? last_row2 : last_row;
         backing.assign((const char *)value, value_size);
         tidesdb_free(value);
-        deserialize_row(buf, backing);
+        if (int drc = deserialize_row(buf, backing)) return drc;
     }
     memcpy(current_pk_buf_, pk, pk_len);
     current_pk_len_ = pk_len;
@@ -168,7 +168,7 @@ int ha_tidesdb::iter_read_current(uchar *buf)
             bool is_rec1 = record1_lo_ && buf >= record1_lo_ && buf < record1_hi_;
             std::string &backing = is_rec1 ? last_row2 : last_row;
             backing.assign((const char *)value, value_size);
-            deserialize_row(buf, backing);
+            if (int drc = deserialize_row(buf, backing)) return drc;
         }
         return 0;
     }

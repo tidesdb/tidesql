@@ -1,6 +1,6 @@
 ---
 title: Write-Path Optimizations
-description: How the engine keeps delete-heavy and write-heavy workloads from degrading, through single-delete, the tombstone-density trigger, range-delete compaction, and backpressure absorption.
+description: How the engine keeps delete-heavy and write-heavy workloads from degrading, through single-delete, the tombstone-density trigger, range-delete compaction, batched bulk statements, and backpressure absorption.
 ---
 
 # Write-Path Optimizations
@@ -28,7 +28,9 @@ across INSERT, UPDATE, DELETE, `REPLACE INTO`, and `INSERT ... ON DUPLICATE KEY 
 composite bytes never see a second put without an intervening delete, so the single-delete contract
 holds by construction. The engine therefore uses single-delete for every secondary-index delete with
 no configuration, which covers three of the four tombstones per deleted row on a table with three
-secondary indexes.
+secondary indexes. The uniqueness sentinel a UNIQUE secondary index keeps in the shared
+`__tidesdb_uniq` column family is the exception. The same value can be written and removed any
+number of times over a sentinel's life, so its delete is a regular tombstone.
 
 ### Primary-CF single-delete, opt-in
 
@@ -58,14 +60,14 @@ tombstones accumulate inside SSTables until a compaction at the largest level re
 read over a deleted region pays for every tombstone the merge iterator skips.
 
 The tombstone-density trigger lets the engine act on this without waiting for a capacity or
-file-count trigger. After each flush it inspects level-1 SSTables and asks whether any one SSTable's
-tombstone count divided by entry count exceeds a ratio while holding at least a minimum entry count.
-A single witness escalates compaction. The `TOMBSTONE_DENSITY_TRIGGER` and
-`TOMBSTONE_DENSITY_MIN_ENTRIES` [table options](/reference/table-options) arm it, and the aggregates
-show up in the `Tidesdb_total_tombstones`, `Tidesdb_tombstone_ratio`,
-`Tidesdb_max_sst_tombstone_density`, and `Tidesdb_max_sst_tombstone_density_level`
-[status variables](/reference/status-variables) and in the Tombstones block of
-`SHOW ENGINE TIDESDB STATUS`.
+file-count trigger. When the library's compaction planner evaluates a column family, it asks whether
+any one SSTable, at any level, has a tombstone count divided by entry count at or above a ratio
+while holding at least a minimum entry count. A single witness escalates compaction. The
+`TOMBSTONE_DENSITY_TRIGGER` and `TOMBSTONE_DENSITY_MIN_ENTRIES`
+[table options](/reference/table-options) arm it, and the aggregates show up in the
+`Tidesdb_total_tombstones`, `Tidesdb_tombstone_ratio`, `Tidesdb_max_sst_tombstone_density`, and
+`Tidesdb_max_sst_tombstone_density_level` [status variables](/reference/status-variables) and in the
+Tombstones block of `SHOW ENGINE TIDESDB STATUS`.
 
 ## Compact after a range delete
 
@@ -85,9 +87,11 @@ never pays for it. The engine tracks the comparable minimum and maximum primary-
 the statement, two string swaps per `delete_row` with no extra scan or locking, and on
 `end_bulk_delete` compacts the observed range on the primary CF. Secondary-index tombstones are not
 compacted this way, because a PK range does not bound a secondary-index range, and are left to the
-tombstone-density trigger. The compaction runs on the caller's thread, so the DELETE returns only
-after it commits, and the threshold should be high enough that the compaction time is small relative
-to the DELETE that triggered it.
+tombstone-density trigger. The compaction runs synchronously on the caller's thread at the end of
+the statement, before the transaction commits, so the DELETE returns only after it finishes, and the
+threshold should be high enough that the compaction time is small relative to the DELETE that
+triggered it. If another compaction already holds the column family the request is skipped
+silently.
 
 ## Range tombstone for a whole-range delete
 
@@ -107,14 +111,36 @@ scattered rows, leaves more live rows than buffered keys, and the buffer falls b
 tombstones with no change in result. The whole thing lives in the transaction, so a `ROLLBACK`
 restores the rows like any other write.
 
-Deferral is skipped for a table with a delete trigger, since a deferred tombstone must never hide a
-row from a trigger reading the table mid-statement, and under Galera, where a deferred range
-tombstone would not line up with the per-row certification the write path already issues.
-Secondary-index entries are still deleted per row, because a primary-key range does not bound a
-secondary-index range, so the range tombstone covers the primary row CF alone. A delete larger than
-an internal cap flushes its buffer to per-row tombstones and finishes on the ordinary path, which
-keeps the buffered keys bounded to a few megabytes. When the range tombstone is written it already
-reclaims the span, so the compact-after-range-delete pass above is skipped for that statement.
+Deferral applies only to a table with an explicit primary key. It is skipped for a table with a
+delete trigger, since a deferred tombstone must never hide a row from a trigger reading the table
+mid-statement, and under Galera, where a deferred range tombstone would not line up with the per-row
+certification the write path already issues. Secondary-index entries are still deleted per row,
+because a primary-key range does not bound a secondary-index range, so the range tombstone covers
+the primary row CF alone. A run of fewer than 64 buffered rows is written as per-row tombstones
+without the completeness check, which would cost more than it saves. While it defers, the DELETE
+also holds off the batch commits described below. A delete larger than an internal cap of 262,144
+keys flushes its buffer to per-row tombstones and finishes on the ordinary path, which keeps the
+buffered keys bounded to a few megabytes. When the range tombstone is written it already reclaims
+the span, so the compact-after-range-delete pass above is skipped for that statement.
+
+## Batched bulk statements
+
+A multi-row INSERT, UPDATE, or DELETE that MariaDB runs as a bulk operation commits its writes in
+batches rather than holding the whole write set in one transaction. The engine counts one operation
+per row plus one per secondary index (two per secondary index for an UPDATE), and when the count
+reaches 500 (`TIDESDB_BULK_INSERT_BATCH_OPS`) it commits mid-statement. It does not reset the
+committed transaction. It begins a fresh READ COMMITTED transaction for the rest of the statement
+and parks the committed one until the transaction ends, because the source table of an
+`INSERT ... SELECT` or of an `ALTER` copy can still be scanning through an iterator opened under it,
+and a reset would end that scan early. Rows committed by a batch are durable, so a later failure in
+the same statement cannot roll them back.
+
+A bulk insert whose known row count times one plus the number of secondary indexes reaches the same
+threshold moves a transaction that holds no writes yet to a fresh READ COMMITTED transaction before
+its first row, the level it would drop to after the first batch anyway, so the first batch does not
+commit at the session's snapshot level either. A statement that stays under the threshold, a
+transaction that already holds writes, and an unknown row count, which LOAD DATA passes as zero, keep
+the session's level and its snapshot.
 
 ## Backpressure absorption
 
@@ -127,5 +153,12 @@ ceiling-hits counter is the sign that flush is not keeping up with ingest.
 
 Only when the library's own no-progress budget is spent, with the memtable, flush queue, or L0
 backlog still at its cap, does it return `TDB_ERR_MEMORY_LIMIT` to the plugin. The engine maps that
-to `HA_ERR_LOCK_WAIT_TIMEOUT`, which is the accurate name because nothing is locked, and the
-statement can be retried once flush has caught up.
+to `HA_ERR_LOCK_WAIT_TIMEOUT` (client error 1205 inside a statement), which is the accurate name
+because nothing is locked, counts it in `Tidesdb_stmt_memory_limit`, and the statement can be
+retried once flush has caught up.
+
+Transient contention the library reports as `TDB_ERR_LOCKED`, typically a memtable rotation that
+outran a single call's own retries, is absorbed in the engine as well. Its read, write, delete, and
+iterator-open wrappers ask again up to 16 times with a short growing backoff, stopping early if the
+session is killed, and only then surface a lock wait timeout. A commit is never retried, because a
+failed commit leaves the transaction aborted.

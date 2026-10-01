@@ -170,6 +170,33 @@ int ha_tidesdb::write_check_secondary_unique(const uchar *buf, tidesdb_txn_t *tx
     return 0;
 }
 
+/*
+  Build the uniqueness sentinel key for secondary index idx and the row in record, see the note on
+  TIDESDB_UNIQ_SENTINEL_CF.  Returns the key length, or 0 when no sentinel applies, which is every
+  index that is not a plain UNIQUE secondary index and any row whose indexed value is NULL in some
+  part, since SQL gives NULL no identity and such a row is never constrained.  The same NULL rule
+  the galera write-intent key uses, so the two stay in step.
+*/
+uint ha_tidesdb::unique_sentinel_key(uint idx, const uchar *record, uchar *out)
+{
+    if (idx >= table->s->keys) return 0;
+    if (share->has_user_pk && idx == share->pk_index) return 0;
+    if (idx >= share->idx_cfs.size() || !share->idx_cfs[idx]) return 0;
+    if (share->idx_is_fts[idx] || share->idx_is_spatial[idx]) return 0;
+    KEY *ki = &table->key_info[idx];
+    if (!(ki->flags & HA_NOSAME)) return 0;
+    for (uint p = 0; p < ki->user_defined_key_parts; p++)
+        if (ki->key_part[p].field->is_null_in_record(record)) return 0;
+
+    const std::string &cfn = share->cf_name;
+    uint pos = (uint)cfn.size();
+    memcpy(out, cfn.data(), pos);
+    out[pos++] = 0;
+    out[pos++] = (uchar)idx;
+    pos += make_comparable_key(ki, record, ki->user_defined_key_parts, out + pos);
+    return pos;
+}
+
 int ha_tidesdb::write_maintain_indexes(const uchar *buf, tidesdb_txn_t *txn, tidesdb_trx_t *trx,
                                        const uchar *pk, uint pk_len, time_t row_ttl)
 {
@@ -251,6 +278,21 @@ int ha_tidesdb::write_maintain_indexes(const uchar *buf, tidesdb_txn_t *txn, tid
             int rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], ik, ik_len,
                                           &tdb_empty_val, sizeof(tdb_empty_val), row_ttl);
             if (rc != TDB_SUCCESS) return rc;
+
+            /* The uniqueness sentinel, so a concurrent insert of the same UNIQUE value lands on
+               this same key and the two collide at commit.  Skipped along with the uniqueness
+               check when the session asked for that. */
+            if (share->uniq_cf && !cached_skip_unique_)
+            {
+                uchar sk[TIDESDB_UNIQ_SENTINEL_BUF_LEN];
+                uint sk_len = unique_sentinel_key(i, buf, sk);
+                if (sk_len)
+                {
+                    rc = tdb_txn_put_blocking(cached_thd_, txn, share->uniq_cf, sk, sk_len,
+                                              &tdb_empty_val, sizeof(tdb_empty_val), row_ttl);
+                    if (rc != TDB_SUCCESS) return rc;
+                }
+            }
         }
     }
     return TDB_SUCCESS;
@@ -622,6 +664,21 @@ int ha_tidesdb::delete_maintain_indexes(const uchar *buf, tidesdb_txn_t *txn, ti
             int rc =
                 tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], ik, ik_len, true);
             if (rc != TDB_SUCCESS) return rc;
+
+            /* Retire the value's uniqueness sentinel with the row.  A plain delete rather than a
+               single delete, since the same value can be written and removed any number of times
+               over the sentinel's life. */
+            if (share->uniq_cf && !cached_skip_unique_)
+            {
+                uchar sk[TIDESDB_UNIQ_SENTINEL_BUF_LEN];
+                uint sk_len = unique_sentinel_key(i, buf, sk);
+                if (sk_len)
+                {
+                    rc = tdb_txn_delete_cf_blocking(cached_thd_, txn, share->uniq_cf, sk, sk_len,
+                                                    false);
+                    if (rc != TDB_SUCCESS) return rc;
+                }
+            }
         }
     }
     return TDB_SUCCESS;
@@ -692,19 +749,13 @@ int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
         return tdb_rc_to_ha(crc, "bulk_commit");
     }
 
-    int rrc = tidesdb_txn_reset(trx->txn, TDB_ISOLATION_READ_COMMITTED);
-    if (rrc != TDB_SUCCESS)
-    {
-        sql_print_warning(
-            "[TIDESDB] bulk tidesdb_txn_reset failed (rc=%d), falling back to "
-            "free+begin",
-            rrc);
-        tidesdb_txn_free(trx->txn);
-        trx->txn = NULL;
-        int rc =
-            tidesdb_txn_begin_with_isolation(tdb_global, TDB_ISOLATION_READ_COMMITTED, &trx->txn);
-        if (rc != TDB_SUCCESS) return tdb_rc_to_ha(rc, "bulk_commit txn_begin");
-    }
+    /* Carry on in a fresh transaction rather than resetting this one.  The source of an
+       INSERT ... SELECT or an ALTER copy is scanned by another handler through an iterator opened
+       under this same transaction, and a reset detaches it, which ends that scan early with no
+       error and silently drops every row it had not reached. */
+    int rrc = tdb_trx_retire_and_begin(trx, TDB_ISOLATION_READ_COMMITTED);
+    if (rrc != TDB_SUCCESS) return tdb_rc_to_ha(rrc, "bulk_commit txn_begin");
+    trx->isolation_level = TDB_ISOLATION_READ_COMMITTED;
 
     stmt_txn = trx->txn;
     trx->txn_generation++;
@@ -730,6 +781,62 @@ void ha_tidesdb::start_bulk_insert(ha_rows rows, uint flags)
 {
     in_bulk_insert_ = true;
     bulk_insert_ops_ = 0;
+
+    /* A bulk statement flushes its writes in bounded batches through
+       maybe_bulk_commit, and after the first batch it resets the transaction
+       to READ_COMMITTED so the later ones take no commit-time reservation.
+       The first batch, though, still commits at whatever level the session
+       opened the transaction with, SNAPSHOT for a BEGIN block, and that
+       reservation aborts conservatively whenever another committer's
+       in-flight key happens to share a slot in the reservation table.  Two
+       loaders writing disjoint keys therefore collide on their first batch,
+       and since a real commit hands the transaction back at the session
+       level, the exposure comes back after every COMMIT the loader issues.
+       Bulk runs at READ_COMMITTED by design, so start it there when the
+       transaction carries no writes yet.  One that already holds writes is
+       left alone, because a reset would discard them.
+
+       Only a statement that will actually reach the batch threshold and
+       mid-commit is exposed, and the reset costs the transaction its read
+       snapshot, which a small multi-row INSERT inside a BEGIN block relies on
+       keeping.  So a statement that stays under the threshold is left to
+       commit with its transaction as before, and only one that would have
+       dropped to READ_COMMITTED after its first batch anyway is moved there
+       up front.  An unknown row count, which LOAD DATA passes as zero, is
+       left alone rather than guessed at. */
+    if (rows == 0 || rows * (1 + share->num_secondary_indexes) < TIDESDB_BULK_INSERT_BATCH_OPS)
+        return;
+    tidesdb_trx_t *trx = cached_trx_;
+    if (!trx || !trx->txn || trx->dirty || trx->isolation_level <= TDB_ISOLATION_READ_COMMITTED)
+        return;
+
+    /* Switch to a fresh transaction rather than resetting this one, since the statement's source
+       table may already have a scan open under it, see maybe_bulk_commit. */
+    int rrc = tdb_trx_retire_and_begin(trx, TDB_ISOLATION_READ_COMMITTED);
+    if (rrc != TDB_SUCCESS)
+    {
+        sql_print_warning(
+            "[TIDESDB] bulk start could not begin a read committed transaction (rc=%d), "
+            "leaving the transaction at its session level",
+            rrc);
+        return;
+    }
+    trx->isolation_level = TDB_ISOLATION_READ_COMMITTED;
+    trx->txn_generation++;
+    stmt_txn = trx->txn;
+    if (scan_iter)
+    {
+        tidesdb_iter_free(scan_iter);
+        scan_iter = NULL;
+        scan_iter_cf_ = NULL;
+        scan_iter_txn_ = NULL;
+    }
+    scan_txn = trx->txn;
+    /* The reset voids the statement savepoint armed in external_lock.  With
+       no writes in the transaction a statement rollback and a full rollback
+       come to the same thing, so disarming it changes nothing. */
+    trx->stmt_savepoint_active = false;
+    trx->stmt_fts_snapshot.clear();
 }
 
 int ha_tidesdb::end_bulk_insert()

@@ -11,11 +11,11 @@ but inherits whole from the TidesDB release it links.
 variables, and the observable SQL behavior of the engine. Anything reachable
 only by editing plugin source carries no compatibility guarantee.
 
-## TideSQL 5.0.0 pairs with TidesDB v10.x.x
+## TideSQL 5.x pairs with TidesDB v10.x.x
 
 Each TideSQL release links exactly one TidesDB release and stores data in that
-library's on-disk format. TideSQL 5.0.0 links TidesDB v10.x.x and writes the
-v10 format line. The plugin version and the library version keep their own
+library's on-disk format. TideSQL 5.x links TidesDB v10.x.x and writes the v10
+format line; 5.1.0 is pinned to TidesDB v10.1.0. The plugin version and the library version keep their own
 cadence, so the pairing is recorded here and surfaced at runtime through the
 `tidesdb_version` status variable for the plugin and `tidesdb_library_version`
 for the linked library.
@@ -56,6 +56,7 @@ format line.
 | TideSQL | TidesDB library | On-disk format | Rollback boundary            |
 |---------|-----------------|----------------|------------------------------|
 | 5.0.0   | 10.x.x          | 10             | any TideSQL linking format 10 |
+| 5.1.0   | 10.1.0          | 10             | any TideSQL linking format 10 |
 
 - **TideSQL 5.0.0 opens the v10 format line** by linking TidesDB v10.x.x. It
   reads only the v10 format, so a database created by an earlier release line
@@ -66,6 +67,11 @@ format line.
   TidesDB release that writes format 10. A minor that moves to a new format must
   make it opt-in and default-off, which is what keeps that column true, and the
   release that changes it updates this table in the same commit.
+- **TideSQL 5.1.0 requires TidesDB v10.1.0.** It keeps format 10, so a
+  database moves between 5.0.0 and 5.1.0 in either direction without a dump.
+  It needs v10.1.0 at build time, since it relies on 10.1.0's contract that
+  resetting or freeing a transaction detaches the iterators still open under
+  it.
 
 Add a row per release. A release that moves none of the columns still gets a
 row, because "unchanged" is the answer an operator is looking for.

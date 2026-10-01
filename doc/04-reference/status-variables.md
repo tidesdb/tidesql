@@ -18,8 +18,8 @@ statement costs a single stats pass.
 
 | Variable | Description |
 |----------|-------------|
-| `Tidesdb_version` | TideSQL plugin version string, for example `5.0.0` |
-| `Tidesdb_version_hex` | Plugin version as an integer, for example `327680` for `0x50000` |
+| `Tidesdb_version` | TideSQL plugin version string, for example `5.1.0` |
+| `Tidesdb_version_hex` | Plugin version as an integer, for example `327936` for `0x50100` |
 | `Tidesdb_library_version` | Linked TidesDB library version string |
 
 ## Sequence and transactions
@@ -31,6 +31,22 @@ statement costs a single stats pass.
 | `Tidesdb_min_snapshot_sequence` | Oldest pinned snapshot, the floor compaction cannot reclaim past |
 | `Tidesdb_active_transactions` | Transactions currently joined to the MVCC registry |
 | `Tidesdb_txn_memory_bytes` | Memory held by in-flight transactions in bytes |
+
+## Transaction errors
+
+Counters bumped each time a library error is mapped to a server error. A failure at COMMIT counts
+once in `Tidesdb_commit_conflicts` whatever its cause, and a failure inside a statement counts in
+the `Tidesdb_stmt_*` counter for its cause, so real contention can be told apart from engine churn. These are read live rather than through the
+refresh window.
+
+| Variable | Description |
+|----------|-------------|
+| `Tidesdb_commit_conflicts` | COMMIT statements that failed with a deadlock or lock wait timeout error. The server counts a failed COMMIT in `Com_commit` too, so subtract this to get successful commits |
+| `Tidesdb_stmt_conflicts` | Statements that failed on a write conflict, returned as a deadlock error |
+| `Tidesdb_stmt_locked` | Statements that failed on transient contention the library reports as locked, returned as a lock wait timeout after a short bounded retry |
+| `Tidesdb_stmt_memory_limit` | Statements that failed on memtable backpressure, returned as a lock wait timeout |
+| `Tidesdb_stmt_txn_expired` | Statements that failed because the transaction outlived `tidesdb_txn_timeout_seconds`, returned as a lock wait timeout |
+| `Tidesdb_stmt_bf_aborted` | Statements that failed because a Galera applier brute-force aborted the transaction, returned as a deadlock error |
 
 ## Memory and storage
 

@@ -289,6 +289,27 @@ int ha_tidesdb::index_end()
 int ha_tidesdb::read_range_first(const key_range *start_key, const key_range *end_key,
                                  bool eq_range_arg, bool sorted)
 {
+    /* An equality range names one value, as each value of k IN (...) does.  Opening a bounded
+       iterator for it costs a memtable pin, a collection of the overlapping sstables and a read
+       hold, which is more than the pruning saves on a range this small, and the server hands us one
+       such range per value.  So an equality range reuses one unbounded iterator across the
+       statement and only seeks it.  That holds while this handler has written nothing in the
+       statement, since an iterator does not see writes made after it was opened; after a write
+       every range gets a fresh iterator as before. */
+    if (eq_range_arg && !stmt_txn_dirty)
+    {
+        if (scan_iter && scan_range_valid_)
+        {
+            tidesdb_iter_free(scan_iter);
+            scan_iter = NULL;
+            scan_iter_last_err_ = 0;
+        }
+        scan_range_valid_ = false;
+        scan_range_lo_len_ = 0;
+        scan_range_hi_len_ = 0;
+        return handler::read_range_first(start_key, end_key, eq_range_arg, sorted);
+    }
+
     if (scan_iter)
     {
         tidesdb_iter_free(scan_iter);

@@ -1,0 +1,45 @@
+call mtr.add_suppression("\\[TIDESDB\\] encryption_crypt\\(decrypt\\) failed");
+call mtr.add_suppression("\\[TIDESDB\\] encryption_key_get failed");
+call mtr.add_suppression("\\[TIDESDB\\] could not decrypt the last row");
+call mtr.add_suppression("Got error 192");
+CREATE TABLE t1 (id INT PRIMARY KEY, v VARCHAR(20), n INT) ENGINE=TIDESDB ENCRYPTED=YES ENCRYPTION_KEY_ID=2;
+INSERT INTO t1 VALUES (1,'one',10),(2,'two',20),(3,'three',30),(4,'four',40),(5,'five',50),
+(6,'six',60),(7,'seven',70),(8,'eight',80),(9,'nine',90),(10,'ten',100),
+(11,'eleven',110),(12,'twelve',120),(13,'thirteen',130),(14,'fourteen',140),
+(15,'fifteen',150),(16,'sixteen',160);
+SELECT COUNT(*), SUM(n) FROM t1;
+COUNT(*)	SUM(n)
+16	1360
+# restart with a key file whose key id 2 has different bytes
+# restart: --file-key-management-filename=MYSQL_TEST_DIR/std_data/keys.txt
+# a full scan fails instead of returning zeroed rows
+SELECT * FROM t1;
+GET DIAGNOSTICS CONDITION 1 @msg = MESSAGE_TEXT;
+SELECT @msg LIKE 'Got error 192 %' AS decryption_failed;
+decryption_failed
+1
+# primary key point reads fail too.  The row envelope carries no integrity check, so a wrong
+# key can decrypt one row to garbage that still passes the cipher's padding check, roughly
+# one row in 256.  Reading every row by key keeps that from making the test pass by chance.
+SELECT * FROM t1 WHERE id IN (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16);
+GET DIAGNOSTICS CONDITION 1 @msg = MESSAGE_TEXT;
+SELECT @msg LIKE 'Got error 192 %' AS decryption_failed;
+decryption_failed
+1
+# an in-place index build stops instead of indexing zeroed rows
+ALTER TABLE t1 ADD INDEX iv (v), ALGORITHM=INPLACE;
+ERROR HY000: Internal error: [TIDESDB] a row could not be decrypted during index build
+# the table is left without the index
+SELECT COUNT(*) AS iv_index_parts FROM information_schema.statistics
+WHERE table_schema = 'test' AND table_name = 't1' AND index_name = 'iv';
+iv_index_parts
+0
+# restore the original key file, the rows read back unchanged
+# restart: --file-key-management-filename=MYSQL_TEST_DIR/std_data/keys2.txt
+SELECT COUNT(*), SUM(n) FROM t1;
+COUNT(*)	SUM(n)
+16	1360
+SELECT * FROM t1 WHERE id = 7;
+id	v	n
+7	seven	70
+DROP TABLE t1;

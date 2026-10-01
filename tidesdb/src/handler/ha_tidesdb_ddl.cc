@@ -77,7 +77,8 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
        the rows already in the table have to be rewritten.  It reaches us as a create-option change,
        which would otherwise ride the instant path and leave old rows in the wrong format while the
        read path now treated them as the other, corrupting access to them.  Force a copy so every
-       row is rewritten through write_row, the same reason FULLTEXT and SPATIAL force a copy below. */
+       row is rewritten through write_row, the same reason FULLTEXT and SPATIAL force a copy below.
+     */
     if ((flags & ALTER_CHANGE_CREATE_OPTION) && TDB_TABLE_OPTIONS(table) &&
         TDB_TABLE_OPTIONS(altered_table) &&
         TDB_TABLE_OPTIONS(table)->encrypted != TDB_TABLE_OPTIONS(altered_table)->encrypted)
@@ -272,7 +273,7 @@ int ha_tidesdb::inplace_add_row_entries(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
     if (share->has_blobs || share->encrypted)
     {
         std::string row_data((const char *)val_data, val_size);
-        deserialize_row(table->record[0], row_data);
+        if (deserialize_row(table->record[0], row_data)) return 3;
     }
     else
     {
@@ -508,6 +509,9 @@ bool ha_tidesdb::inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
         {
             if (prc == 1)
                 my_error(ER_DUP_ENTRY, MYF(0), "?", altered_table->key_info[fail_key_num].name.str);
+            else if (prc == 3)
+                my_error(ER_INTERNAL_ERROR, MYF(0),
+                         "[TIDESDB] a row could not be decrypted during index build");
             else
                 my_error(ER_INTERNAL_ERROR, MYF(0),
                          "[TIDESDB] per-row put failed during index build");

@@ -14,14 +14,14 @@ is the default new sessions inherit).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `tidesdb_flush_threads` | 4 | Background threads flushing memtables to SSTables. 0 lets the library auto-size the shared flush pool to min(CPU count, 4) at open |
+| `tidesdb_flush_threads` | 4 | Background threads flushing memtables to SSTables. 0 uses the library default of 2 |
 | `tidesdb_compaction_threads` | 4 | Background threads running LSM compaction |
 | `tidesdb_log_level` | TRACE | Library log level, one of TRACE, INFO, WARN, ERROR, NONE |
 | `tidesdb_block_cache_size` | 256 MB | Size in bytes of the global block cache shared across all column families |
-| `tidesdb_max_open_sstables` | 256 | Maximum SSTable structures cached in the LRU. 0 means unlimited, bounded only by the process open-file limit |
+| `tidesdb_max_open_sstables` | 0 | Maximum SSTable file handles the library keeps open, from 0 to 65536. 0 uses the library default of 1024. The library lowers the cap at open to fit the process open-file limit. When the cap is full and idle handles cannot be reclaimed in time, a read that has to open another SSTable fails with error 1205 |
 | `tidesdb_log_to_file` | ON | Write library logs to a LOG file in the data directory instead of stderr |
 | `tidesdb_log_truncation_at` | 24 MB | Log file truncation size in bytes. 0 disables truncation |
-| `tidesdb_memtable_write_buffer_size` | 256 MB | Write buffer size in bytes for the shared memtable. 0 lets the library auto-size it |
+| `tidesdb_memtable_write_buffer_size` | 256 MB | Write buffer size in bytes for the shared memtable. 0 uses the library default of 64 MB |
 | `tidesdb_memtable_sync_mode` | FULL | WAL durability for every commit, one of NONE, INTERVAL, FULL. See [Durability](/concepts/durability) |
 | `tidesdb_memtable_sync_interval` | 128000 | WAL sync interval in microseconds, used only when the sync mode is INTERVAL |
 | `tidesdb_memtable_skip_list_max_level` | 0 | Skip-list max level for the memtable. 0 keeps the library default |
@@ -44,7 +44,7 @@ is the default new sessions inherit).
 | `tidesdb_fts_bm25_k1` | 1.2 | BM25 k1 parameter, term-frequency saturation |
 | `tidesdb_fts_bm25_b` | 0.75 | BM25 b parameter, document-length normalization from 0 to 1 |
 | `tidesdb_fts_blend_chars` | (empty) | Characters treated as both separators and word characters. Set to `'` for Italian and French elision. See [Full-Text Search](/reference/full-text-search) |
-| `tidesdb_ft_stopword_table` | NULL | Custom stop-word table in `db_name/table_name` form. NULL uses the InnoDB default list, empty string disables stop-word filtering |
+| `tidesdb_ft_stopword_table` | NULL | Custom stop-word table in `db_name/table_name` form. NULL or an empty string uses the InnoDB default list |
 
 ## Session, with a global default
 
@@ -55,7 +55,7 @@ when `CREATE TABLE` does not set it.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `tidesdb_ttl` | 0 | Per-session TTL in seconds applied to INSERT and UPDATE. 0 uses the table default. Works with `SET SESSION` and `SET STATEMENT`. See [Time-To-Live](/reference/ttl) |
-| `tidesdb_skip_unique_check` | OFF | Skip uniqueness checks on the primary key and unique secondary indexes during INSERT. Safe only when the application guarantees no duplicates |
+| `tidesdb_skip_unique_check` | OFF | Skip uniqueness checks on the primary key and unique secondary indexes during INSERT and UPDATE. It also skips the sentinel key each UNIQUE secondary value writes to the reserved `__tidesdb_uniq` column family, which is what makes two concurrent transactions writing the same UNIQUE value collide at commit, so the second to commit gets a deadlock error. Safe only when the application guarantees no duplicates |
 | `tidesdb_single_delete_primary` | OFF | Use single-delete semantics on the primary row CF for this session's DELETEs. See [Write-Path Optimizations](/internals/write-path) |
 | `tidesdb_compact_after_range_delete_min_rows` | 0 | After a multi-row DELETE touching at least this many rows, compact the touched primary-key range synchronously. 0 disables it |
 | `tidesdb_default_compression` | LZ4 | Default `COMPRESSION` for new tables |

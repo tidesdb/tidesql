@@ -32,6 +32,14 @@
 #include "sql_class.h"
 #include "sql_priv.h"
 #include "src/engine/ha_tidesdb_status.h"
+
+/* The engine error counters declared in the header, see the note there. */
+std::atomic<long long> tdb_stat_commit_conflicts{0};
+std::atomic<long long> tdb_stat_stmt_conflicts{0};
+std::atomic<long long> tdb_stat_stmt_locked{0};
+std::atomic<long long> tdb_stat_stmt_memory_limit{0};
+std::atomic<long long> tdb_stat_stmt_txn_expired{0};
+std::atomic<long long> tdb_stat_stmt_bf_aborted{0};
 #include "src/handler/ha_tidesdb_internal.h"
 
 static void tidesdb_refresh_status_vars();
@@ -298,6 +306,12 @@ static struct st_mysql_show_var tidesdb_status_vars_inner[] = {
     {"klog_stored_bytes", (char *)&srv_stat_klog_stored_bytes, SHOW_LONGLONG},
     {"vlog_encoded_logical_bytes", (char *)&srv_stat_vlog_encoded_logical_bytes, SHOW_LONGLONG},
     {"vlog_encoded_stored_bytes", (char *)&srv_stat_vlog_encoded_stored_bytes, SHOW_LONGLONG},
+    {"commit_conflicts", (char *)&tdb_stat_commit_conflicts, SHOW_LONGLONG},
+    {"stmt_conflicts", (char *)&tdb_stat_stmt_conflicts, SHOW_LONGLONG},
+    {"stmt_locked", (char *)&tdb_stat_stmt_locked, SHOW_LONGLONG},
+    {"stmt_memory_limit", (char *)&tdb_stat_stmt_memory_limit, SHOW_LONGLONG},
+    {"stmt_txn_expired", (char *)&tdb_stat_stmt_txn_expired, SHOW_LONGLONG},
+    {"stmt_bf_aborted", (char *)&tdb_stat_stmt_bf_aborted, SHOW_LONGLONG},
     {NullS, NullS, SHOW_LONGLONG}};
 
 /* SHOW STATUS export: refresh the db-level counters once for this SHOW, then hand back the inner
