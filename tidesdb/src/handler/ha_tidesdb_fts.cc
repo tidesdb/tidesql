@@ -301,8 +301,9 @@ static void tdb_extract_stopword_from_row(const uint8_t *val, size_t val_size,
         /* Fold case with the charset's own rules, as the tokenizer does for indexed text, so a
            stop word with uppercase letters outside ASCII still matches.  The column holding the
            words is read as raw bytes, so utf8mb4 is assumed, which covers ASCII and latin1 words
-           written in a utf8mb4 table, the server default. */
-        CHARSET_INFO *cs = &my_charset_utf8mb4_general_ci;
+           written in a utf8mb4 table, the server default.  The binary collation folds case with
+           the same tables as the others, and unlike them it is exported to plugins on Windows. */
+        CHARSET_INFO *cs = &my_charset_utf8mb4_bin;
         /* Lowercasing can lengthen a character, so fold into a buffer with room to grow. */
         std::string word(str_len * 3, '\0');
         size_t n =
