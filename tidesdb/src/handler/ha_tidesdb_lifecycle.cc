@@ -349,6 +349,7 @@ int ha_tidesdb::truncate()
     }
 
     share->next_row_id.store(HIDDEN_PK_FIRST_ROW_ID, std::memory_order_relaxed);
+    share->session_ttl_seen.store(false, std::memory_order_relaxed);
 
     DBUG_RETURN(reset_auto_increment(0));
 }

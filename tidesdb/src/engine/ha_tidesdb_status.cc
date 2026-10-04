@@ -122,9 +122,10 @@ static long long srv_stat_write_stall_us;
 static long long srv_stat_write_stall_ceiling_hits;
 
 /* Device-write accounting from tidesdb_get_io_stats.  The library meters writes
-   through its file-descriptor manager, which covers the sstable and wal devices;
-   the value log keeps its own byte accounting in the Value Log section above, so
-   only sstable and wal are surfaced as counters here.  ops and bytes are lifetime
+   through its file-descriptor manager, which covers the sstable, wal and value-log
+   devices.  Only sstable and wal are surfaced as counters here; the value log's
+   device writes show in SHOW ENGINE STATUS, and its byte totals in the Value Log
+   section.  ops and bytes are lifetime
    totals; the per-write timing the api also reports is nondeterministic and stays
    in the free-text SHOW ENGINE STATUS only. */
 static long long srv_stat_io_sstable_write_ops;

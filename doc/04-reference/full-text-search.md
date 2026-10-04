@@ -80,8 +80,9 @@ The stop-word table must itself be a TidesDB table, since the loader resolves it
 family. A `SET GLOBAL` naming a missing table, a table on another engine, or a value not in
 `db_name/table_name` form fails with `ER_WRONG_VALUE_FOR_VAR` and the variable keeps its old value.
 A TidesDB table of another shape is accepted, and any row that does not hold a single VARCHAR is
-skipped. A value set in my.cnf is loaded at
-startup, and if that table cannot be read the server logs a warning and keeps the default list.
+skipped. Each word is lowercased with utf8mb4 case rules, so an uppercase word outside ASCII still
+matches the lowercased text. A value set in my.cnf is loaded at startup, and if that table cannot be
+read the server logs a warning and keeps the default list.
 Setting it to NULL or empty restores the default:
 
 ```sql

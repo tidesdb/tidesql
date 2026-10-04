@@ -217,6 +217,11 @@ void ha_tidesdb::recover_counters()
     recover_auto_inc_secondary();
     apply_auto_inc_start_meta(txn);
 
+    /* A table a session TTL has written to keeps refreshing its index entries on update. */
+    if (!share->has_ttl && tidesdb_txn_contains(txn, share->cf, SESSION_TTL_META_KEY,
+                                                SESSION_TTL_META_KEY_LEN) == TDB_SUCCESS)
+        share->session_ttl_seen.store(true, std::memory_order_relaxed);
+
     tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
 }
@@ -236,6 +241,31 @@ void ha_tidesdb::apply_auto_inc_start_meta(tidesdb_txn_t *txn)
     ulonglong cur = share->auto_inc_val.load(std::memory_order_relaxed);
     if (start > 1 && start - 1 > cur)
         share->auto_inc_val.store(start - 1, std::memory_order_relaxed);
+}
+
+int ha_tidesdb::note_session_ttl_row()
+{
+    if (share->has_ttl || share->session_ttl_seen.load(std::memory_order_relaxed)) return 0;
+    /* The marker commits in a transaction of its own, ahead of the row.  Writing it in the row's
+       transaction would make two sessions giving this table its first expiring rows at once
+       collide on the marker key at commit.  A row that then rolls back leaves the marker behind,
+       which only costs index refreshes on later updates. */
+    tidesdb_txn_t *mtxn = NULL;
+    int rc = tidesdb_txn_begin_with_isolation(tdb_global, TDB_ISOLATION_READ_COMMITTED, &mtxn);
+    if (rc == TDB_SUCCESS)
+    {
+        static const uint8_t empty = 0;
+        rc = tdb_txn_put_blocking(cached_thd_, mtxn, share->cf, SESSION_TTL_META_KEY,
+                                  SESSION_TTL_META_KEY_LEN, &empty, 0, TIDESDB_TTL_NONE);
+        if (rc == TDB_SUCCESS)
+            rc = tidesdb_txn_commit(mtxn);
+        else
+            tidesdb_txn_rollback(mtxn);
+        tidesdb_txn_free(mtxn);
+    }
+    if (rc != TDB_SUCCESS) return tdb_rc_to_ha(rc, "session ttl marker");
+    share->session_ttl_seen.store(true, std::memory_order_relaxed);
+    return 0;
 }
 
 void ha_tidesdb::write_auto_inc_meta(tidesdb_column_family_t *cf, ulonglong next_value)

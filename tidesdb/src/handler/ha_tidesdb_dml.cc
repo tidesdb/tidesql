@@ -408,6 +408,14 @@ int ha_tidesdb::write_row(const uchar *buf)
        Uses cached_sess_ttl_ to avoid THDVAR + ha_thd() per row. */
     time_t row_ttl =
         (share->has_ttl || cached_sess_ttl_ > 0) ? compute_row_ttl(buf) : TIDESDB_TTL_NONE;
+    if (row_ttl != TIDESDB_TTL_NONE && !share->has_ttl)
+    {
+        if (int nrc = note_session_ttl_row())
+        {
+            tmp_restore_column_map(&table->read_set, old_map);
+            DBUG_RETURN(nrc);
+        }
+    }
 
     int rc =
         tdb_txn_put_blocking(cached_thd_, txn, share->cf, dk, dk_len, row_ptr, row_len, row_ttl);

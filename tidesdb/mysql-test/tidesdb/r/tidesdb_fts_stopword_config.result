@@ -1,8 +1,10 @@
 call mtr.add_suppression("\\[TIDESDB\\] Stop word table .* not found");
 call mtr.add_suppression("\\[TIDESDB\\] ft_stopword_table format must be");
 call mtr.add_suppression("\\[TIDESDB\\] tidesdb_ft_stopword_table .* could not be loaded at startup");
-CREATE TABLE swords (value VARCHAR(30)) ENGINE=TIDESDB;
-INSERT INTO swords VALUES ('zebra'), ('giraffe');
+SET NAMES utf8mb4;
+CREATE TABLE swords (value VARCHAR(30)) ENGINE=TIDESDB DEFAULT CHARSET=utf8mb4;
+# an uppercase word outside ASCII matches its lowercase form in the text
+INSERT INTO swords VALUES ('zebra'), ('giraffe'), ('ÉTÉ');
 # an unreadable table is refused and the variable keeps its value
 SET GLOBAL tidesdb_ft_stopword_table = 'test/no_such_table';
 ERROR 42000: Variable 'tidesdb_ft_stopword_table' can't be set to the value of 'test/no_such_table'
@@ -13,10 +15,12 @@ still_default
 1
 # named in the configuration, the table is in use from startup
 # restart: --tidesdb-ft-stopword-table=test/swords
+SET NAMES utf8mb4;
 SELECT @@global.tidesdb_ft_stopword_table;
 @@global.tidesdb_ft_stopword_table
 test/swords
-CREATE TABLE d (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY fb (body)) ENGINE=TIDESDB;
+CREATE TABLE d (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY fb (body)) ENGINE=TIDESDB
+DEFAULT CHARSET=utf8mb4;
 INSERT INTO d VALUES (1, 'zebra stripes'), (2, 'giraffe necks'), (3, 'plain words');
 SELECT id FROM d WHERE MATCH(body) AGAINST('zebra');
 id
@@ -25,6 +29,12 @@ id
 SELECT id FROM d WHERE MATCH(body) AGAINST('stripes');
 id
 1
+INSERT INTO d VALUES (4, 'été chaud');
+SELECT id FROM d WHERE MATCH(body) AGAINST('été');
+id
+SELECT id FROM d WHERE MATCH(body) AGAINST('chaud');
+id
+4
 DROP TABLE d;
 # a startup value that cannot be read keeps the defaults and the server starts
 # restart: --tidesdb-ft-stopword-table=test/no_such_table

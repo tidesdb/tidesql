@@ -250,8 +250,9 @@ static MYSQL_THDVAR_ULONGLONG(
 /* Per-session opt-in for single-delete semantics on the primary row CF.
    Secondary-index deletes always use tidesdb_txn_single_delete because
    each (col_values, pk) / (term, pk) / (hilbert, pk) composite is written
-   exactly once per row lifetime and deleted exactly once -- the
-   single-delete contract holds unconditionally for those.
+   once per row lifetime and deleted once, apart from the in-place rewrites
+   an expiry refresh or a FULLTEXT term change make, which TidesDB 10.1.1
+   tolerates by never letting a single-delete expose an older put.
    For the primary CF the contract is narrower, UPDATE ... SET non_pk_col
    writes tidesdb_txn_put(share->cf, data_key(pk), ...) with the same PK,
    producing a put-over-put, and REPLACE INTO / INSERT ... ON DUPLICATE
@@ -908,9 +909,10 @@ static int tidesdb_init_func(void *p)
     cfg.memtable_sync_interval_us = (uint64_t)srv_memtable_sync_interval;
     cfg.memtable_skip_list_max_level = (int)srv_memtable_skip_list_max_level;
     cfg.memtable_skip_list_probability = (float)srv_memtable_skip_list_probability;
-    /* cfg already carries the library defaults from tidesdb_default_config, so only
-       override the value log segment size and the l0 stall threshold when the operator
-       set them, keeping zero as the meaning follow the library. */
+    /* cfg already carries the library defaults from tidesdb_default_config, so the
+       options below override them only when the operator set them, zero for the value
+       log segment size, value separation threshold and l0 stall threshold and -1 for the
+       idle flush and transaction timeout meaning follow the library. */
     if (srv_vlog_segment_size) cfg.vlog_segment_size = (size_t)srv_vlog_segment_size;
     if (srv_value_separation_threshold)
         cfg.value_separation_threshold = (size_t)srv_value_separation_threshold;
