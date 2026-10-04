@@ -264,7 +264,8 @@ static inline bool tdb_is_stopword_locked(const std::string &word)
    and be accessible as a TidesDB CF named "db_name__table_name". */
 /* parse a single stop-word row (self-describing header + one packed VARCHAR column) out of a raw
    value buffer and, when valid, insert the lowercased word into the global stop-word set. */
-static void tdb_extract_stopword_from_row(const uint8_t *val, size_t val_size)
+static void tdb_extract_stopword_from_row(const uint8_t *val, size_t val_size,
+                                          std::unordered_set<std::string> &out)
 {
     if (!val || val_size <= ROW_HEADER_SIZE || val[0] != ROW_HEADER_MAGIC) return;
 
@@ -299,11 +300,14 @@ static void tdb_extract_stopword_from_row(const uint8_t *val, size_t val_size)
     {
         std::string word((const char *)(data + prefix), str_len);
         std::transform(word.begin(), word.end(), word.begin(), ::tolower);
-        tdb_stopwords.insert(std::move(word));
+        out.insert(std::move(word));
     }
 }
 
-static bool tdb_load_stopwords_from_table_spec(const char *table_spec)
+/* Read the stop words of a "db_name/table_name" table into out.  Nothing global is touched, so a
+   caller swaps the result in only when the whole load succeeded. */
+static bool tdb_load_stopwords_from_table_spec(const char *table_spec,
+                                               std::unordered_set<std::string> &out)
 {
     if (!table_spec || !table_spec[0]) return false;
 
@@ -348,7 +352,7 @@ static bool tdb_load_stopwords_from_table_spec(const char *table_spec)
     }
 
     tidesdb_iter_seek_to_first(iter);
-    tdb_stopwords.clear();
+    out.clear();
 
     while (tidesdb_iter_valid(iter))
     {
@@ -356,16 +360,37 @@ static bool tdb_load_stopwords_from_table_spec(const char *table_spec)
         size_t val_size = 0;
         tdb_owned_buf val_g(val);
         if (tidesdb_iter_value(iter, &val, &val_size) == TDB_SUCCESS)
-            tdb_extract_stopword_from_row(val, val_size);
+            tdb_extract_stopword_from_row(val, val_size, out);
         tidesdb_iter_next(iter);
     }
 
     tidesdb_iter_free(iter);
     tidesdb_txn_free(txn);
 
-    sql_print_information("[TIDESDB] Loaded %zu stop words from table '%s'", tdb_stopwords.size(),
+    sql_print_information("[TIDESDB] Loaded %zu stop words from table '%s'", out.size(),
                           table_spec);
     return true;
+}
+
+/* Sysvar check callback for tidesdb_ft_stopword_table.  A table that cannot be read as a stop word
+   list is refused here, so SET GLOBAL fails and the variable keeps its old value rather than
+   naming a table whose words are not in use.  An empty value, which restores the defaults, always
+   passes. */
+int tdb_ft_stopword_table_check(MYSQL_THD thd, struct st_mysql_sys_var *var, void *save,
+                                struct st_mysql_value *value)
+{
+    (void)var;
+    char buf[FN_REFLEN + 1];
+    int len = (int)sizeof(buf);
+    const char *str = value->val_str(value, buf, &len);
+    if (str) str = thd_strmake(thd, str, (size_t)len);
+    if (str && str[0])
+    {
+        std::unordered_set<std::string> words;
+        if (!tdb_load_stopwords_from_table_spec(str, words)) return 1;
+    }
+    *static_cast<const char **>(save) = str;
+    return 0;
 }
 
 /* Sysvar update callback for tidesdb_ft_stopword_table */
@@ -373,8 +398,13 @@ void tdb_ft_stopword_table_update(MYSQL_THD thd, struct st_mysql_sys_var *var, v
                                   const void *save)
 {
     const char *new_val = *static_cast<const char *const *>(save);
-    mysql_rwlock_wrlock(&tdb_stopword_lock);
 
+    /* Read the new list before taking the lock, then swap it in whole. */
+    std::unordered_set<std::string> words;
+    bool loaded = false;
+    if (new_val && new_val[0]) loaded = tdb_load_stopwords_from_table_spec(new_val, words);
+
+    mysql_rwlock_wrlock(&tdb_stopword_lock);
     if (!new_val || !new_val[0])
     {
         /* NULL or empty string -- we reset to defaults */
@@ -382,16 +412,30 @@ void tdb_ft_stopword_table_update(MYSQL_THD thd, struct st_mysql_sys_var *var, v
         sql_print_information("[TIDESDB] Stop words reset to defaults (%zu words)",
                               tdb_stopwords.size());
     }
+    else if (loaded)
+        tdb_stopwords.swap(words);
     else
-    {
-        if (!tdb_load_stopwords_from_table_spec(new_val))
-        {
-            sql_print_warning("[TIDESDB] Failed to load stop words from '%s', keeping current set",
-                              new_val);
-        }
-    }
-
+        /* The check passed but the table changed before this ran, so keep what is in use. */
+        sql_print_warning("[TIDESDB] Failed to load stop words from '%s', keeping current set",
+                          new_val);
     tdb_memalloc_sysvar_set(var_ptr, new_val);
+    mysql_rwlock_unlock(&tdb_stopword_lock);
+}
+
+void fts_load_configured_stopwords(const char *table_spec)
+{
+    if (!table_spec || !table_spec[0]) return;
+    std::unordered_set<std::string> words;
+    if (!tdb_load_stopwords_from_table_spec(table_spec, words))
+    {
+        sql_print_warning(
+            "[TIDESDB] tidesdb_ft_stopword_table '%s' could not be loaded at "
+            "startup, using the default stop words",
+            table_spec);
+        return;
+    }
+    mysql_rwlock_wrlock(&tdb_stopword_lock);
+    tdb_stopwords.swap(words);
     mysql_rwlock_unlock(&tdb_stopword_lock);
 }
 

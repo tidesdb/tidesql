@@ -1,0 +1,37 @@
+CREATE TABLE t (id INT PRIMARY KEY, v INT, w INT) ENGINE=TIDESDB;
+INSERT INTO t SELECT seq, seq, seq FROM seq_1_to_20000;
+ALTER TABLE t ADD INDEX iv (v), ALGORITHM=INPLACE, LOCK=NONE;
+ERROR 0A000: LOCK=NONE is not supported. Reason: TidesDB fills a new index from a table scan and keeps no log of concurrent writes. Try LOCK=SHARED
+# dropping an index still needs no lock
+ALTER TABLE t ADD INDEX iw (w), ALGORITHM=INPLACE, LOCK=SHARED;
+ALTER TABLE t DROP INDEX iw, ALGORITHM=INPLACE, LOCK=NONE;
+# writes from another session while the index is built
+connect  writer,localhost,root,,test;
+connection default;
+ALTER TABLE t ADD INDEX iv (v), ALGORITHM=INPLACE;
+connection writer;
+connection default;
+disconnect writer;
+# the new index agrees with the table, row for row
+SELECT COUNT(*) FROM t;
+COUNT(*)
+20000
+SELECT COUNT(*) FROM t FORCE INDEX (iv);
+COUNT(*)
+20000
+SELECT COUNT(*) FROM t FORCE INDEX (iv) WHERE v < 0;
+COUNT(*)
+50
+SELECT COUNT(*) FROM t FORCE INDEX (iv) WHERE v > 1000000;
+COUNT(*)
+50
+SELECT COUNT(*) FROM t FORCE INDEX (iv) WHERE v BETWEEN 101 AND 150;
+COUNT(*)
+0
+SELECT COUNT(*) FROM t FORCE INDEX (iv) WHERE v BETWEEN 1 AND 50;
+COUNT(*)
+0
+SELECT COUNT(*) AS found_through_index FROM t a JOIN t b FORCE INDEX (iv) ON b.v = a.v AND b.id = a.id;
+found_through_index
+20000
+DROP TABLE t;

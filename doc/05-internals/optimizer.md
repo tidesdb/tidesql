@@ -50,7 +50,8 @@ every statement.
 `records_in_range()` takes one of two paths.
 
 For a point equality, where both bounds convert to identical comparable bytes such as `WHERE k = 5`,
-a unique or primary key matches one row, and a non-unique index that ANALYZE or the open-time pass
+a unique or primary key carries its `rec_per_key` for the key parts given, one row for the full key,
+and a non-unique index that ANALYZE or the open-time pass
 has already sampled carries a trustworthy `rec_per_key`, so both read that cached estimate directly.
 Only a non-unique index with no sample yet needs more. There the value bytes encode the index value
 without its primary-key suffix, so every matching row stores a key with that value as a prefix, and

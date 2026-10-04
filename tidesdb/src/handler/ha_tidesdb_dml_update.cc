@@ -152,7 +152,12 @@ int ha_tidesdb::update_fts_index(uint i, const uchar *old_data, const uchar *new
     tidesdb_txn_t *txn = stmt_txn;
     KEY *ki = &table->key_info[i];
 
-    /* We skip if no indexed column actually changed */
+    /* We skip only when no indexed column changed, the PK is the same and the row carries no
+       expiry.  A PK change re-keys every term even when the text is untouched, and an expiry is
+       refreshed on every update, so both rewrite the entries. */
+    /* A table that can carry expiries rewrites unchanged entries too, so each takes the row's new
+       deadline, or loses its old one when the update leaves the row with none. */
+    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0;
     bool fts_changed = false;
     for (uint p = 0; p < ki->user_defined_key_parts; p++)
     {
@@ -163,7 +168,7 @@ int ha_tidesdb::update_fts_index(uint i, const uchar *old_data, const uchar *new
             break;
         }
     }
-    if (!fts_changed) return TDB_SUCCESS;
+    if (!fts_changed && !pk_changed && !ttl_refresh) return TDB_SUCCESS;
 
     CHARSET_INFO *fts_cs = ki->key_part[0].field->charset();
 
@@ -206,7 +211,7 @@ int ha_tidesdb::update_fts_index(uint i, const uchar *old_data, const uchar *new
     {
         bool doc_len_changed = (old_wc != new_wc);
         rc = update_fts_index_diff(i, old_tf, new_tf, old_pk, old_pk_len, new_pk, new_pk_len,
-                                   new_wc, doc_len_changed, row_ttl);
+                                   new_wc, doc_len_changed || ttl_refresh, row_ttl);
         if (rc != TDB_SUCCESS) return rc;
     }
 
@@ -228,7 +233,8 @@ int ha_tidesdb::update_fts_index_diff(uint i, const std::unordered_map<std::stri
 
     /* PK stable -- apply term-level diff.  Only delete a term when it disappears and only write
        a term when it is new, its tf changes, or doc_len changes (doc_len is part of the stored
-       value used by BM25). */
+       value used by BM25).  The caller also passes doc_len_changed for a row with an expiry, so
+       every kept term is rewritten with the refreshed one. */
     for (auto &kv : old_tf)
     {
         const auto &term = kv.first;
@@ -264,22 +270,31 @@ int ha_tidesdb::update_fts_index_diff(uint i, const std::unordered_map<std::stri
     return TDB_SUCCESS;
 }
 
-/* Maintain one spatial index across the update: when the geometry column changed, delete the old
-   hilbert entry and insert the new one.  Returns TDB_SUCCESS on a no-op skip or success. */
+/* Maintain one spatial index across the update: when the geometry or the PK changed, delete the old
+   hilbert entry and insert the new one, and when only the row's expiry is refreshed, rewrite the
+   entry in place.  Returns TDB_SUCCESS on a no-op skip or success. */
 int ha_tidesdb::update_spatial_index(uint i, const uchar *old_data, const uchar *new_data,
                                      const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
-                                     uint new_pk_len, time_t row_ttl)
+                                     uint new_pk_len, bool pk_changed, time_t row_ttl)
 {
     tidesdb_txn_t *txn = stmt_txn;
     KEY *ki = &table->key_info[i];
 
-    /* Skip when the geometry column is unchanged. */
+    /* Skip when the geometry and the PK are unchanged and the row has no expiry to refresh.  The
+       entry key carries the PK, so a PK change moves it even when the geometry stays. */
     uint fieldnr = ki->key_part[0].fieldnr - 1;
-    if (!bitmap_is_set(table->write_set, fieldnr)) return TDB_SUCCESS;
+    const bool geom_changed = bitmap_is_set(table->write_set, fieldnr);
+    /* A table that can carry expiries rewrites unchanged entries too, so each takes the row's new
+       deadline, or loses its old one when the update leaves the row with none. */
+    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0;
+    if (!geom_changed && !pk_changed && !ttl_refresh) return TDB_SUCCESS;
+    /* With the geometry and PK unchanged the entry keeps its key, and it is only rewritten. */
+    const bool same_entry = !geom_changed && !pk_changed;
 
     Field *geom_field = ki->key_part[0].field;
 
     /* Delete old spatial entry */
+    if (!same_entry)
     {
         my_ptrdiff_t ptd = (my_ptrdiff_t)(old_data - table->record[0]);
         if (ptd) geom_field->move_field_offset(ptd);
@@ -313,6 +328,7 @@ int ha_tidesdb::update_spatial_index(uint i, const uchar *old_data, const uchar 
                                             (ymn + ymx) / MBR_CENTROID_DIV, new_pk, new_pk_len, sk);
             uchar sv[SPATIAL_MBR_VALUE_LEN];
             spatial_build_value(xmn, ymn, xmx, ymx, sv);
+            spatial_note_extent(i, xmn, ymn, xmx, ymx);
             int rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], sk, sk_len, sv,
                                           SPATIAL_MBR_VALUE_LEN, row_ttl);
             if (rc != TDB_SUCCESS) return rc;
@@ -331,10 +347,13 @@ int ha_tidesdb::update_regular_index(uint i, const uchar *old_data, const uchar 
     tidesdb_txn_t *txn = stmt_txn;
     KEY *ki = &table->key_info[i];
 
-    /* Skip before building keys when no indexed column changed and the PK is stable.  Saves the
-       per-row make_comparable_key / sec_idx_key cost on wide updates that touch only unrelated
-       columns. */
-    if (!pk_changed)
+    /* Skip before building keys when no indexed column changed, the PK is stable and the row
+       has no expiry to refresh.  Saves the per-row make_comparable_key / sec_idx_key cost on wide
+       updates that touch only unrelated columns. */
+    /* A table that can carry expiries rewrites unchanged entries too, so each takes the row's new
+       deadline, or loses its old one when the update leaves the row with none. */
+    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0;
+    if (!pk_changed && !ttl_refresh)
     {
         bool idx_changed = false;
         for (uint p = 0; p < ki->user_defined_key_parts; p++)
@@ -365,7 +384,15 @@ int ha_tidesdb::update_regular_index(uint i, const uchar *old_data, const uchar 
     current_pk_len_ = new_pk_len;
     uint new_ik_len = sec_idx_key(i, new_data, new_ik);
 
-    if (old_ik_len == new_ik_len && memcmp(old_ik, new_ik, old_ik_len) == 0) return TDB_SUCCESS;
+    if (old_ik_len == new_ik_len && memcmp(old_ik, new_ik, old_ik_len) == 0)
+    {
+        /* The entry keeps its key.  A row with an expiry rewrites it so the index entry expires
+           with the row rather than at the old deadline, and the uniqueness sentinel of an
+           unchanged value needs nothing, since sentinels are only ever written, never read. */
+        if (!ttl_refresh) return TDB_SUCCESS;
+        return tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], new_ik, new_ik_len,
+                                    &tdb_empty_val, sizeof(tdb_empty_val), row_ttl);
+    }
 
     int rc =
         tdb_txn_delete_cf_blocking(cached_thd_, txn, share->idx_cfs[i], old_ik, old_ik_len, true);
@@ -597,7 +624,7 @@ int ha_tidesdb::update_maintain_indexes(const uchar *old_data, const uchar *new_
                                   pk_changed, row_ttl);
         else if (share->idx_is_spatial[i])
             rc = update_spatial_index(i, old_data, new_data, old_pk, old_pk_len, new_pk, new_pk_len,
-                                      row_ttl);
+                                      pk_changed, row_ttl);
         else
             rc = update_regular_index(i, old_data, new_data, old_pk, old_pk_len, new_pk, new_pk_len,
                                       pk_changed, row_ttl);

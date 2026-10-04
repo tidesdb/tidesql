@@ -66,3 +66,8 @@ For each written row the lifetime is resolved in this order, taking the first th
 2. The session `tidesdb_ttl`, when non-zero.
 3. The table-level `TTL` option, when non-zero.
 4. Otherwise the row never expires.
+
+An UPDATE on a table with a TTL, or in a session with `tidesdb_ttl` set, rewrites every index entry
+the row owns, regular, `FULLTEXT`, and `SPATIAL`, with the row's new expiry, or with none when the
+update leaves the row without one. A row kept alive by updates therefore stays reachable through its
+indexes as well as by primary key, and a row whose expiry is cleared never loses its index entries.

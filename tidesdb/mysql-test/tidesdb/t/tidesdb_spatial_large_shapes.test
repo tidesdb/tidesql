@@ -1,0 +1,68 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# A spatial index keys each row by the centre of its bounding box.  A line or polygon that crosses
+# a query box can be centred far outside it, and the scan used to cover only the cells of the box,
+# so MBRIntersects and MBRContains(col, box) through the index missed those rows.  MBRContains
+# also tested the wrong direction, the row inside the box rather than the row around it.  Every
+# query here runs through the index and with the index ignored, and the two must agree, first on
+# a fresh table, then after a restart when the index has not yet been measured, then again once
+# it has.
+#
+
+CREATE TABLE g (id INT PRIMARY KEY, geo GEOMETRY NOT NULL, SPATIAL INDEX sg (geo)) ENGINE=TIDESDB;
+INSERT INTO g VALUES
+  (1,  ST_GeomFromText('POINT(1005 1005)')),
+  (2,  ST_GeomFromText('POLYGON((-1000 -1000,1000 -1000,1000 1000,-1000 1000,-1000 -1000))')),
+  (3,  ST_GeomFromText('POINT(1001 1001)')),
+  (4,  ST_GeomFromText('POLYGON((0 0,100000 0,100000 100000,0 100000,0 0))')),
+  (5,  ST_GeomFromText('POINT(1009 1002)')),
+  (10, ST_GeomFromText('LINESTRING(1005 1005, 1000000 1005)')),
+  (11, ST_GeomFromText('POLYGON((-1000000 -1000000,2000000 -1000000,2000000 2000000,-1000000 2000000,-1000000 -1000000))')),
+  (12, ST_GeomFromText('LINESTRING(-500000 1003, 1003 1003)')),
+  (13, ST_GeomFromText('POINT(50 50)')),
+  (14, ST_GeomFromText('LINESTRING(5000 5000, 6000 6000)'));
+
+let $box= ST_GeomFromText('POLYGON((1000 1000,1010 1000,1010 1010,1000 1010,1000 1000))');
+let $pt= ST_GeomFromText('POINT(1005 1005)');
+
+let $round= 3;
+while ($round)
+{
+  if ($round == 2)
+  {
+    --echo # after a restart, before the index has been measured
+    --source include/restart_mysqld.inc
+  }
+  if ($round == 1)
+  {
+    --echo # once a whole-index scan has measured it
+  }
+  --disable_query_log
+  eval SELECT 'intersects' AS q, GROUP_CONCAT(id ORDER BY id) AS through_index FROM g FORCE INDEX (sg) WHERE MBRIntersects(geo, $box);
+  eval SELECT GROUP_CONCAT(id ORDER BY id) AS without_index FROM g IGNORE INDEX (sg) WHERE MBRIntersects(geo, $box);
+  eval SELECT 'st_intersects' AS q, GROUP_CONCAT(id ORDER BY id) AS through_index FROM g FORCE INDEX (sg) WHERE ST_Intersects(geo, $box);
+  eval SELECT GROUP_CONCAT(id ORDER BY id) AS without_index FROM g IGNORE INDEX (sg) WHERE ST_Intersects(geo, $box);
+  eval SELECT 'contains box' AS q, GROUP_CONCAT(id ORDER BY id) AS through_index FROM g FORCE INDEX (sg) WHERE MBRContains(geo, $box);
+  eval SELECT GROUP_CONCAT(id ORDER BY id) AS without_index FROM g IGNORE INDEX (sg) WHERE MBRContains(geo, $box);
+  eval SELECT 'contains point' AS q, GROUP_CONCAT(id ORDER BY id) AS through_index FROM g FORCE INDEX (sg) WHERE MBRContains(geo, $pt);
+  eval SELECT GROUP_CONCAT(id ORDER BY id) AS without_index FROM g IGNORE INDEX (sg) WHERE MBRContains(geo, $pt);
+  eval SELECT 'within box' AS q, GROUP_CONCAT(id ORDER BY id) AS through_index FROM g FORCE INDEX (sg) WHERE MBRWithin(geo, $box);
+  eval SELECT GROUP_CONCAT(id ORDER BY id) AS without_index FROM g IGNORE INDEX (sg) WHERE MBRWithin(geo, $box);
+  eval SELECT 'box contains' AS q, GROUP_CONCAT(id ORDER BY id) AS through_index FROM g FORCE INDEX (sg) WHERE MBRContains($box, geo);
+  eval SELECT GROUP_CONCAT(id ORDER BY id) AS without_index FROM g IGNORE INDEX (sg) WHERE MBRContains($box, geo);
+  --enable_query_log
+  dec $round;
+}
+
+--echo # a shape inserted later reaches further than anything measured so far
+INSERT INTO g VALUES (20, ST_GeomFromText('LINESTRING(-9000000 1004, 9000000 1004)'));
+--disable_query_log
+eval SELECT GROUP_CONCAT(id ORDER BY id) AS through_index FROM g FORCE INDEX (sg) WHERE MBRIntersects(geo, $box);
+eval SELECT GROUP_CONCAT(id ORDER BY id) AS without_index FROM g IGNORE INDEX (sg) WHERE MBRIntersects(geo, $box);
+--enable_query_log
+
+DROP TABLE g;
+
+--source include/cleanup_tidesdb.inc

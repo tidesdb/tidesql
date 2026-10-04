@@ -18,8 +18,8 @@ statement costs a single stats pass.
 
 | Variable | Description |
 |----------|-------------|
-| `Tidesdb_version` | TideSQL plugin version string, for example `5.1.0` |
-| `Tidesdb_version_hex` | Plugin version as an integer, for example `327936` for `0x50100` |
+| `Tidesdb_version` | TideSQL plugin version string, for example `5.1.1` |
+| `Tidesdb_version_hex` | Plugin version as an integer, for example `327937` for `0x50101` |
 | `Tidesdb_library_version` | Linked TidesDB library version string |
 
 ## Sequence and transactions
@@ -52,10 +52,10 @@ refresh window.
 
 | Variable | Description |
 |----------|-------------|
-| `Tidesdb_memtable_bytes` | Bytes in the active memtable |
+| `Tidesdb_memtable_bytes` | Memory the active memtable occupies, skip-list nodes and version structs included |
 | `Tidesdb_total_sstables` | Total SSTable count across all column families |
 | `Tidesdb_open_sstables` | Open SSTable file handles |
-| `Tidesdb_data_size_bytes` | Total on-disk data size in bytes |
+| `Tidesdb_data_size_bytes` | On-disk key-log bytes summed across every column family and level. The value log is reported separately in `Tidesdb_vlog_file_size` |
 | `Tidesdb_immutable_memtables` | Sealed memtables waiting to be flushed |
 | `Tidesdb_flush_pending` | Flushes pending (the immutable memtable queue depth) |
 | `Tidesdb_compaction_queue` | Compaction jobs queued for the worker pool |
@@ -73,7 +73,7 @@ refresh window.
 
 ## Encoding
 
-Aggregate codec-chain totals summed across every chain, so `logical` divided by `stored` is the realized compression ratio for each log. The per-chain codec breakdown prints in `SHOW ENGINE TIDESDB STATUS`.
+Aggregate codec-chain totals summed across every chain, so `logical` divided by `stored` is the realized compression ratio for each log. `SHOW ENGINE TIDESDB STATUS` prints the same totals per log with the chain count and the ratio.
 
 | Variable | Description |
 |----------|-------------|
@@ -84,7 +84,7 @@ Aggregate codec-chain totals summed across every chain, so `logical` divided by 
 
 ## Device IO
 
-Write accounting from the library's file-descriptor manager, which meters the SSTable and WAL devices. The value log keeps its own byte accounting in the value-log counters above. These counters are writes only, there is no read-side or syscall figure.
+Write accounting from the library, which meters SSTable, WAL, and value-log writes. These counters surface the SSTable and WAL classes, the value log's write volume is in `Tidesdb_vlog_bytes_written` above, and all three classes print with their write timing in `SHOW ENGINE TIDESDB STATUS`. These counters are writes only, there is no read-side figure.
 
 | Variable | Description |
 |----------|-------------|
@@ -101,7 +101,7 @@ Write accounting from the library's file-descriptor manager, which meters the SS
 | `Tidesdb_flush_bytes_written` | Bytes written to SSTables by flush jobs |
 | `Tidesdb_compaction_bytes_written` | Bytes written by compaction jobs |
 | `Tidesdb_compaction_bytes_read` | Bytes compaction read as input |
-| `Tidesdb_flush_count` | Flushes completed across all column families |
+| `Tidesdb_flush_count` | SSTables written by flushes across all column families |
 | `Tidesdb_compaction_count` | Compactions completed across all column families |
 
 ## Write stalls

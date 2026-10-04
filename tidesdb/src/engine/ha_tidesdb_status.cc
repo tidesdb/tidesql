@@ -249,8 +249,8 @@ static int tdb_show_max_sst_density_level(MYSQL_THD, struct st_mysql_show_var *v
 /* The db-level and cache counters.  Names carry no tidesdb_ prefix; the SHOW_ARRAY export below is
    registered under the outer name "tidesdb", and SHOW joins the two with an underscore, so each
    surfaces as tidesdb_<name>.  The write-amplification counters are lifetime-since-open; divide a
-   byte counter by user_bytes_written for its per-domain WA ratio, and flush_count /
-   compaction_count count output sstables, not logical runs. */
+   byte counter by user_bytes_written for its per-domain WA ratio.  flush_count counts the sstables
+   flushes wrote, and compaction_count counts compaction jobs, not their output sstables. */
 static struct st_mysql_show_var tidesdb_status_vars_inner[] = {
     {"version", (char *)&srv_stat_version, SHOW_CHAR_PTR},
     {"version_hex", (char *)&srv_stat_version_hex, SHOW_LONGLONG},
@@ -513,7 +513,7 @@ static int status_format_db_stats(char *buf, size_t sz, int pos, const tidesdb_d
                     (unsigned long)db_st.user_bytes_written);
     pos += snprintf(buf + pos, sz - pos, "Flush bytes written: %lu (%lu sstables)\n",
                     (unsigned long)db_st.flush_bytes_written, (unsigned long)db_st.flush_count);
-    pos += snprintf(buf + pos, sz - pos, "Compaction bytes written: %lu (%lu sstables)\n",
+    pos += snprintf(buf + pos, sz - pos, "Compaction bytes written: %lu (%lu compactions)\n",
                     (unsigned long)db_st.compaction_bytes_written,
                     (unsigned long)db_st.compaction_count);
     pos += snprintf(buf + pos, sz - pos, "Compaction bytes read: %lu\n",
@@ -569,9 +569,11 @@ static int status_format_cache_stats(char *buf, size_t sz, int pos,
 }
 
 /* format the tombstone-observability section into buf starting at pos; returns the new write
-   position.  the aggregates come from the tidesdb_refresh_status_vars pass the caller ran. */
+   position.  the aggregates are the ones the tombstone status variables report, computed here on
+   demand since the refresh pass does not fold them in. */
 static int status_format_tombstones(char *buf, size_t sz, int pos)
 {
+    tidesdb_compute_tombstone_stats();
     pos += snprintf(buf + pos, sz - pos, "\n=+=+= Tombstones =+=+=\n");
     pos +=
         snprintf(buf + pos, sz - pos, "Total tombstones: %ld\n", (long)srv_stat_total_tombstones);
@@ -643,9 +645,9 @@ static int status_format_cf_stats(char *buf, size_t sz, int pos)
 }
 
 /* format the device-write section into buf starting at pos; returns the new write position.  the
-   library meters writes through its descriptor manager, so this covers the sstable and wal devices,
-   and reports per-write timing whose average and worst case help spot a slow disk.  a class the api
-   does not meter, such as the value log which keeps its own accounting, shows zero here. */
+   library meters writes through its descriptor manager, so this covers the sstable, wal and
+   value-log devices, and reports per-write timing whose average and worst case help spot a slow
+   disk.  the manifest is not metered. */
 static int status_format_io_stats(char *buf, size_t sz, int pos, const tidesdb_io_stats_t &io_st)
 {
     pos += snprintf(buf + pos, sz - pos, "\n=+=+= IO Device Writes =+=+=\n");

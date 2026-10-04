@@ -1,0 +1,92 @@
+--source include/have_tidesdb.inc
+--source include/have_sequence.inc
+--source include/not_embedded.inc
+
+#
+# A large INSERT or DELETE is written in batches, each committed as it fills.  That is only right
+# for a statement that is its own transaction.  Inside BEGIN, or with autocommit off, a batch
+# commit made everything the transaction had written so far durable and visible to others, and a
+# later ROLLBACK could no longer undo it, including earlier statements in the transaction.  Every
+# statement here crosses the batch size, and every ROLLBACK must leave the table as it was.
+# A DELETE with no WHERE clause used to empty the table by recreating it, outside the transaction
+# and discarding it, and a DELETE that did batch stopped scanning at its first batch commit, so on
+# a table without a primary key it removed 250 rows and reported success.
+#
+
+CREATE TABLE b (id INT PRIMARY KEY, v INT, KEY kv (v)) ENGINE=TIDESDB;
+INSERT INTO b VALUES (0, 0);
+
+--connect (other,localhost,root,,test)
+--connection default
+
+--echo # BEGIN, an UPDATE, a 2000 row INSERT ... SELECT, then ROLLBACK
+BEGIN;
+UPDATE b SET v = 99 WHERE id = 0;
+INSERT INTO b SELECT seq, seq FROM seq_1_to_2000;
+--connection other
+--echo # another connection sees none of it before COMMIT
+SELECT COUNT(*), MAX(v) FROM b;
+--connection default
+ROLLBACK;
+SELECT COUNT(*), MAX(v) FROM b;
+SELECT COUNT(*) FROM b FORCE INDEX (kv) WHERE v > 0;
+
+--echo # the same with autocommit off
+SET autocommit = 0;
+INSERT INTO b SELECT seq, seq FROM seq_1_to_2000;
+ROLLBACK;
+SET autocommit = 1;
+SELECT COUNT(*) FROM b;
+
+--echo # the transaction commits as a whole when asked to
+BEGIN;
+INSERT INTO b SELECT seq, seq FROM seq_1_to_2000;
+UPDATE b SET v = 5 WHERE id = 0;
+COMMIT;
+SELECT COUNT(*), SUM(v = 5) FROM b;
+SELECT COUNT(*) FROM b FORCE INDEX (kv) WHERE v BETWEEN 1 AND 2000;
+
+--echo # a large autocommit statement still loads every row
+TRUNCATE TABLE b;
+INSERT INTO b SELECT seq, seq FROM seq_1_to_5000;
+SELECT COUNT(*), SUM(id) FROM b;
+
+--echo #
+--echo # A DELETE of every row of a table without a primary key, inside BEGIN
+--echo #
+CREATE TABLE h (v INT, w INT, KEY kw (w)) ENGINE=TIDESDB;
+INSERT INTO h SELECT seq, seq FROM seq_1_to_2000;
+BEGIN;
+DELETE FROM h;
+--connection other
+SELECT COUNT(*) FROM h;
+--connection default
+ROLLBACK;
+SELECT COUNT(*), SUM(v) FROM h;
+SELECT COUNT(*) FROM h FORCE INDEX (kw) WHERE w > 0;
+--echo # with autocommit on it deletes every matching row, past the first batch
+DELETE FROM h WHERE v > 100;
+SELECT COUNT(*), MAX(v) FROM h;
+SELECT COUNT(*) FROM h FORCE INDEX (kw) WHERE w > 0;
+DELETE FROM h;
+SELECT COUNT(*) FROM h;
+
+--echo #
+--echo # A DELETE that asks for its range to be compacted, which now runs only after a commit
+--echo #
+SET SESSION tidesdb_compact_after_range_delete_min_rows = 100;
+CREATE TABLE cd (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO cd SELECT seq, seq FROM seq_1_to_2000;
+BEGIN;
+DELETE FROM cd WHERE v % 2 = 0;
+ROLLBACK;
+SELECT COUNT(*), SUM(v) FROM cd;
+DELETE FROM cd WHERE v % 2 = 0;
+SELECT COUNT(*), SUM(v % 2) FROM cd;
+SELECT COUNT(*) FROM cd WHERE id = 2000;
+SET SESSION tidesdb_compact_after_range_delete_min_rows = DEFAULT;
+
+--disconnect other
+DROP TABLE b, h, cd;
+
+--source include/cleanup_tidesdb.inc

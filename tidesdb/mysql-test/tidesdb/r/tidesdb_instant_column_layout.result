@@ -1,0 +1,135 @@
+#
+# ============================================
+# Dropping a middle column
+# ============================================
+#
+CREATE TABLE t (a INT PRIMARY KEY, b INT, c VARCHAR(10), d INT) ENGINE=TIDESDB;
+CREATE TABLE r (a INT PRIMARY KEY, b INT, c VARCHAR(10), d INT) ENGINE=INNODB;
+INSERT INTO t VALUES (1,10,'x1',100),(2,20,'x2',200),(3,NULL,NULL,300);
+INSERT INTO r SELECT * FROM t;
+ALTER TABLE t DROP COLUMN b, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported. Reason: TidesDB reads old rows by column position, so only appending columns is instant. Try ALGORITHM=COPY
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE r DROP COLUMN b;
+SELECT * FROM t ORDER BY a;
+a	c	d
+1	x1	100
+2	x2	200
+3	NULL	300
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a) WHERE NOT (t.c <=> r.c AND t.d <=> r.d);
+differing
+0
+# dropping the last column also rewrites, or a column appended later would read its bytes
+ALTER TABLE t DROP COLUMN d;
+ALTER TABLE r DROP COLUMN d;
+ALTER TABLE t ADD COLUMN e INT DEFAULT 5, ALGORITHM=INSTANT;
+ALTER TABLE r ADD COLUMN e INT DEFAULT 5;
+SELECT * FROM t ORDER BY a;
+a	c	e
+1	x1	5
+2	x2	5
+3	NULL	5
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a) WHERE NOT (t.c <=> r.c AND t.e <=> r.e);
+differing
+0
+DROP TABLE t, r;
+#
+# ============================================
+# Adding a column FIRST or AFTER an existing one, and reordering
+# ============================================
+#
+CREATE TABLE t (a INT PRIMARY KEY, b INT, c VARCHAR(10), d INT) ENGINE=TIDESDB;
+CREATE TABLE r (a INT PRIMARY KEY, b INT, c VARCHAR(10), d INT) ENGINE=INNODB;
+INSERT INTO t VALUES (1,10,'x1',100),(2,20,'x2',200),(3,NULL,NULL,300);
+INSERT INTO r SELECT * FROM t;
+ALTER TABLE t ADD COLUMN x INT DEFAULT 7 AFTER a, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported. Reason: TidesDB reads old rows by column position, so only appending columns is instant. Try ALGORITHM=COPY
+ALTER TABLE t ADD COLUMN x INT DEFAULT 7 AFTER a;
+ALTER TABLE r ADD COLUMN x INT DEFAULT 7 AFTER a;
+ALTER TABLE t ADD COLUMN f INT DEFAULT 8 FIRST;
+ALTER TABLE r ADD COLUMN f INT DEFAULT 8 FIRST;
+ALTER TABLE t MODIFY d INT AFTER f;
+ALTER TABLE r MODIFY d INT AFTER f;
+# a virtual column in the middle shifts the stored fields after it too
+ALTER TABLE t ADD COLUMN vb INT AS (b + 1) VIRTUAL AFTER x;
+ALTER TABLE r ADD COLUMN vb INT AS (b + 1) VIRTUAL AFTER x;
+SELECT * FROM t ORDER BY a;
+f	d	a	x	vb	b	c
+8	100	1	7	11	10	x1
+8	200	2	7	21	20	x2
+8	300	3	7	NULL	NULL	NULL
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a)
+WHERE NOT (t.f <=> r.f AND t.d <=> r.d AND t.x <=> r.x AND t.vb <=> r.vb AND t.b <=> r.b
+AND t.c <=> r.c);
+differing
+0
+DROP TABLE t, r;
+#
+# ============================================
+# The first variable length column moves every null bit
+# ============================================
+#
+CREATE TABLE t (a INT PRIMARY KEY, b INT NULL, c INT NULL) ENGINE=TIDESDB;
+CREATE TABLE r (a INT PRIMARY KEY, b INT NULL, c INT NULL) ENGINE=INNODB;
+INSERT INTO t VALUES (1,NULL,3),(2,5,NULL);
+INSERT INTO r SELECT * FROM t;
+ALTER TABLE t ADD COLUMN z VARCHAR(5) NULL, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported. Reason: TidesDB reads old rows by column position, so only appending columns is instant. Try ALGORITHM=COPY
+ALTER TABLE t ADD COLUMN z VARCHAR(5) NULL;
+ALTER TABLE r ADD COLUMN z VARCHAR(5) NULL;
+SELECT * FROM t ORDER BY a;
+a	b	c	z
+1	NULL	3	NULL
+2	5	NULL	NULL
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a)
+WHERE NOT (t.b <=> r.b AND t.c <=> r.c AND t.z <=> r.z);
+differing
+0
+DROP TABLE t, r;
+#
+# ============================================
+# Appending columns stays instant, and new columns read their defaults
+# ============================================
+#
+CREATE TABLE t (a INT PRIMARY KEY, b INT NULL, c INT NULL, v VARCHAR(3)) ENGINE=TIDESDB;
+CREATE TABLE r (a INT PRIMARY KEY, b INT NULL, c INT NULL, v VARCHAR(3)) ENGINE=INNODB;
+INSERT INTO t VALUES (1,NULL,3,'p'),(2,5,NULL,'q');
+INSERT INTO r SELECT * FROM t;
+ALTER TABLE t ADD COLUMN x INT NULL DEFAULT 7, ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN y INT NOT NULL DEFAULT 9, ADD COLUMN n INT NULL, ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN w VARCHAR(5) NULL DEFAULT 'dflt', ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN vx INT AS (x * 2) VIRTUAL, ALGORITHM=INSTANT;
+ALTER TABLE r ADD COLUMN x INT NULL DEFAULT 7, ADD COLUMN y INT NOT NULL DEFAULT 9,
+ADD COLUMN n INT NULL, ADD COLUMN w VARCHAR(5) NULL DEFAULT 'dflt',
+ADD COLUMN vx INT AS (x * 2) VIRTUAL;
+INSERT INTO t (a,b,c,v) VALUES (3,30,NULL,'s');
+INSERT INTO r (a,b,c,v) VALUES (3,30,NULL,'s');
+SELECT * FROM t ORDER BY a;
+a	b	c	v	x	y	n	w	vx
+1	NULL	3	p	7	9	NULL	dflt	14
+2	5	NULL	q	7	9	NULL	dflt	14
+3	30	NULL	s	7	9	NULL	dflt	14
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a)
+WHERE NOT (t.b <=> r.b AND t.c <=> r.c AND t.v <=> r.v AND t.x <=> r.x AND t.y <=> r.y
+AND t.n <=> r.n AND t.w <=> r.w AND t.vx <=> r.vx);
+differing
+0
+# a stored generated column needs values for existing rows, so it is not instant
+ALTER TABLE t ADD COLUMN sg INT AS (b * 10) STORED, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported. Reason: TidesDB reads old rows by column position, so only appending columns is instant. Try ALGORITHM=COPY
+ALTER TABLE t ADD COLUMN sg INT AS (b * 10) STORED;
+SELECT a, sg FROM t ORDER BY a;
+a	sg
+1	NULL
+2	50
+3	300
+# a BIT column keeps part of its value in the null bitmap, so it is not instant either
+ALTER TABLE t ADD COLUMN bt BIT(3) DEFAULT b'101', ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported. Reason: TidesDB reads old rows by column position, so only appending columns is instant. Try ALGORITHM=COPY
+ALTER TABLE t ADD COLUMN bt BIT(3) DEFAULT b'101';
+SELECT a, bt + 0 AS bt FROM t ORDER BY a;
+a	bt
+1	5
+2	5
+3	5
+DROP TABLE t, r;

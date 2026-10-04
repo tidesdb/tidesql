@@ -37,9 +37,10 @@ rebuild rather than correctness.
 ## What FULL costs and how INTERVAL sits between
 
 `FULL` costs commit throughput, because every commit waits for the device instead of returning once
-the bytes reach the operating system. How much depends entirely on the storage. Group commit softens
-the cost by letting concurrent commits that land in the same commit round share a single device sync,
-so the more concurrent the workload the better `FULL` amortizes.
+the bytes reach the operating system. How much depends entirely on the storage. The write-ahead log
+softens the cost by writing the records of every commit waiting at the same moment together, so
+concurrent commits share a single device write and the more concurrent the workload the better
+`FULL` amortizes.
 
 `INTERVAL` forces the log on a timer, so the exposure to a machine crash is bounded by
 `tidesdb_memtable_sync_interval` microseconds rather than being unbounded, without paying a device

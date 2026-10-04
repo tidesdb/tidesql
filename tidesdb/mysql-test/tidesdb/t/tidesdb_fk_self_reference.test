@@ -1,0 +1,127 @@
+--source include/have_tidesdb.inc
+--source include/have_innodb.inc
+--source include/have_sequence.inc
+--source include/not_embedded.inc
+
+#
+# A foreign key that references its own table.  The cascade finds the parent's own table as the
+# child, and it used to drive the referencing rows through the very handler that was deleting or
+# updating the parent row, overwriting that row's record buffer and current key.  A DELETE then
+# reported success and removed nothing, or removed a different row.  Each case runs the same
+# statements on a TidesDB table and an InnoDB table, which must end up identical.
+#
+
+--echo #
+--echo # ============================================
+--echo # ON DELETE CASCADE to the primary key, a chain and a sibling tree
+--echo # ============================================
+--echo #
+CREATE TABLE s (id INT PRIMARY KEY, pid INT NULL, note VARCHAR(10), KEY (pid),
+                FOREIGN KEY (pid) REFERENCES s(id) ON DELETE CASCADE) ENGINE=TIDESDB;
+CREATE TABLE r (id INT PRIMARY KEY, pid INT NULL, note VARCHAR(10), KEY (pid),
+                FOREIGN KEY (pid) REFERENCES r(id) ON DELETE CASCADE) ENGINE=INNODB;
+INSERT INTO s VALUES (1,NULL,'root'),(2,1,'a'),(3,2,'b'),(4,NULL,'other'),(5,3,'c'),(6,1,'d'),
+                     (7,4,'e');
+INSERT INTO r SELECT * FROM s;
+DELETE FROM s WHERE id = 1;
+DELETE FROM r WHERE id = 1;
+SELECT * FROM s ORDER BY id;
+--echo # a row with no children is deleted on its own
+DELETE FROM s WHERE id = 7;
+DELETE FROM r WHERE id = 7;
+SELECT * FROM s ORDER BY id;
+--echo # several parents in one statement, one of them a child of another
+INSERT INTO s VALUES (10,NULL,'r'),(11,10,'x'),(12,11,'y'),(13,10,'z');
+INSERT INTO r VALUES (10,NULL,'r'),(11,10,'x'),(12,11,'y'),(13,10,'z');
+DELETE FROM s WHERE id IN (10,11);
+DELETE FROM r WHERE id IN (10,11);
+SELECT * FROM s ORDER BY id;
+SELECT COUNT(*) AS differing FROM (SELECT * FROM s UNION ALL SELECT * FROM r) u
+  GROUP BY id, pid, note HAVING COUNT(*) <> 2;
+DROP TABLE s, r;
+
+--echo #
+--echo # ============================================
+--echo # ON DELETE CASCADE to a UNIQUE key declared in the same CREATE TABLE
+--echo # ============================================
+--echo #
+CREATE TABLE s (id INT PRIMARY KEY, code INT NOT NULL UNIQUE, pcode INT NULL, KEY (pcode),
+                FOREIGN KEY (pcode) REFERENCES s(code) ON DELETE CASCADE) ENGINE=TIDESDB;
+CREATE TABLE r (id INT PRIMARY KEY, code INT NOT NULL UNIQUE, pcode INT NULL, KEY (pcode),
+                FOREIGN KEY (pcode) REFERENCES r(code) ON DELETE CASCADE) ENGINE=INNODB;
+INSERT INTO s VALUES (1,100,NULL),(2,200,100),(3,300,200),(4,400,NULL),(5,500,400);
+INSERT INTO r SELECT * FROM s;
+DELETE FROM s WHERE id = 1;
+DELETE FROM r WHERE id = 1;
+SELECT * FROM s ORDER BY id;
+SELECT COUNT(*) AS differing FROM (SELECT * FROM s UNION ALL SELECT * FROM r) u
+  GROUP BY id, code, pcode HAVING COUNT(*) <> 2;
+--echo # an orphan value is refused
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO s VALUES (9,900,12345);
+DROP TABLE s, r;
+
+--echo #
+--echo # ============================================
+--echo # ON UPDATE CASCADE and ON DELETE SET NULL on the same table
+--echo # ============================================
+--echo #
+--echo # InnoDB refuses an update cascade into its own table and treats it as RESTRICT.  TidesDB
+--echo # applies it, so the children follow the parent's new key.
+CREATE TABLE s (id INT PRIMARY KEY, pid INT NULL, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES s(id) ON UPDATE CASCADE ON DELETE SET NULL)
+  ENGINE=TIDESDB;
+INSERT INTO s VALUES (1,NULL),(2,1),(3,1),(4,2);
+UPDATE s SET id = 10 WHERE id = 1;
+SELECT * FROM s ORDER BY id;
+DELETE FROM s WHERE id = 2;
+SELECT * FROM s ORDER BY id;
+DROP TABLE s;
+--echo # the same SET NULL delete on both engines
+CREATE TABLE s (id INT PRIMARY KEY, pid INT NULL, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES s(id) ON DELETE SET NULL) ENGINE=TIDESDB;
+CREATE TABLE r (id INT PRIMARY KEY, pid INT NULL, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES r(id) ON DELETE SET NULL) ENGINE=INNODB;
+INSERT INTO s VALUES (1,NULL),(2,1),(3,1),(4,2);
+INSERT INTO r SELECT * FROM s;
+DELETE FROM s WHERE id = 1;
+DELETE FROM r WHERE id = 1;
+SELECT * FROM s ORDER BY id;
+SELECT COUNT(*) AS differing FROM (SELECT * FROM s UNION ALL SELECT * FROM r) u
+  GROUP BY id, pid HAVING COUNT(*) <> 2;
+DROP TABLE s, r;
+
+--echo #
+--echo # ============================================
+--echo # RESTRICT on the same table
+--echo # ============================================
+--echo #
+CREATE TABLE s (id INT PRIMARY KEY, pid INT NULL, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES s(id)) ENGINE=TIDESDB;
+INSERT INTO s VALUES (1,NULL),(2,1),(3,2);
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM s WHERE id = 2;
+DELETE FROM s WHERE id = 3;
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO s VALUES (4,99);
+INSERT INTO s VALUES (4,1);
+SELECT * FROM s ORDER BY id;
+DROP TABLE s;
+
+--echo #
+--echo # ============================================
+--echo # A cascade chain deeper than 15 levels is refused and changes nothing
+--echo # ============================================
+--echo #
+CREATE TABLE s (id INT PRIMARY KEY, pid INT NULL, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES s(id) ON DELETE CASCADE) ENGINE=TIDESDB;
+INSERT INTO s SELECT seq, IF(seq = 1, NULL, seq - 1) FROM seq_1_to_20;
+--error ER_FK_DEPTH_EXCEEDED
+DELETE FROM s WHERE id = 1;
+SELECT COUNT(*) FROM s;
+--echo # a chain within the limit cascades fully
+DELETE FROM s WHERE id = 10;
+SELECT COUNT(*), MAX(id) FROM s;
+DROP TABLE s;
+
+--source include/cleanup_tidesdb.inc

@@ -1,0 +1,117 @@
+--source include/have_tidesdb.inc
+--source include/have_innodb.inc
+--source include/not_embedded.inc
+
+#
+# A row stores its null bitmap and then every field in table order, and nothing in it names the
+# columns, so a row written under an older schema can only be read in place when every existing
+# column keeps its position and its null bit and new columns are appended after them.  Every other
+# column change has to rewrite the table.  Each case below runs the same ALTER on a TidesDB table
+# and an InnoDB table holding the same rows, and the two must read back identically.  Cases that
+# must not be instant are also asked for ALGORITHM=INSTANT, which has to be refused.
+#
+
+--echo #
+--echo # ============================================
+--echo # Dropping a middle column
+--echo # ============================================
+--echo #
+CREATE TABLE t (a INT PRIMARY KEY, b INT, c VARCHAR(10), d INT) ENGINE=TIDESDB;
+CREATE TABLE r (a INT PRIMARY KEY, b INT, c VARCHAR(10), d INT) ENGINE=INNODB;
+INSERT INTO t VALUES (1,10,'x1',100),(2,20,'x2',200),(3,NULL,NULL,300);
+INSERT INTO r SELECT * FROM t;
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t DROP COLUMN b, ALGORITHM=INSTANT;
+ALTER TABLE t DROP COLUMN b;
+ALTER TABLE r DROP COLUMN b;
+SELECT * FROM t ORDER BY a;
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a) WHERE NOT (t.c <=> r.c AND t.d <=> r.d);
+
+--echo # dropping the last column also rewrites, or a column appended later would read its bytes
+ALTER TABLE t DROP COLUMN d;
+ALTER TABLE r DROP COLUMN d;
+ALTER TABLE t ADD COLUMN e INT DEFAULT 5, ALGORITHM=INSTANT;
+ALTER TABLE r ADD COLUMN e INT DEFAULT 5;
+SELECT * FROM t ORDER BY a;
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a) WHERE NOT (t.c <=> r.c AND t.e <=> r.e);
+DROP TABLE t, r;
+
+--echo #
+--echo # ============================================
+--echo # Adding a column FIRST or AFTER an existing one, and reordering
+--echo # ============================================
+--echo #
+CREATE TABLE t (a INT PRIMARY KEY, b INT, c VARCHAR(10), d INT) ENGINE=TIDESDB;
+CREATE TABLE r (a INT PRIMARY KEY, b INT, c VARCHAR(10), d INT) ENGINE=INNODB;
+INSERT INTO t VALUES (1,10,'x1',100),(2,20,'x2',200),(3,NULL,NULL,300);
+INSERT INTO r SELECT * FROM t;
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t ADD COLUMN x INT DEFAULT 7 AFTER a, ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN x INT DEFAULT 7 AFTER a;
+ALTER TABLE r ADD COLUMN x INT DEFAULT 7 AFTER a;
+ALTER TABLE t ADD COLUMN f INT DEFAULT 8 FIRST;
+ALTER TABLE r ADD COLUMN f INT DEFAULT 8 FIRST;
+ALTER TABLE t MODIFY d INT AFTER f;
+ALTER TABLE r MODIFY d INT AFTER f;
+--echo # a virtual column in the middle shifts the stored fields after it too
+ALTER TABLE t ADD COLUMN vb INT AS (b + 1) VIRTUAL AFTER x;
+ALTER TABLE r ADD COLUMN vb INT AS (b + 1) VIRTUAL AFTER x;
+SELECT * FROM t ORDER BY a;
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a)
+  WHERE NOT (t.f <=> r.f AND t.d <=> r.d AND t.x <=> r.x AND t.vb <=> r.vb AND t.b <=> r.b
+             AND t.c <=> r.c);
+DROP TABLE t, r;
+
+--echo #
+--echo # ============================================
+--echo # The first variable length column moves every null bit
+--echo # ============================================
+--echo #
+CREATE TABLE t (a INT PRIMARY KEY, b INT NULL, c INT NULL) ENGINE=TIDESDB;
+CREATE TABLE r (a INT PRIMARY KEY, b INT NULL, c INT NULL) ENGINE=INNODB;
+INSERT INTO t VALUES (1,NULL,3),(2,5,NULL);
+INSERT INTO r SELECT * FROM t;
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t ADD COLUMN z VARCHAR(5) NULL, ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN z VARCHAR(5) NULL;
+ALTER TABLE r ADD COLUMN z VARCHAR(5) NULL;
+SELECT * FROM t ORDER BY a;
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a)
+  WHERE NOT (t.b <=> r.b AND t.c <=> r.c AND t.z <=> r.z);
+DROP TABLE t, r;
+
+--echo #
+--echo # ============================================
+--echo # Appending columns stays instant, and new columns read their defaults
+--echo # ============================================
+--echo #
+CREATE TABLE t (a INT PRIMARY KEY, b INT NULL, c INT NULL, v VARCHAR(3)) ENGINE=TIDESDB;
+CREATE TABLE r (a INT PRIMARY KEY, b INT NULL, c INT NULL, v VARCHAR(3)) ENGINE=INNODB;
+INSERT INTO t VALUES (1,NULL,3,'p'),(2,5,NULL,'q');
+INSERT INTO r SELECT * FROM t;
+ALTER TABLE t ADD COLUMN x INT NULL DEFAULT 7, ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN y INT NOT NULL DEFAULT 9, ADD COLUMN n INT NULL, ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN w VARCHAR(5) NULL DEFAULT 'dflt', ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN vx INT AS (x * 2) VIRTUAL, ALGORITHM=INSTANT;
+ALTER TABLE r ADD COLUMN x INT NULL DEFAULT 7, ADD COLUMN y INT NOT NULL DEFAULT 9,
+  ADD COLUMN n INT NULL, ADD COLUMN w VARCHAR(5) NULL DEFAULT 'dflt',
+  ADD COLUMN vx INT AS (x * 2) VIRTUAL;
+INSERT INTO t (a,b,c,v) VALUES (3,30,NULL,'s');
+INSERT INTO r (a,b,c,v) VALUES (3,30,NULL,'s');
+SELECT * FROM t ORDER BY a;
+SELECT COUNT(*) AS differing FROM t JOIN r USING (a)
+  WHERE NOT (t.b <=> r.b AND t.c <=> r.c AND t.v <=> r.v AND t.x <=> r.x AND t.y <=> r.y
+             AND t.n <=> r.n AND t.w <=> r.w AND t.vx <=> r.vx);
+--echo # a stored generated column needs values for existing rows, so it is not instant
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t ADD COLUMN sg INT AS (b * 10) STORED, ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN sg INT AS (b * 10) STORED;
+SELECT a, sg FROM t ORDER BY a;
+--echo # a BIT column keeps part of its value in the null bitmap, so it is not instant either
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t ADD COLUMN bt BIT(3) DEFAULT b'101', ALGORITHM=INSTANT;
+ALTER TABLE t ADD COLUMN bt BIT(3) DEFAULT b'101';
+SELECT a, bt + 0 AS bt FROM t ORDER BY a;
+DROP TABLE t, r;
+
+--source include/cleanup_tidesdb.inc

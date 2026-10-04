@@ -18,8 +18,8 @@ higher levels while keeping the sorted invariant.
 ## Keys
 
 Row keys inside a column family carry a namespace prefix byte, `0x01` for data rows and `0x00` for
-metadata. The metadata namespace holds the auto-increment counter, under an `AINC` key as an 8-byte
-big-endian value, and the FTS aggregate counters (document count and word count for BM25 scoring),
+metadata. The metadata namespace holds the auto-increment start value set by `AUTO_INCREMENT=N`,
+under an `AINC` key as an 8-byte big-endian value so it survives a restart, and the FTS aggregate counters (document count and word count for BM25 scoring),
 so a data scan that seeks to `0x01` naturally skips them.
 
 Primary-key bytes are encoded in a memcmp-comparable form. For a signed 32-bit integer the encoding
@@ -32,22 +32,24 @@ atomic counter, recovered at open by seeking the last key in the column family.
 
 Row values are a packed binary format. Each row begins with a 5-byte header, a magic byte `0xFE`
 followed by the null bitmap size (2 bytes little-endian) and the field count (2 bytes little-endian)
-as of the write. That header is what makes `ADD COLUMN` and `DROP COLUMN` instant, because the
-deserializer can adapt to rows written under any prior schema. After the header comes the null
-bitmap, then each non-null field serialized with `Field::pack()`. On read, `Field::unpack()`
-restores the fields. A row written with fewer fields than the current schema, from before a column
-was added, fills the missing fields with their `DEFAULT`, and a row written with more fields, from
-before a column was dropped, has the extra data skipped. This is more compact than the raw record
-buffer, especially for `VARCHAR` and `CHAR` columns. On an `ENCRYPTED` table the whole packed row
+as of the write. After the header comes the null bitmap, then each non-null field serialized with
+`Field::pack()`, in table order. On read, `Field::unpack()` restores the fields. Nothing in the row
+names its columns, so an old row decodes by position. A row written with fewer fields than the
+current schema, from before columns were appended, fills the missing fields and their null bits
+from their `DEFAULT`, which is what makes an appended `ADD COLUMN` instant. A change that moves an
+existing column or its null bit, such as `DROP COLUMN` or adding a column before others, rewrites
+the table instead (see [Online DDL](/administration/online-ddl)). This is more compact than the raw
+record buffer, especially for `VARCHAR` and `CHAR` columns. On an `ENCRYPTED` table the whole packed row
 is then wrapped in an encryption envelope before it is stored.
 
 ## Secondary index entries
 
-A secondary index entry lives in its own column family. The key concatenates the comparable
+A regular secondary index entry lives in its own column family. The key concatenates the comparable
 index-column bytes with the comparable primary-key bytes, and the value is a single zero byte, so all
 the information is in the key. To resolve a lookup the engine seeks into the index CF, reads the key,
 splits off the trailing PK bytes, and does a point-get into the data CF. When the query needs only
-indexed columns and each is of a reconstructable type, integers, temporal types, or fixed
+indexed columns and each is of a reconstructable type, integers, `YEAR`, `DATE`, `DATETIME` or
+`TIMESTAMP` without fractional seconds, or fixed
 `CHAR`/`BINARY` in binary or latin1, the row is decoded straight from the index key bytes and the
 data-CF point-get is skipped. This covering read applies to tables with an explicit primary key.
 

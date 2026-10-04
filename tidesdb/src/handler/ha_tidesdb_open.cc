@@ -77,6 +77,7 @@ ha_tidesdb::ha_tidesdb(handlerton *hton, TABLE_SHARE *table_arg)
       in_bulk_update_(false),
       in_bulk_delete_(false),
       bulk_insert_ops_(0),
+      bulk_may_commit_(false),
       cached_compact_after_range_delete_min_rows_(0),
       bulk_delete_rows_(0),
       mrr_custom_active_(false),
@@ -388,10 +389,19 @@ int ha_tidesdb::open_init_share_columns(const char *name)
     }
     share->has_ttl = (share->default_ttl > 0 || share->ttl_field_idx >= 0);
 
-    /* Load this table's foreign keys from the engine catalog into the share once,
+    /* Spatial extents start unknown and are kept for the life of the share, since a reopen of the
+       same table sees the same rows. */
+    if (!share->spatial_extent || share->spatial_extent_keys != table->s->keys)
+    {
+        share->spatial_extent.reset(new tdb_spatial_extent[table->s->keys ? table->s->keys : 1]);
+        share->spatial_extent_keys = table->s->keys;
+    }
+
+    /* Load this table's foreign keys from the engine catalog into the share,
        resolving the referencing columns on the child side and the referenced
-       columns on the parent side against this table definition. */
-    fk_load();
+       columns on the parent side against this table definition.  Later catalog
+       changes are picked up at the next statement, see fk_current. */
+    (void)fk_current();
 
     return 0;
 }
@@ -599,6 +609,7 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
 int ha_tidesdb::close(void)
 {
     DBUG_ENTER("ha_tidesdb::close");
+    fk_self_handler_close();
     if (scan_iter)
     {
         tidesdb_iter_free(scan_iter);

@@ -1,0 +1,53 @@
+--source include/have_tidesdb.inc
+--source include/have_sequence.inc
+--source include/not_embedded.inc
+
+#
+# An inplace ADD INDEX fills the new index from a scan of the table.  Writes from other sessions
+# go only to the indexes that already exist and nothing records them for the build, so a row
+# inserted, updated or deleted behind the scan used to be missing from the new index, or left in
+# it after a delete, while CHECK TABLE still said OK.  The build now holds a shared lock, reads
+# continue and writes wait for it, and asking for LOCK=NONE is refused with the reason.
+#
+
+CREATE TABLE t (id INT PRIMARY KEY, v INT, w INT) ENGINE=TIDESDB;
+INSERT INTO t SELECT seq, seq, seq FROM seq_1_to_20000;
+
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE t ADD INDEX iv (v), ALGORITHM=INPLACE, LOCK=NONE;
+
+--echo # dropping an index still needs no lock
+ALTER TABLE t ADD INDEX iw (w), ALGORITHM=INPLACE, LOCK=SHARED;
+ALTER TABLE t DROP INDEX iw, ALGORITHM=INPLACE, LOCK=NONE;
+
+--echo # writes from another session while the index is built
+--connect (writer,localhost,root,,test)
+--connection default
+--send ALTER TABLE t ADD INDEX iv (v), ALGORITHM=INPLACE
+--connection writer
+--disable_query_log
+let $i= 0;
+while ($i < 50)
+{
+  eval INSERT INTO t VALUES (-1 - $i, -1 - $i, 0);
+  eval UPDATE t SET v = v + 1000000 WHERE id = 1 + $i;
+  eval DELETE FROM t WHERE id = 101 + $i;
+  inc $i;
+}
+--enable_query_log
+--connection default
+--reap
+--disconnect writer
+
+--echo # the new index agrees with the table, row for row
+SELECT COUNT(*) FROM t;
+SELECT COUNT(*) FROM t FORCE INDEX (iv);
+SELECT COUNT(*) FROM t FORCE INDEX (iv) WHERE v < 0;
+SELECT COUNT(*) FROM t FORCE INDEX (iv) WHERE v > 1000000;
+SELECT COUNT(*) FROM t FORCE INDEX (iv) WHERE v BETWEEN 101 AND 150;
+SELECT COUNT(*) FROM t FORCE INDEX (iv) WHERE v BETWEEN 1 AND 50;
+SELECT COUNT(*) AS found_through_index FROM t a JOIN t b FORCE INDEX (iv) ON b.v = a.v AND b.id = a.id;
+
+DROP TABLE t;
+
+--source include/cleanup_tidesdb.inc

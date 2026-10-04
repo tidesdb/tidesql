@@ -48,8 +48,19 @@ bounding box is mapped to a coarse 256 by 256 grid on the curve, only the cells 
 are kept, those cells are merged into contiguous Hilbert ranges, and the engine seeks directly to
 each range. Each candidate then passes exact MBR filtering to drop false positives from the curve
 approximation. A box that covers more than 4096 grid cells skips the decomposition and scans the
-whole curve as one range, since the MBR filter drops the extra rows anyway. The one predicate this
-cannot accelerate is `MBRDisjoint`, because a
-non-overlapping geometry can lie anywhere on the curve, so a disjoint query scans the full index and
-filters. INSERT, UPDATE, and DELETE maintain the spatial index transactionally alongside the row,
-the same as secondary and full-text indexes.
+whole curve as one range, since the MBR filter drops the extra rows anyway.
+
+Because an entry is keyed by its MBR center, a line or polygon that crosses the query box can be
+centered well outside it. `MBRWithin` and `MBREquals` need only the cells of the box, since a
+matching geometry is centered inside it. For `MBRIntersects`, `ST_Intersects`, and
+`MBRContains(col, const)` the engine widens the scanned area by the largest half-extent the index
+has held, so these predicates return exact results through the index for every geometry type, not
+only points. After a server restart that extent is not yet known, so these predicates scan the whole
+index until one such scan reads it to the end and learns it. The one predicate this cannot accelerate is `MBRDisjoint`, because
+a non-overlapping geometry can lie anywhere on the curve, so a disjoint query scans the full index
+and filters.
+
+INSERT, UPDATE, and DELETE maintain the spatial index transactionally alongside the row, the same as
+secondary and full-text indexes. An UPDATE that changes the primary key re-keys the row's spatial
+entry, and an UPDATE on a table with a TTL rewrites the entry so it carries the row's new expiry, or
+none when the update leaves the row without one.

@@ -52,7 +52,8 @@ CREATE TABLE inline_vals (id INT PRIMARY KEY, val VARCHAR(200))
   ENGINE=TIDESDB KEEP_VALUES_INLINE=1;
 ```
 
-Each SSTable has a key log and a value log. Value separation is a database-wide policy set by
+Each SSTable is a key log, and the database keeps one value log shared by every column family.
+Value separation is a database-wide policy set by
 `tidesdb_value_separation_threshold`, so a value at or above that size goes to the shared value log
 with a pointer left in the key log, and a smaller one stays inline. Separating a large value keeps
 it out of every later merge, which is the whole point of the threshold, at the cost of one value-log
@@ -95,12 +96,14 @@ CREATE TABLE events (
   TOMBSTONE_DENSITY_MIN_ENTRIES=2048;
 ```
 
-After each flush the engine can escalate compaction for any level-1 SSTable whose tombstone count
-divided by entry count exceeds a ratio, provided the SSTable has enough entries to matter.
+When the library's compaction planner evaluates a column family, it escalates compaction if any
+SSTable, at any level, has a tombstone count divided by entry count at or above a ratio, provided
+the SSTable has enough entries to matter.
 `TOMBSTONE_DENSITY_TRIGGER` is that ratio in parts per 10,000, so `5000` means 0.50, and the default
 `0` disables the check. `TOMBSTONE_DENSITY_MIN_ENTRIES` is the entry-count floor, default 1024, that
 stops a tiny SSTable from firing compaction. `ALTER TABLE ... TOMBSTONE_DENSITY_TRIGGER=N` updates
-the live column family so the new ratio applies on the next post-flush check without a restart.
+the live column family so the new ratio applies the next time the planner evaluates it, without a
+restart.
 Session defaults `tidesdb_default_tombstone_density_trigger` and
 `tidesdb_default_tombstone_density_min_entries`. The [write-path chapter](/internals/write-path)
 covers how this fits with the single-delete optimization.

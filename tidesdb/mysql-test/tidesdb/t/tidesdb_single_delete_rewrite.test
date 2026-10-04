@@ -1,0 +1,66 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# Secondary index entries are removed with single-deletes, which compaction drops together with
+# the put beneath them.  Two UPDATE paths write an entry again in place, refreshing the expiry of a
+# row in a table with a TTL and rewriting a FULLTEXT term whose document length changed, so such a
+# key holds two puts before its single-delete.  Each step here is flushed to its own SSTable by a
+# checkpoint and then compacted, and a deleted row must stay gone through every index, also after a
+# restart, while the row that remains must still be found.
+#
+
+CREATE TABLE t (id INT PRIMARY KEY, k INT, v VARCHAR(20), body TEXT, geo GEOMETRY NOT NULL,
+                KEY ik (k), FULLTEXT KEY fb (body), SPATIAL KEY sg (geo)) ENGINE=TIDESDB TTL=3600;
+INSERT INTO t VALUES (1,10,'a','tidal pool',ST_GeomFromText('POINT(1 1)')),
+                     (2,20,'b','tidal flat',ST_GeomFromText('POINT(1 2)'));
+
+let $ckpt= $MYSQLTEST_VARDIR/tmp/tidesdb_sd_rewrite;
+let $step= 0;
+while ($step < 4)
+{
+  if ($step == 1)
+  {
+    --echo # rewrite every index entry in place, the expiry refresh and a longer document
+    UPDATE t SET v = 'a2', body = 'tidal pool deep' WHERE id = 1;
+    UPDATE t SET v = 'b2' WHERE id = 2;
+  }
+  if ($step == 2)
+  {
+    --echo # delete one row, its entries get single-deletes
+    DELETE FROM t WHERE id = 1;
+  }
+  --disable_query_log
+  --exec rm -rf $ckpt
+  --eval SET GLOBAL tidesdb_checkpoint_dir = '$ckpt'
+  SET GLOBAL tidesdb_checkpoint_dir = '';
+  --enable_query_log
+  inc $step;
+}
+--exec rm -rf $ckpt
+
+--disable_result_log
+OPTIMIZE TABLE t;
+OPTIMIZE TABLE t;
+--enable_result_log
+
+let $round= 2;
+while ($round)
+{
+  SELECT id FROM t ORDER BY id;
+  SELECT id FROM t FORCE INDEX (ik) WHERE k IN (10, 20) ORDER BY id;
+  SELECT id FROM t WHERE MATCH(body) AGAINST('tidal') ORDER BY id;
+  SELECT id FROM t WHERE MATCH(body) AGAINST('deep');
+  SELECT id FROM t FORCE INDEX (sg)
+    WHERE MBRWithin(geo, ST_GeomFromText('POLYGON((0 0,3 0,3 3,0 3,0 0))')) ORDER BY id;
+  if ($round == 2)
+  {
+    --echo # and from disk after a restart
+    --source include/restart_mysqld.inc
+  }
+  dec $round;
+}
+
+DROP TABLE t;
+
+--source include/cleanup_tidesdb.inc

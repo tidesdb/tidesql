@@ -125,40 +125,45 @@ explicit multi-statement transactions. They are only meaningful within a `BEGIN 
 ## Bulk DML batching
 
 Statements that touch many rows, such as `LOAD DATA INFILE`, multi-row `INSERT`, `INSERT ... SELECT`,
-and range `UPDATE` or `DELETE`, keep the transaction from growing without bound by committing
-mid-statement in fixed-size batches. The engine hooks `start_bulk_insert`, `start_bulk_update`, and
-`start_bulk_delete`, counts row operations (the data write plus secondary-index maintenance)
+and range `DELETE`, keep the transaction from growing without bound by committing mid-statement in
+fixed-size batches, but only when the statement is its own transaction, under autocommit or as the
+copy step of DDL such as `ALTER TABLE`. Inside `BEGIN`, or with `autocommit=0`, every write stays in
+the transaction, so `COMMIT` or `ROLLBACK` covers all of it. The engine hooks `start_bulk_insert`
+and `start_bulk_delete`, counts row operations (the data write plus secondary-index maintenance)
 against a batch size of 500 operations, and at each threshold commits the current transaction and
-carries on in a fresh transaction at `READ_COMMITTED` for the next batch. A bulk insert whose
-expected row count will reach the threshold, inside a transaction that holds no writes yet, moves to
-`READ_COMMITTED` before its first batch. Statement memory stays bounded regardless of
-statement size, autocommit semantics are preserved so a failure rolls back only the current batch,
-and the statement reports the first error it hit. The mid-statement commit is shared across insert,
-update, and delete through one helper, so the threshold and the iterator and dup-cache invalidation
-are identical on all three paths.
+carries on in a fresh transaction at `READ_COMMITTED` for the next batch. A `DELETE` that is
+gathering its rows into one range tombstone holds these commits back while it buffers, as
+[Write-Path Optimizations](/internals/write-path) describes. Statement memory stays bounded regardless of statement size, a failure rolls back only the current
+batch, and the statement reports the first error it hit. An `UPDATE` does not batch, because the
+engine does not advertise `HA_CAN_FORCE_BULK_UPDATE`.
+
+A `DELETE` with no `WHERE` clause runs row by row inside its transaction like any other `DELETE`,
+since the engine declines `delete_all_rows`. Only `TRUNCATE TABLE`, which commits implicitly and
+holds an exclusive lock, drops and recreates the table's column families.
 
 ## Group commit
 
 The engine participates in binlog group commit. When a batch of transactions commits together, the
 durable commit runs in binlog order through the `commit_ordered` hook, which lets the server run the
-rest of commit outside the commit-order lock. The transactions in one commit round share the cost of
-a single durability barrier, so on a busy server throughput scales with the size of the group rather
-than paying a separate barrier per commit. This is what keeps `FULL` sync affordable under load, as
-covered in [Durability and Sync Modes](/concepts/durability).
+rest of commit outside the commit-order lock. The ordered phase runs one transaction at a time, so
+each commit of a binlog group waits for its own log write. Commits that reach the library's
+write-ahead log concurrently share one durable write instead, since the log writes out the records
+staged by every waiting committer together. This is what keeps `FULL` sync affordable under
+concurrent load, as covered in [Durability and Sync Modes](/concepts/durability).
 
 ## Crash recovery and two-phase commit
 
 TideSQL is a full two-phase commit participant, so it recovers to a consistent point after a crash
 and coordinates with the binlog and with external XA. In the prepare phase the engine durably logs
 the transaction's write batch under its XID, so a crash after prepare but before commit leaves an
-in-doubt transaction that recovery resolves rather than loses. A prepared transaction is held in a
-process-wide registry, so its commit or rollback decision can arrive from another connection or after
-a restart.
+in-doubt transaction that recovery resolves rather than loses.
 
-When the server restarts it asks the engine to recover, and the engine replays every in-doubt
-prepared transaction so the coordinator can commit or roll each one back to match the binlog. An
-external `XA PREPARE` detaches the transaction to the same registry, so a distributed transaction
-survives the client disconnecting between `XA PREPARE` and `XA COMMIT`:
+When the server restarts it asks the engine to recover, and the engine reports every in-doubt
+prepared transaction the library recovered and holds each one in a process-wide registry, so the
+coordinator can commit or roll it back to match the binlog. An external `XA PREPARE` also publishes
+the transaction to that registry, so its commit or rollback decision can arrive from another
+connection, and a distributed transaction survives the client disconnecting between `XA PREPARE`
+and `XA COMMIT`:
 
 ```sql
 XA START 'txn1';

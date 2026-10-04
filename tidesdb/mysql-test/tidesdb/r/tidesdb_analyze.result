@@ -15,7 +15,7 @@ Table	Op	Msg_type	Msg_text
 test.t1	analyze	status	Engine-independent statistics collected
 test.t1	analyze	Note	[TIDESDB] CF 'test__t1'  total_keys=N  data_size=N bytes  levels=0  read_amp=N
 test.t1	analyze	Note	[TIDESDB] avg_key=N bytes  avg_value=N bytes
-test.t1	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N ssts)  compact_read=N  ratio=Nx
+test.t1	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N compactions)  compact_read=N  ratio=Nx
 test.t1	analyze	Note	[TIDESDB] idx CF 'test__t1__idx_idx_val'  keys=N  data_size=N bytes  levels=0
 test.t1	analyze	Note	[TIDESDB] idx 'idx_val' sampled=6 distinct=6 rec_per_key=1
 test.t1	analyze	status	OK
@@ -30,7 +30,7 @@ Table	Op	Msg_type	Msg_text
 test.t2	analyze	status	Engine-independent statistics collected
 test.t2	analyze	Note	[TIDESDB] CF 'test__t2'  total_keys=N  data_size=N bytes  levels=0  read_amp=N
 test.t2	analyze	Note	[TIDESDB] avg_key=N bytes  avg_value=N bytes
-test.t2	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N ssts)  compact_read=N  ratio=Nx
+test.t2	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N compactions)  compact_read=N  ratio=Nx
 test.t2	analyze	status	OK
 # ANALYZE an empty table
 CREATE TABLE t3 (

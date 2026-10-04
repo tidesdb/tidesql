@@ -210,22 +210,42 @@ int ha_tidesdb::index_read_spatial(uchar *buf, const uchar *key, enum ha_rkey_fu
     int irc = ensure_scan_iter();
     if (irc) return irc;
 
-    /* We decompose the query box into hilbert curve ranges.
-       For DISJOINT, we must scan everything (disjoint entries
-       can be anywhere on the curve). For other predicates,
-       we compute a tight set of ranges covering only the cells
-       that overlap the query box. */
-    if (find_flag == HA_READ_MBR_DISJOINT)
+    /* We decompose the query box into hilbert curve ranges.  Entries are keyed by the centre of
+       their bounding box.  A row that lies within the query box, or equals it, is centred inside
+       it, so the cells the box covers are enough.  A row that intersects the box, or contains it
+       (the server's WITHIN, read from the query's side), can be centred up to its own half
+       extent outside the box, so the box is widened by the largest half extent the index has
+       held.  Until that is known, those predicates scan the whole curve and learn it, and
+       DISJOINT always does, since a disjoint entry can sit anywhere. */
+    const bool needs_reach = find_flag == HA_READ_MBR_INTERSECT || find_flag == HA_READ_MBR_WITHIN;
+    tdb_spatial_extent *ext = (share->spatial_extent && active_index < share->spatial_extent_keys)
+                                  ? &share->spatial_extent[active_index]
+                                  : NULL;
+    spatial_learning_ = false;
+    if (find_flag == HA_READ_MBR_DISJOINT ||
+        (needs_reach && (!ext || !ext->known.load(std::memory_order_acquire))))
     {
         spatial_ranges_.clear();
         spatial_ranges_.push_back({HILBERT_RANGE_FULL_LO, HILBERT_RANGE_FULL_HI});
+        if (needs_reach && ext)
+        {
+            spatial_learning_ = true;
+            spatial_seen_half_w_ = 0.0;
+            spatial_seen_half_h_ = 0.0;
+        }
     }
     else
     {
-        uint32_t qx0 = double_to_lex_uint32(qmbr.xmin);
-        uint32_t qy0 = double_to_lex_uint32(qmbr.ymin);
-        uint32_t qx1 = double_to_lex_uint32(qmbr.xmax);
-        uint32_t qy1 = double_to_lex_uint32(qmbr.ymax);
+        double hw = 0.0, hh = 0.0;
+        if (needs_reach)
+        {
+            hw = ext->half_w.load(std::memory_order_relaxed);
+            hh = ext->half_h.load(std::memory_order_relaxed);
+        }
+        uint32_t qx0 = double_to_lex_uint32(qmbr.xmin - hw);
+        uint32_t qy0 = double_to_lex_uint32(qmbr.ymin - hh);
+        uint32_t qx1 = double_to_lex_uint32(qmbr.xmax + hw);
+        uint32_t qy1 = double_to_lex_uint32(qmbr.ymax + hh);
         spatial_decompose_ranges(qx0, qy0, qx1, qy1, spatial_ranges_);
     }
     spatial_range_idx_ = 0;

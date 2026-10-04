@@ -227,15 +227,32 @@ static int fk_field_index(TABLE *table, const std::string &col)
    nullable.  init_tmp_table_share plus open_table_def is the same lock-free frm
    peek the server uses to read a table's keys by name.  Returns true when the
    parent was read and a matching primary or unique key was found. */
-static bool fk_resolve_parent_index(THD *thd, const std::string &ref_db,
-                                    const std::string &ref_table,
-                                    const std::vector<std::string> &ref_cols, bool &out_is_pk,
-                                    std::string &out_index_name, bool &out_has_nullable)
+static bool fk_checks_off(THD *thd);
+
+enum fk_parent_resolution
 {
-    if (ref_db.empty() || ref_table.empty() || ref_cols.empty()) return false;
+    FK_PARENT_KEY_FOUND,
+    FK_PARENT_TABLE_MISSING,
+    FK_PARENT_KEY_MISSING
+};
+
+static fk_parent_resolution fk_resolve_parent_index(THD *thd, const std::string &ref_db,
+                                                    const std::string &ref_table,
+                                                    const std::vector<std::string> &ref_cols,
+                                                    bool &out_is_pk, std::string &out_index_name,
+                                                    bool &out_has_nullable)
+{
+    if (ref_db.empty() || ref_table.empty() || ref_cols.empty()) return FK_PARENT_KEY_MISSING;
 
     char path[FN_REFLEN + 1];
     build_table_filename(path, sizeof(path) - 1, ref_db.c_str(), ref_table.c_str(), "", 0);
+
+    /* Look for the parent's definition before reading it, since reading a missing one raises an
+       error the statement would then fail with, even when foreign key checks are off and a
+       missing parent is allowed. */
+    char frm[FN_REFLEN + 1];
+    build_table_filename(frm, sizeof(frm) - 1, ref_db.c_str(), ref_table.c_str(), reg_ext, 0);
+    if (my_access(frm, F_OK)) return FK_PARENT_TABLE_MISSING;
 
     TABLE_SHARE share;
     /* init_tmp_table_share gained a trailing thread_specific flag in MariaDB 11.7; pass it where
@@ -245,15 +262,19 @@ static bool fk_resolve_parent_index(THD *thd, const std::string &ref_db,
 #else
     init_tmp_table_share(thd, &share, ref_db.c_str(), 0, ref_table.c_str(), path);
 #endif
-    bool ok = false;
+    fk_parent_resolution res = FK_PARENT_TABLE_MISSING;
     if (open_table_def(thd, &share, GTS_TABLE | GTS_USE_DISCOVERY) == OPEN_FRM_OK)
     {
+        res = FK_PARENT_KEY_MISSING;
         int best = -1;
         for (uint i = 0; i < share.keys; i++)
         {
             KEY *k = &share.key_info[i];
             if (!(k->flags & HA_NOSAME)) continue; /* only primary or unique keys qualify */
-            if (k->user_defined_key_parts < ref_cols.size()) continue;
+            /* The referenced columns have to be the whole key.  A leading part of a composite
+               key is not unique, and the parent probe of a primary key builds the full data key
+               from the referenced values, so a prefix would never match a row. */
+            if (k->user_defined_key_parts != ref_cols.size()) continue;
             bool match = true;
             for (uint p = 0; p < ref_cols.size(); p++)
             {
@@ -275,11 +296,11 @@ static bool fk_resolve_parent_index(THD *thd, const std::string &ref_db,
             out_has_nullable = false;
             for (uint p = 0; p < ref_cols.size(); p++)
                 if (k->key_part[p].field->real_maybe_null()) out_has_nullable = true;
-            ok = true;
+            res = FK_PARENT_KEY_FOUND;
         }
     }
     free_table_share(&share);
-    return ok;
+    return res;
 }
 
 /* ---- create-time persistence ------------------------------------------ */
@@ -329,10 +350,24 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
         /* Record whether each referencing column is nullable so the parent side
            can rebuild the child index prefix, whose encoding carries a null
            indicator only for a nullable column. */
+        bool any_not_null = false;
         for (const auto &c : e.child_columns)
         {
             int fi = fk_field_index(table_arg, c);
-            e.child_nullable.push_back((uint8)(fi >= 0 && table_arg->field[fi]->real_maybe_null()));
+            const bool nullable = fi >= 0 && table_arg->field[fi]->real_maybe_null();
+            e.child_nullable.push_back((uint8)nullable);
+            if (!nullable) any_not_null = true;
+        }
+
+        /* SET NULL on a column that cannot hold NULL has nothing it can do, and enforcing it would
+           leave the child pointing at a parent row that is gone.  InnoDB refuses it too. */
+        if (any_not_null &&
+            (fk->delete_opt == FK_OPTION_SET_NULL || fk->update_opt == FK_OPTION_SET_NULL))
+        {
+            my_printf_error(ER_CANT_CREATE_TABLE,
+                            "TidesDB foreign key %s uses SET NULL on a column declared NOT NULL",
+                            MYF(0), e.name.c_str());
+            return HA_ERR_UNSUPPORTED;
         }
 
         List_iterator_fast<Key_part_spec> rc(fk->ref_columns);
@@ -378,28 +413,48 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
 
         /* Resolve which parent key the constraint references so the child probe
            targets the right place, the parent data family for a primary key or
-           the parent index family for a unique key.  If the parent frm cannot be
-           read we assume the primary key, the historical behaviour. */
+           the parent index family for a unique key.  A constraint that names no
+           primary or unique key of its parent is refused, since enforcing it
+           against some other key would accept and reject the wrong rows.  A
+           parent that does not exist yet is accepted only with foreign key
+           checks off, as InnoDB does, and is taken to be its primary key. */
         e.parent_is_pk = 1;
         bool p_is_pk = true, p_has_nullable = false;
         std::string p_index;
-        if (fk_resolve_parent_index(thd, e.ref_db, e.ref_table, e.ref_columns, p_is_pk, p_index,
-                                    p_has_nullable))
+        switch (fk_resolve_parent_index(thd, e.ref_db, e.ref_table, e.ref_columns, p_is_pk, p_index,
+                                        p_has_nullable))
         {
-            e.parent_is_pk = p_is_pk ? 1 : 0;
-            e.parent_index_name = p_index;
-            /* A referenced unique index whose columns are nullable stores a null
-               indicator the value-only child probe would not reproduce, so reject
-               that rare shape rather than enforce it incorrectly. */
-            if (!p_is_pk && p_has_nullable)
-            {
-                my_printf_error(
-                    ER_CANT_CREATE_TABLE,
-                    "TidesDB foreign key %s must reference a NOT NULL unique key or the "
-                    "primary key",
-                    MYF(0), e.name.c_str());
+            case FK_PARENT_KEY_FOUND:
+                e.parent_is_pk = p_is_pk ? 1 : 0;
+                e.parent_index_name = p_index;
+                /* A referenced unique index whose columns are nullable stores a null
+                   indicator the value-only child probe would not reproduce, so reject
+                   that rare shape rather than enforce it incorrectly. */
+                if (!p_is_pk && p_has_nullable)
+                {
+                    my_printf_error(
+                        ER_CANT_CREATE_TABLE,
+                        "TidesDB foreign key %s must reference a NOT NULL unique key or the "
+                        "primary key",
+                        MYF(0), e.name.c_str());
+                    return HA_ERR_UNSUPPORTED;
+                }
+                break;
+            case FK_PARENT_TABLE_MISSING:
+                if (!fk_checks_off(thd))
+                {
+                    my_printf_error(ER_CANT_CREATE_TABLE,
+                                    "TidesDB foreign key %s references %s.%s, which does not exist",
+                                    MYF(0), e.name.c_str(), e.ref_db.c_str(), e.ref_table.c_str());
+                    return HA_ERR_UNSUPPORTED;
+                }
+                break;
+            case FK_PARENT_KEY_MISSING:
+                my_printf_error(ER_CANT_CREATE_TABLE,
+                                "TidesDB foreign key %s must reference every column of the "
+                                "primary key or of a unique key of %s.%s",
+                                MYF(0), e.name.c_str(), e.ref_db.c_str(), e.ref_table.c_str());
                 return HA_ERR_UNSUPPORTED;
-            }
         }
 
         std::string val;
@@ -429,6 +484,7 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
     }
     int rc = tidesdb_txn_commit(txn);
     tidesdb_txn_free(txn);
+    if (rc == TDB_SUCCESS) tdb_fk_catalog_gen.fetch_add(1, std::memory_order_release);
     return rc == TDB_SUCCESS ? 0 : HA_ERR_GENERIC;
 }
 
@@ -474,28 +530,32 @@ int ha_tidesdb::fk_purge_catalog(const char *child_cf_name)
 
     if (tidesdb_txn_commit(txn) != TDB_SUCCESS) tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
+    if (!to_delete.empty()) tdb_fk_catalog_gen.fetch_add(1, std::memory_order_release);
     return 0;
 }
 
-/* ---- open-time load into the share ------------------------------------ */
+/* ---- the per-table constraint set ------------------------------------- */
 
-void ha_tidesdb::fk_load()
+std::atomic<uint64_t> tdb_fk_catalog_gen{1};
+
+std::shared_ptr<const tdb_fk_set> ha_tidesdb::fk_build(uint64_t gen)
 {
-    if (!share || share->fk_loaded) return;
-    share->fk_loaded = true;
+    auto set = std::make_shared<tdb_fk_set>();
+    set->gen = gen;
 
     tidesdb_column_family_t *cf = tidesdb_get_column_family(tdb_global, FK_CATALOG_CF);
-    if (!cf) return;
+    if (!cf) return set;
 
     tidesdb_txn_t *txn = NULL;
-    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return;
+    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return set;
 
     const std::string &self = share->cf_name;
 
     /* The catalog is small, one record per constraint per side, so we walk it
        whole and route each entry by the column families it names.  A record
-       whose child cf is this table feeds fk_child, one whose parent cf is this
-       table feeds fk_parent, and a self-referencing constraint feeds both. */
+       whose child cf is this table feeds the child list, one whose parent cf is
+       this table feeds the parent list, and a self-referencing constraint feeds
+       both. */
     tidesdb_iter_t *it = NULL;
     if (tidesdb_iter_new(txn, cf, &it) == TDB_SUCCESS && it)
     {
@@ -537,7 +597,7 @@ void ha_tidesdb::fk_load()
                         }
                         d.child_key_no = fk_find_covering_index(table, e.child_columns);
                         d.parent_is_pk = (e.parent_is_pk != 0);
-                        share->fk_child.push_back(std::move(d));
+                        set->child.push_back(std::move(d));
                     }
                     if (e.parent_cf == self)
                     {
@@ -562,7 +622,7 @@ void ha_tidesdb::fk_load()
                         d.parent_key_no = fk_find_covering_index(table, e.ref_columns);
                         d.parent_is_pk = (table->s->primary_key != MAX_KEY &&
                                           d.parent_key_no == (int)table->s->primary_key);
-                        share->fk_parent.push_back(std::move(d));
+                        set->parent.push_back(std::move(d));
                     }
                 }
             }
@@ -575,6 +635,27 @@ void ha_tidesdb::fk_load()
 
     tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
+    return set;
+}
+
+std::shared_ptr<const tdb_fk_set> ha_tidesdb::fk_current()
+{
+    if (!share) return nullptr;
+    /* Read the generation before the catalog, so a set built while a change commits carries the
+       older number and is rebuilt on the next look. */
+    const uint64_t gen = tdb_fk_catalog_gen.load(std::memory_order_acquire);
+    std::shared_ptr<const tdb_fk_set> cur = std::atomic_load(&share->fk);
+    if (cur && cur->gen == gen) return cur;
+    std::shared_ptr<const tdb_fk_set> fresh = fk_build(gen);
+    std::atomic_store(&share->fk, fresh);
+    return fresh;
+}
+
+const tdb_fk_set &ha_tidesdb::fks()
+{
+    static const tdb_fk_set empty;
+    if (!fk_stmt_) fk_stmt_ = fk_current();
+    return fk_stmt_ ? *fk_stmt_ : empty;
 }
 
 /* ---- server read-back methods ----------------------------------------- */
@@ -652,8 +733,9 @@ static void fk_fill_info(THD *thd, const tdb_fk_def &d, TABLE *table, FOREIGN_KE
 
 int ha_tidesdb::get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list)
 {
-    if (!share) return 0;
-    for (const auto &d : share->fk_child)
+    std::shared_ptr<const tdb_fk_set> fk = fk_current();
+    if (!fk) return 0;
+    for (const auto &d : fk->child)
     {
         FOREIGN_KEY_INFO fki;
         fk_fill_info(thd, d, table, &fki, false);
@@ -665,8 +747,9 @@ int ha_tidesdb::get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_lis
 
 int ha_tidesdb::get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list)
 {
-    if (!share) return 0;
-    for (const auto &d : share->fk_parent)
+    std::shared_ptr<const tdb_fk_set> fk = fk_current();
+    if (!fk) return 0;
+    for (const auto &d : fk->parent)
     {
         FOREIGN_KEY_INFO fki;
         fk_fill_info(thd, d, table, &fki, true);
@@ -679,27 +762,33 @@ int ha_tidesdb::get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_
 #if MYSQL_VERSION_ID >= 110400
 bool ha_tidesdb::referenced_by_foreign_key() const noexcept
 {
-    return share && !share->fk_parent.empty();
+    /* The server asks this outside a statement too, so look at the current catalog, which only
+       reads and swaps the shared set and leaves this handler unchanged. */
+    std::shared_ptr<const tdb_fk_set> fk = const_cast<ha_tidesdb *>(this)->fk_current();
+    return fk && !fk->parent.empty();
 }
 #else
 uint ha_tidesdb::referenced_by_foreign_key()
 {
-    return (share && !share->fk_parent.empty()) ? 1 : 0;
+    std::shared_ptr<const tdb_fk_set> fk = fk_current();
+    return (fk && !fk->parent.empty()) ? 1 : 0;
 }
 #endif
 
 bool ha_tidesdb::can_switch_engines()
 {
-    if (!share) return true;
-    return share->fk_child.empty() && share->fk_parent.empty();
+    std::shared_ptr<const tdb_fk_set> fk = fk_current();
+    if (!fk) return true;
+    return fk->child.empty() && fk->parent.empty();
 }
 
 char *ha_tidesdb::get_foreign_key_create_info()
 {
-    if (!share || share->fk_child.empty()) return NULL;
+    std::shared_ptr<const tdb_fk_set> fk = fk_current();
+    if (!fk || fk->child.empty()) return NULL;
 
     std::string s;
-    for (const auto &d : share->fk_child)
+    for (const auto &d : fk->child)
     {
         s += ",\n  CONSTRAINT `";
         s += d.name;
@@ -753,7 +842,7 @@ static bool fk_checks_off(THD *thd)
 
 int ha_tidesdb::fk_check_child(const uchar *new_row)
 {
-    if (!share || share->fk_child.empty()) return 0;
+    if (!share || fks().child.empty()) return 0;
     /* A cascade writing this row already holds a valid parent value, so skip the
        existence probe, which would otherwise race the parent's own row update. */
     if (fk_in_cascade_) return 0;
@@ -762,7 +851,7 @@ int ha_tidesdb::fk_check_child(const uchar *new_row)
     tidesdb_txn_t *txn = stmt_txn;
     if (!txn) return 0;
 
-    for (const auto &d : share->fk_child)
+    for (const auto &d : fks().child)
     {
         if (d.child_key_no < 0) continue;
         KEY *ki = &table->key_info[d.child_key_no];
@@ -929,6 +1018,51 @@ static TABLE *fk_find_open_table(TABLE *self, const std::string &db, const std::
     return NULL;
 }
 
+handler *ha_tidesdb::fk_self_handler(THD *thd)
+{
+    if (!fk_self_h_)
+    {
+        if (!fk_self_root_inited_)
+        {
+            init_alloc_root(PSI_NOT_INSTRUMENTED, &fk_self_root_, 1024, 0, MYF(0));
+            fk_self_root_inited_ = true;
+        }
+        fk_self_h_ = clone(table->s->normalized_path.str, &fk_self_root_);
+        if (!fk_self_h_) return NULL;
+    }
+    if (!fk_self_locked_)
+    {
+        if (fk_self_h_->ha_external_lock(thd, F_WRLCK)) return NULL;
+        fk_self_locked_ = true;
+    }
+    return fk_self_h_;
+}
+
+void ha_tidesdb::fk_self_handler_unlock(THD *thd)
+{
+    if (fk_self_h_ && fk_self_locked_)
+    {
+        fk_self_h_->ha_external_lock(thd, F_UNLCK);
+        fk_self_locked_ = false;
+    }
+}
+
+void ha_tidesdb::fk_self_handler_close()
+{
+    if (fk_self_h_)
+    {
+        fk_self_handler_unlock(ha_thd());
+        fk_self_h_->ha_close();
+        delete fk_self_h_;
+        fk_self_h_ = NULL;
+    }
+    if (fk_self_root_inited_)
+    {
+        free_root(&fk_self_root_, MYF(0));
+        fk_self_root_inited_ = false;
+    }
+}
+
 int ha_tidesdb::fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, const uchar *new_row)
 {
     const bool is_update = (new_row != NULL);
@@ -964,6 +1098,44 @@ int ha_tidesdb::fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, c
     uint nparts = (uint)d.parent_fields.size();
     if (nparts > ckey->user_defined_key_parts) nparts = ckey->user_defined_key_parts;
 
+    if (fk_cascade_depth_ >= TDB_FK_MAX_CASCADE_DEPTH)
+    {
+        my_error(ER_FK_DEPTH_EXCEEDED, MYF(0), (int)TDB_FK_MAX_CASCADE_DEPTH);
+        return HA_ERR_FK_DEPTH_EXCEEDED;
+    }
+
+    /* A constraint on its own table finds this very table as the child.  Its rows are then driven
+       through a second handler, since this one is part way through the parent row's own write,
+       and the record buffers the cascade has to work in are this table's own, which hold the
+       parent row the caller is about to finish writing.  They are saved here and put back after,
+       and the parent's old and new images are read from the saved copies. */
+    const bool self_ref = (ct == table);
+    handler *ch = ct->file;
+    std::string saved0, saved1;
+    if (self_ref)
+    {
+        THD *thd = cached_thd_ ? cached_thd_ : ha_thd();
+        ch = fk_self_handler(thd);
+        if (!ch) return HA_ERR_INTERNAL_ERROR;
+        const size_t rl = table->s->rec_buff_length;
+        saved0.assign((const char *)table->record[0], rl);
+        saved1.assign((const char *)table->record[1], rl);
+        if (old_row == table->record[0])
+            old_row = (const uchar *)saved0.data();
+        else if (old_row == table->record[1])
+            old_row = (const uchar *)saved1.data();
+        if (new_row == table->record[0])
+            new_row = (const uchar *)saved0.data();
+        else if (new_row == table->record[1])
+            new_row = (const uchar *)saved1.data();
+    }
+    auto restore_parent_records = [&]()
+    {
+        if (!self_ref) return;
+        memcpy(table->record[0], saved0.data(), saved0.size());
+        memcpy(table->record[1], saved1.data(), saved1.size());
+    };
+
     /* We read and write every child column during the cascade, so widen the
        child's column maps for the duration and restore them after. */
     MY_BITMAP *old_r = tmp_use_all_columns(ct, &ct->read_set);
@@ -991,52 +1163,73 @@ int ha_tidesdb::fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, c
     /* Collect the referencing children's positions first, then act on them, so a
        delete or update does not disturb the index walk mid-scan. */
     std::vector<std::string> refs;
-    int rc = ct->file->ha_index_init((uint)cidx, true);
+    int rc = ch->ha_index_init((uint)cidx, true);
     if (rc == 0)
     {
-        rc = ct->file->ha_index_read_map(ct->record[0], keybuf, make_prev_keypart_map(nparts),
-                                         HA_READ_KEY_EXACT);
+        rc = ch->ha_index_read_map(ct->record[0], keybuf, make_prev_keypart_map(nparts),
+                                   HA_READ_KEY_EXACT);
         while (rc == 0)
         {
-            ct->file->position(ct->record[0]);
-            refs.emplace_back((const char *)ct->file->ref, ct->file->ref_length);
-            rc = ct->file->ha_index_next_same(ct->record[0], keybuf, key_len);
+            ch->position(ct->record[0]);
+            refs.emplace_back((const char *)ch->ref, ch->ref_length);
+            rc = ch->ha_index_next_same(ct->record[0], keybuf, key_len);
         }
-        ct->file->ha_index_end();
+        ch->ha_index_end();
     }
     if (rc != 0 && rc != HA_ERR_END_OF_FILE && rc != HA_ERR_KEY_NOT_FOUND)
     {
         tmp_restore_column_map(&ct->read_set, old_r);
         tmp_restore_column_map(&ct->write_set, old_w);
+        restore_parent_records();
         return rc;
     }
 
     int result = 0;
     /* Suppress the child's parent-existence check while we rewrite its rows, and
        restore it after.  The cascade only ever writes a valid parent value. */
-    ha_tidesdb *child_ha = (ct->file->ht == ht) ? static_cast<ha_tidesdb *>(ct->file) : NULL;
-    if (child_ha) child_ha->fk_in_cascade_ = true;
-    if (!refs.empty() && ct->file->ha_rnd_init(false) == 0)
+    ha_tidesdb *child_ha = (ch->ht == ht) ? static_cast<ha_tidesdb *>(ch) : NULL;
+    bool prev_in_cascade = false;
+    uint prev_depth = 0;
+    if (child_ha)
+    {
+        prev_in_cascade = child_ha->fk_in_cascade_;
+        prev_depth = child_ha->fk_cascade_depth_;
+        child_ha->fk_in_cascade_ = true;
+        child_ha->fk_cascade_depth_ = fk_cascade_depth_ + 1;
+    }
+    if (!refs.empty() && ch->ha_rnd_init(false) == 0)
     {
         my_ptrdiff_t npd = is_update ? (my_ptrdiff_t)(new_row - table->record[0]) : 0;
         for (auto &r : refs)
         {
-            if (ct->file->ha_rnd_pos(ct->record[0], (uchar *)r.data()) != 0) continue;
+            if (ch->ha_rnd_pos(ct->record[0], (uchar *)r.data()) != 0) continue;
 
             if (!is_update && !set_null)
             {
                 /* ON DELETE CASCADE removes the child, which recurses through the
                    child handler into its own foreign keys and indexes. */
-                result = ct->file->ha_delete_row(ct->record[0]);
+                result = ch->ha_delete_row(ct->record[0]);
             }
             else
             {
                 store_record(ct, record[1]);
-                for (uint i = 0; i < nparts; i++)
+                for (uint i = 0; i < nparts && !result; i++)
                 {
                     Field *cf = ckey->key_part[i].field;
                     if (set_null)
+                    {
+                        /* A column that cannot hold NULL cannot be set to it.  Such a constraint
+                           is refused when it is defined, so this only guards one defined before
+                           that check, which must not leave the child pointing at a parent that
+                           is gone. */
+                        if (!cf->real_maybe_null())
+                        {
+                            my_error(ER_ROW_IS_REFERENCED_2, MYF(0), d.name.c_str());
+                            result = HA_ERR_ROW_IS_REFERENCED;
+                            break;
+                        }
                         cf->set_null();
+                    }
                     else
                     {
                         Field *pf = table->field[d.parent_fields[i]];
@@ -1046,27 +1239,32 @@ int ha_tidesdb::fk_cascade_children(const tdb_fk_def &d, const uchar *old_row, c
                         pf->move_field_offset(-npd);
                     }
                 }
-                result = ct->file->ha_update_row(ct->record[1], ct->record[0]);
+                if (!result) result = ch->ha_update_row(ct->record[1], ct->record[0]);
             }
             if (result) break;
         }
-        ct->file->ha_rnd_end();
+        ch->ha_rnd_end();
     }
-    if (child_ha) child_ha->fk_in_cascade_ = false;
+    if (child_ha)
+    {
+        child_ha->fk_in_cascade_ = prev_in_cascade;
+        child_ha->fk_cascade_depth_ = prev_depth;
+    }
 
     tmp_restore_column_map(&ct->read_set, old_r);
     tmp_restore_column_map(&ct->write_set, old_w);
+    restore_parent_records();
     return result;
 }
 
 int ha_tidesdb::fk_enforce_parent_delete(const uchar *old_row)
 {
-    if (!share || share->fk_parent.empty()) return 0;
+    if (!share || fks().parent.empty()) return 0;
     THD *thd = cached_thd_ ? cached_thd_ : ha_thd();
     if (fk_checks_off(thd)) return 0;
     if (!stmt_txn) return 0;
 
-    for (const auto &d : share->fk_parent)
+    for (const auto &d : fks().parent)
     {
         if (d.parent_key_no < 0) continue;
         enum_fk_option act = (enum_fk_option)d.on_delete;
@@ -1091,7 +1289,7 @@ int ha_tidesdb::fk_enforce_parent_delete(const uchar *old_row)
 
 int ha_tidesdb::fk_enforce_parent_update(const uchar *old_row, const uchar *new_row)
 {
-    if (!share || share->fk_parent.empty()) return 0;
+    if (!share || fks().parent.empty()) return 0;
     THD *thd = cached_thd_ ? cached_thd_ : ha_thd();
     if (fk_checks_off(thd)) return 0;
     if (!stmt_txn) return 0;
@@ -1099,7 +1297,7 @@ int ha_tidesdb::fk_enforce_parent_update(const uchar *old_row, const uchar *new_
     /* Only the constraints whose referenced columns actually changed can be
        affected by an update, so we compare the old and new referenced prefixes
        and skip the constraint when they match. */
-    for (const auto &d : share->fk_parent)
+    for (const auto &d : fks().parent)
     {
         if (d.parent_key_no < 0) continue;
         KEY *ki = &table->key_info[d.parent_key_no];

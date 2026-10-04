@@ -1,0 +1,94 @@
+CREATE TABLE g (id INT PRIMARY KEY, geo GEOMETRY NOT NULL, SPATIAL INDEX sg (geo)) ENGINE=TIDESDB;
+INSERT INTO g VALUES
+(1,  ST_GeomFromText('POINT(1005 1005)')),
+(2,  ST_GeomFromText('POLYGON((-1000 -1000,1000 -1000,1000 1000,-1000 1000,-1000 -1000))')),
+(3,  ST_GeomFromText('POINT(1001 1001)')),
+(4,  ST_GeomFromText('POLYGON((0 0,100000 0,100000 100000,0 100000,0 0))')),
+(5,  ST_GeomFromText('POINT(1009 1002)')),
+(10, ST_GeomFromText('LINESTRING(1005 1005, 1000000 1005)')),
+(11, ST_GeomFromText('POLYGON((-1000000 -1000000,2000000 -1000000,2000000 2000000,-1000000 2000000,-1000000 -1000000))')),
+(12, ST_GeomFromText('LINESTRING(-500000 1003, 1003 1003)')),
+(13, ST_GeomFromText('POINT(50 50)')),
+(14, ST_GeomFromText('LINESTRING(5000 5000, 6000 6000)'));
+q	through_index
+intersects	1,2,3,4,5,10,11,12
+without_index
+1,2,3,4,5,10,11,12
+q	through_index
+st_intersects	1,2,3,4,5,10,11,12
+without_index
+1,2,3,4,5,10,11,12
+q	through_index
+contains box	4,11
+without_index
+4,11
+q	through_index
+contains point	1,4,10,11
+without_index
+1,4,10,11
+q	through_index
+within box	1,3,5
+without_index
+1,3,5
+q	through_index
+box contains	1,3,5
+without_index
+1,3,5
+# after a restart, before the index has been measured
+# restart
+q	through_index
+intersects	1,2,3,4,5,10,11,12
+without_index
+1,2,3,4,5,10,11,12
+q	through_index
+st_intersects	1,2,3,4,5,10,11,12
+without_index
+1,2,3,4,5,10,11,12
+q	through_index
+contains box	4,11
+without_index
+4,11
+q	through_index
+contains point	1,4,10,11
+without_index
+1,4,10,11
+q	through_index
+within box	1,3,5
+without_index
+1,3,5
+q	through_index
+box contains	1,3,5
+without_index
+1,3,5
+# once a whole-index scan has measured it
+q	through_index
+intersects	1,2,3,4,5,10,11,12
+without_index
+1,2,3,4,5,10,11,12
+q	through_index
+st_intersects	1,2,3,4,5,10,11,12
+without_index
+1,2,3,4,5,10,11,12
+q	through_index
+contains box	4,11
+without_index
+4,11
+q	through_index
+contains point	1,4,10,11
+without_index
+1,4,10,11
+q	through_index
+within box	1,3,5
+without_index
+1,3,5
+q	through_index
+box contains	1,3,5
+without_index
+1,3,5
+# a shape inserted later reaches further than anything measured so far
+INSERT INTO g VALUES (20, ST_GeomFromText('LINESTRING(-9000000 1004, 9000000 1004)'));
+through_index
+1,2,3,4,5,10,11,12,20
+without_index
+1,2,3,4,5,10,11,12,20
+DROP TABLE g;

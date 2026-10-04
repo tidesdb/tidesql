@@ -55,9 +55,10 @@ through XA recovery.
 **Read amplification** - the number of SSTables a worst-case point lookup may probe, reported by the
 library and used by the cost model.
 
-**Single-delete** - a delete primitive that lets compaction cancel a put and its matching tombstone
-together the first time they meet, used automatically for secondary-index entries and opt-in for the
-primary CF.
+**Single-delete** - a delete primitive that lets compaction cancel a put and its matching
+tombstone together the first time they meet, at any level, written automatically for
+secondary-index entries and opt-in for the primary CF. Cancelling at any level needs TidesDB 10.1.1
+or later, since earlier releases turned a single-delete into a plain tombstone at its first merge.
 
 **Tombstone** - the marker a delete writes to hide an older value until compaction reclaims it. A
 high tombstone density slows range scans, which the tombstone-density trigger acts on.

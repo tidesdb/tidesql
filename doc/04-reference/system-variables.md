@@ -17,34 +17,34 @@ is the default new sessions inherit).
 | `tidesdb_flush_threads` | 4 | Background threads flushing memtables to SSTables. 0 uses the library default of 2 |
 | `tidesdb_compaction_threads` | 4 | Background threads running LSM compaction |
 | `tidesdb_log_level` | TRACE | Library log level, one of TRACE, INFO, WARN, ERROR, NONE |
-| `tidesdb_block_cache_size` | 256 MB | Size in bytes of the global block cache shared across all column families |
+| `tidesdb_block_cache_size` | 256 MB | Size in bytes of the global block cache shared across all column families. 0 uses the library default of 64 MB |
 | `tidesdb_max_open_sstables` | 0 | Maximum SSTable file handles the library keeps open, from 0 to 65536. 0 uses the library default of 1024. The library lowers the cap at open to fit the process open-file limit. When the cap is full and idle handles cannot be reclaimed in time, a read that has to open another SSTable fails with error 1205 |
-| `tidesdb_log_to_file` | ON | Write library logs to a LOG file in the data directory instead of stderr |
+| `tidesdb_log_to_file` | ON | Write library logs to a LOG file in the TidesDB data directory instead of stderr |
 | `tidesdb_log_truncation_at` | 24 MB | Log file truncation size in bytes. 0 disables truncation |
 | `tidesdb_memtable_write_buffer_size` | 256 MB | Write buffer size in bytes for the shared memtable. 0 uses the library default of 64 MB |
 | `tidesdb_memtable_sync_mode` | FULL | WAL durability for every commit, one of NONE, INTERVAL, FULL. See [Durability](/concepts/durability) |
 | `tidesdb_memtable_sync_interval` | 128000 | WAL sync interval in microseconds, used only when the sync mode is INTERVAL |
-| `tidesdb_memtable_skip_list_max_level` | 0 | Skip-list max level for the memtable. 0 keeps the library default |
-| `tidesdb_memtable_skip_list_probability` | 0.0 | Skip-list level-promotion probability for the memtable. 0.0 keeps the library default |
-| `tidesdb_vlog_segment_size` | 0 | Size in bytes at which the value log seals a segment and opens a fresh one. 0 keeps the library default |
-| `tidesdb_value_separation_threshold` | 0 | Values at or above this size in bytes go to the shared value log instead of inline in the klog, so compaction rewrites only a reference. Database-wide, applied at open. 0 keeps the library default |
+| `tidesdb_memtable_skip_list_max_level` | 0 | Skip-list max level for the memtable, up to 32. 0 keeps the library default of 12 |
+| `tidesdb_memtable_skip_list_probability` | 0.0 | Skip-list level-promotion probability for the memtable. 0.0 keeps the library default of 0.25 |
+| `tidesdb_vlog_segment_size` | 0 | Size in bytes at which the value log seals a segment and opens a fresh one. 0 keeps the library default of 256 MB |
+| `tidesdb_value_separation_threshold` | 0 | Values at or above this size in bytes go to the shared value log instead of inline in the klog, so compaction rewrites only a reference. Database-wide, applied at open. 0 keeps the library default of 1024 |
 | `tidesdb_memtable_l0_queue_stall_threshold` | 0 | Sealed-memtable queue depth at which writes are paced for back-pressure. 0 keeps the library default of 16 |
-| `tidesdb_memtable_idle_flush_seconds` | -1 | Seconds of write inactivity after which the shared memtable is flushed even before it fills. -1 keeps the library default |
-| `tidesdb_txn_timeout_seconds` | -1 | Seconds a transaction may run before the library aborts it. -1 keeps the library default |
+| `tidesdb_memtable_idle_flush_seconds` | -1 | Seconds of write inactivity after which the shared memtable is flushed even before it fills, up to 86400. 0 turns the idle flush off and -1 keeps the library default of 30 |
+| `tidesdb_txn_timeout_seconds` | -1 | Seconds a transaction may run before the library aborts it, after which its statements fail with a lock wait timeout. -1 keeps the library default of no timeout, and 0 also means no timeout |
 | `tidesdb_data_home_dir` | (auto) | Directory for the data files. Defaults to `<mysql_datadir>/../tidesdb_data` |
 
 ## Global, dynamic
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `tidesdb_backup_dir` | (empty) | Set to a path to trigger an online backup. Clear with an empty string. See [Backup](/administration/backup) |
-| `tidesdb_checkpoint_dir` | (empty) | Set to a path to write a consistent checkpoint copy of the data directory to, a durable flush of the WAL, value log, and manifest followed by a byte-for-byte copy. Clear with an empty string |
+| `tidesdb_backup_dir` | (empty) | Set to a path to trigger an online backup. The directory is created if missing, and files an earlier run left there are not removed, so use a new or empty one. Clear with an empty string. See [Backup](/administration/backup) |
+| `tidesdb_checkpoint_dir` | (empty) | Set to a path to write a consistent checkpoint copy of the database to. The memtable is flushed and the WAL, value log, and manifest are forced to disk, then the manifest, the value log, and every SSTable the manifest references are copied. The directory is created if missing, and files an earlier run left there are not removed, so use a new or empty one. Clear with an empty string |
 | `tidesdb_fts_min_word_len` | 3 | Minimum word length in characters for full-text indexing |
 | `tidesdb_fts_max_word_len` | 84 | Maximum word length in characters for full-text indexing |
 | `tidesdb_fts_bm25_k1` | 1.2 | BM25 k1 parameter, term-frequency saturation |
 | `tidesdb_fts_bm25_b` | 0.75 | BM25 b parameter, document-length normalization from 0 to 1 |
 | `tidesdb_fts_blend_chars` | (empty) | Characters treated as both separators and word characters. Set to `'` for Italian and French elision. See [Full-Text Search](/reference/full-text-search) |
-| `tidesdb_ft_stopword_table` | NULL | Custom stop-word table in `db_name/table_name` form. NULL or an empty string uses the InnoDB default list |
+| `tidesdb_ft_stopword_table` | NULL | Custom stop-word table in `db_name/table_name` form, with a VARCHAR column named `value`. NULL or an empty string uses the InnoDB default list. A value set in my.cnf is loaded at startup, and an unreadable table there logs a warning and keeps the default list. `SET GLOBAL` to a table that cannot be read fails with `ER_WRONG_VALUE_FOR_VAR` and keeps the old value. See [Full-Text Search](/reference/full-text-search) |
 
 ## Session, with a global default
 
@@ -56,8 +56,8 @@ when `CREATE TABLE` does not set it.
 |----------|---------|-------------|
 | `tidesdb_ttl` | 0 | Per-session TTL in seconds applied to INSERT and UPDATE. 0 uses the table default. Works with `SET SESSION` and `SET STATEMENT`. See [Time-To-Live](/reference/ttl) |
 | `tidesdb_skip_unique_check` | OFF | Skip uniqueness checks on the primary key and unique secondary indexes during INSERT and UPDATE. It also skips the sentinel key each UNIQUE secondary value writes to the reserved `__tidesdb_uniq` column family, which is what makes two concurrent transactions writing the same UNIQUE value collide at commit, so the second to commit gets a deadlock error. Safe only when the application guarantees no duplicates |
-| `tidesdb_single_delete_primary` | OFF | Use single-delete semantics on the primary row CF for this session's DELETEs. See [Write-Path Optimizations](/internals/write-path) |
-| `tidesdb_compact_after_range_delete_min_rows` | 0 | After a multi-row DELETE touching at least this many rows, compact the touched primary-key range synchronously. 0 disables it |
+| `tidesdb_single_delete_primary` | OFF | Use single-delete semantics on the primary row CF for this session's DELETEs, so compaction can drop a deleted row and its tombstone together. Only safe for a session that never overwrites a row in place, see [Write-Path Optimizations](/internals/write-path) |
+| `tidesdb_compact_after_range_delete_min_rows` | 0 | After a multi-row DELETE touching at least this many rows, flush and compact the touched primary-key range once its transaction commits. A rolled back DELETE compacts nothing. 0 disables it |
 | `tidesdb_default_compression` | LZ4 | Default `COMPRESSION` for new tables |
 | `tidesdb_default_bloom_filter` | ON | Default `BLOOM_FILTER` for new tables |
 | `tidesdb_default_bloom_fpr` | 100 | Default `BLOOM_FPR` in parts per 10,000, 100 is 1% |

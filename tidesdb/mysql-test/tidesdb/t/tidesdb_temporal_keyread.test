@@ -1,0 +1,54 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# A read that needs only indexed columns rebuilds their values from the index key.  DATETIME and
+# TIMESTAMP in the current format store their bytes big-endian, so the key holds them as they are,
+# and decoding reversed them as if they were the legacy little-endian format.  A covering read then
+# returned a different date, and a condition pushed to the index tested that wrong value and
+# dropped matching rows.  Every read here goes through the index and must agree with the row.
+#
+
+let $fmt= 2;
+while ($fmt)
+{
+  if ($fmt == 1)
+  {
+    --echo # the legacy temporal formats
+    SET @save_fmt = @@global.mysql56_temporal_format;
+    SET GLOBAL mysql56_temporal_format = OFF;
+  }
+  CREATE TABLE t (id INT PRIMARY KEY, dt DATETIME, ts TIMESTAMP NULL, d6 DATETIME(6),
+                  t3 TIMESTAMP(3) NULL, dd DATE, tm TIME, note VARCHAR(10),
+                  KEY kdt (dt), KEY kts (ts), KEY kd6 (d6), KEY kt3 (t3), KEY kdd (dd), KEY ktm (tm))
+    ENGINE=TIDESDB;
+  if ($fmt == 1)
+  {
+    SET GLOBAL mysql56_temporal_format = @save_fmt;
+  }
+  INSERT INTO t VALUES
+    (1,'2024-03-15 10:20:30','2024-03-15 10:20:30','2024-03-15 10:20:30.123456',
+       '2024-03-15 10:20:30.123','2024-03-15','10:20:30','a'),
+    (2,'1999-12-31 23:59:59','2001-01-01 00:00:01','1999-12-31 23:59:59.000001',
+       '2001-01-01 00:00:01.999','1999-12-31','-05:06:07','b'),
+    (3,'2037-12-31 03:14:07','2037-12-31 03:14:07','2037-12-31 03:14:07.5',
+       '2037-12-31 03:14:07.5','2037-12-31','838:59:59','c');
+  SELECT id, dt FROM t FORCE INDEX (kdt) WHERE dt > '1990-01-01' ORDER BY dt;
+  SELECT id, ts FROM t FORCE INDEX (kts) WHERE ts > '1990-01-01' ORDER BY ts;
+  SELECT id, d6 FROM t FORCE INDEX (kd6) WHERE d6 > '1990-01-01' ORDER BY d6;
+  SELECT id, t3 FROM t FORCE INDEX (kt3) WHERE t3 > '1990-01-01' ORDER BY t3;
+  SELECT id, dd FROM t FORCE INDEX (kdd) WHERE dd > '1990-01-01' ORDER BY dd;
+  SELECT id, tm FROM t FORCE INDEX (ktm) WHERE tm > '-10:00:00' ORDER BY tm;
+  --echo # a condition pushed to the index with a column only the row holds
+  SELECT id, dt, note FROM t FORCE INDEX (kdt) WHERE dt BETWEEN '2000-01-01' AND '2030-01-01';
+  SELECT id, ts, note FROM t FORCE INDEX (kts) WHERE ts BETWEEN '2000-01-01' AND '2030-01-01'
+    ORDER BY id;
+  --echo # every value read through its index matches the row
+  SELECT COUNT(*) AS mismatched FROM t a
+    WHERE NOT (a.dt <=> (SELECT dt FROM t FORCE INDEX (kdt) WHERE dt = a.dt))
+       OR NOT (a.ts <=> (SELECT ts FROM t FORCE INDEX (kts) WHERE ts = a.ts));
+  DROP TABLE t;
+  dec $fmt;
+}
+
+--source include/cleanup_tidesdb.inc

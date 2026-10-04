@@ -92,7 +92,9 @@ static inline int tidesdb_txn_delete_cf(tidesdb_txn_t *txn, tidesdb_column_famil
    the caller has to roll back. */
 static constexpr int TDB_LOCKED_RETRY_MAX = 16;
 static constexpr unsigned TDB_LOCKED_BACKOFF_START_US = 50;
-static constexpr unsigned TDB_LOCKED_BACKOFF_CAP_US = 4000;
+/* Sleeps run 50, 100, ... 3200 microseconds and then stay at the cap, about 64 ms over the 16
+   retries. */
+static constexpr unsigned TDB_LOCKED_BACKOFF_CAP_US = 6400;
 
 template <typename Op>
 static inline int tdb_retry_locked(THD *thd, Op &&op)
@@ -104,7 +106,7 @@ static inline int tdb_retry_locked(THD *thd, Op &&op)
         if (rc != TDB_ERR_LOCKED || attempt >= TDB_LOCKED_RETRY_MAX) return rc;
         if (thd && thd_killed(thd)) return rc;
         my_sleep(wait_us); /* mysys, portable, microseconds */
-        if (wait_us < TDB_LOCKED_BACKOFF_CAP_US) wait_us *= 2;
+        wait_us = wait_us * 2 < TDB_LOCKED_BACKOFF_CAP_US ? wait_us * 2 : TDB_LOCKED_BACKOFF_CAP_US;
     }
 }
 

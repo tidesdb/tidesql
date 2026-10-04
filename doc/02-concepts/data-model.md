@@ -58,14 +58,14 @@ CREATE TABLE logs (ts DATETIME, message TEXT) ENGINE=TIDESDB;
 
 ## Secondary indexes
 
-Secondary indexes live in their own column families, and every entry, unique or not, has the same
-layout. The key is the comparable index-column bytes followed by the comparable primary-key bytes,
+Secondary indexes live in their own column families, and every regular index entry, unique or not,
+has the same layout. The key is the comparable index-column bytes followed by the comparable primary-key bytes,
 with a single zero byte for the value, so the engine recovers the primary key from the key's tail
 and performs a point lookup into the data CF for the full row.
 
 Because of that primary-key suffix, two rows with the same value in a `UNIQUE` index write two
 different index keys, which the commit-time conflict check, working key by key, would never see
-collide. So every write of a value into a `UNIQUE` secondary index also writes a sentinel key
+collide. So every write that creates a value in a `UNIQUE` secondary index also writes a sentinel key
 naming just the table, the index, and the value into a reserved column family, `__tidesdb_uniq`,
 shared by every table. Two concurrent transactions that write the same unique value collide on
 that one sentinel key, and when the second to commit runs at `SNAPSHOT` or higher the
@@ -78,7 +78,7 @@ conflict.
 On insert, update, or delete the engine maintains every secondary index inside the same
 transaction. For an update, it builds the old and new comparable index key for each index and
 compares them with `memcmp`. If the indexed columns and PK bytes are identical the index is skipped,
-which avoids a redundant delete-and-reinsert when an update touches only non-indexed columns.
+unless the row carries a TTL expiry, in which case the entry is rewritten in place, which avoids a redundant delete-and-reinsert when an update touches only non-indexed columns.
 
 Duplicate key violations on primary keys and unique indexes are detected. Inserting a duplicate
 primary key returns `ER_DUP_ENTRY`, and the same holds for unique secondary indexes. `REPLACE INTO`
@@ -102,7 +102,8 @@ seek into the index CF plus one point-get into the data CF.
 That data-CF point-get is skipped when the read is covering. When every column a query needs is
 carried by the index key, the indexed columns plus the appended primary-key columns, and each is of
 a type the engine can rebuild from its comparable bytes (integers, `YEAR`, `DATE`,
-`DATETIME`/`TIMESTAMP`, and fixed `CHAR`/`BINARY` in a binary or latin1 charset), the row is
+`DATETIME`/`TIMESTAMP` without fractional seconds, and fixed `CHAR`/`BINARY` in a binary or latin1
+charset), the row is
 materialized straight from the index bytes with no data-CF fetch. The capability is advertised to
 the optimizer per key part, so an index that also carries a non-invertible column such as
 `VARCHAR`, `DECIMAL`, or a float still gets an index-only plan for the queries that read only its
@@ -113,11 +114,12 @@ reconstructable columns.
 The engine supports Index Condition Pushdown for secondary-index scans. When the optimizer pushes a
 `WHERE` condition down, the engine evaluates it on the index key columns before the primary-key
 point lookup, by decoding those columns into the record buffer and calling MariaDB's
-`handler_index_cond_check()`. For condition columns of a reconstructable type (integers, temporal
-types, fixed `CHAR`/`BINARY` in binary or latin1), an entry that fails the condition is skipped
-without touching the data CF. For a type that cannot be rebuilt from its comparable bytes,
-`DECIMAL`, `VARCHAR`, float, or a multi-byte-charset `CHAR`, the engine fetches the full row first
-and then applies the condition, so ICP still filters but does not save the fetch for those columns.
+`handler_index_cond_check()`. When every index and primary-key column is of a reconstructable type
+(integers, `YEAR`, `DATE`, `DATETIME`, `TIMESTAMP`, fixed `CHAR`/`BINARY` in binary or latin1), an
+entry that fails the condition is skipped without touching the data CF. When any of them cannot be
+rebuilt from its comparable bytes, such as `DECIMAL`, `VARCHAR`, float, or a multi-byte-charset
+`CHAR`, the engine fetches the full row first and then applies the condition, so ICP still filters
+but does not save the fetch for that index.
 
 ### Multi-Range Read
 

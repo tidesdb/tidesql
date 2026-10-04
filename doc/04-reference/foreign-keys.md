@@ -1,6 +1,6 @@
 ---
 title: Foreign Keys
-description: How TideSQL enforces referential integrity in the engine, the referential actions it supports, and the two constraint shapes it rejects.
+description: How TideSQL enforces referential integrity in the engine, the referential actions it supports, and the constraint shapes it rejects.
 ---
 
 # Foreign Keys
@@ -14,8 +14,8 @@ needs.
 
 ## Defining a foreign key
 
-A foreign key is declared the standard way, and the referenced column must be a primary key or a
-unique key on the parent table:
+A foreign key is declared the standard way, and the referenced columns must be the primary key or a
+`NOT NULL` unique key of the parent table:
 
 ```sql
 CREATE TABLE customers (
@@ -38,13 +38,18 @@ referential action says otherwise.
 
 Composite foreign keys over several columns are supported.
 
+A parent table that is already open when a child constraint is created or dropped picks up the
+change at its next statement, so the new constraint is enforced at once and a dropped one stops
+being enforced without reopening the parent.
+
 ## Referential actions
 
 `ON DELETE` and `ON UPDATE` accept `RESTRICT`, `CASCADE`, and `SET NULL`. `RESTRICT` is the default
 and is also what `NO ACTION` resolves to, matching InnoDB. `CASCADE` propagates the parent's delete
 or key change down to the children, recursing through further foreign keys. `SET NULL` clears the
 referencing columns, which requires them to be nullable. `SET DEFAULT` has no action of its own
-and is checked the same way as `RESTRICT`.
+and is checked the same way as `RESTRICT`. A cascade deeper than 15 levels fails with
+`ER_FK_DEPTH_EXCEEDED` and changes nothing, as in InnoDB.
 
 ```sql
 CREATE TABLE order_items (
@@ -59,6 +64,24 @@ CREATE TABLE order_items (
 
 Deleting an order now removes its items in the same transaction, and the cascade continues into any
 table that references `order_items`.
+
+## Self-referencing keys
+
+A table may reference itself, as a tree of rows does through a parent id. `ON DELETE CASCADE`,
+`ON DELETE SET NULL`, `RESTRICT`, and `ON UPDATE CASCADE` all work on such a key:
+
+```sql
+CREATE TABLE categories (
+  id INT PRIMARY KEY,
+  parent_id INT,
+  KEY (parent_id),
+  FOREIGN KEY (parent_id) REFERENCES categories(id)
+    ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=TIDESDB;
+```
+
+`ON UPDATE CASCADE` differs from InnoDB here. InnoDB refuses an update cascade into the same table and
+treats it as `RESTRICT`, while TidesDB applies it, so the children follow the parent's new key.
 
 ## Referencing a unique key
 
@@ -85,14 +108,20 @@ column that is NULL therefore never fails the check.
 
 ## Restrictions
 
-Two constraint shapes are rejected at `CREATE TABLE` and `ALTER TABLE`:
+These constraint shapes are rejected at `CREATE TABLE` and `ALTER TABLE`:
 
 - A foreign key column declared with descending order, because the engine matches child rows against
   a forward sort key that a descending column would not line up with.
 - A foreign key that references a nullable unique key, because the value-only child probe cannot
   reproduce the null indicator that key stores.
+- A foreign key that references parent columns covered only by a plain index, or by no index.
+  InnoDB accepts a plain index there, and TidesDB requires the primary key or a `NOT NULL` unique key.
+- A foreign key that references only the leading columns of a composite primary or unique key. The
+  referenced columns must be every column of that key.
+- `SET NULL` on a child column declared `NOT NULL`.
+- A reference to a parent table that does not exist, unless `foreign_key_checks` is 0, as in InnoDB.
 
-Both fail the statement with `ER_CANT_CREATE_TABLE` (ERROR 1005) and a message naming the
+All of these fail the statement with `ER_CANT_CREATE_TABLE` (ERROR 1005) and a message naming the
 constraint, rather than being silently dropped.
 
 ## Disabling the checks

@@ -15,8 +15,13 @@ of the key space where DELETE range scans start, and scan cost climbs with the b
 compaction catches up.
 
 The library's single-delete primitive lets compaction drop a put and its matching tombstone together
-the first time both appear in one merge input, regardless of level. Its contract is at most one put
-between single-deletes on the same key. For reads a single-delete behaves like a regular tombstone.
+at whatever level the merge writes, instead of carrying the tombstone down to the largest level. It
+drops the pair only when the put lies directly beneath the single-delete, no reader can still see
+that put, and no table outside the merge holds the key, and a single-delete it keeps is written back
+still a single-delete so a later merge can drop it. Its contract is at most one put between
+single-deletes on the same key. For reads a single-delete behaves like a regular tombstone. This
+needs TidesDB 10.1.1 or later, and an earlier library compacts a single-delete as an ordinary
+tombstone.
 
 The engine applies this in two ways.
 
@@ -24,9 +29,12 @@ The engine applies this in two ways.
 
 Every secondary index entry, `(col_values, pk)` for a regular index, `(term, pk)` for FULLTEXT,
 `(hilbert, pk)` for SPATIAL, is written exactly once per row lifetime and deleted exactly once,
-across INSERT, UPDATE, DELETE, `REPLACE INTO`, and `INSERT ... ON DUPLICATE KEY UPDATE`. The same
-composite bytes never see a second put without an intervening delete, so the single-delete contract
-holds by construction. The engine therefore uses single-delete for every secondary-index delete with
+across INSERT, UPDATE, DELETE, `REPLACE INTO`, and `INSERT ... ON DUPLICATE KEY UPDATE`. Two
+UPDATE paths write an entry again in place, one that refreshes the expiry of a row in a table with a
+TTL and one that rewrites a FULLTEXT term whose frequency or document length changed. With TidesDB
+10.1.1 a later single-delete of such an entry still leaves it gone, because a single-delete never
+exposes an older put of the same key, which `tidesdb_single_delete_rewrite` checks through flush
+and compaction. The engine therefore uses single-delete for every secondary-index delete with
 no configuration, which covers three of the four tombstones per deleted row on a table with three
 secondary indexes. The uniqueness sentinel a UNIQUE secondary index keeps in the shared
 `__tidesdb_uniq` column family is the exception. The same value can be written and removed any
@@ -36,9 +44,9 @@ number of times over a sentinel's life, so its delete is a regular tombstone.
 
 The primary row CF is different. `UPDATE ... SET non_pk_col` writes a fresh row at the same key, a
 put over a put, and `REPLACE INTO` on a table without secondary indexes overwrites silently for the
-same reason. Under either pattern, dropping a primary-CF put and its later single-delete together can
-re-expose an older put, which the engine cannot detect from outside. So primary-CF single-delete is
-behind the session variable `tidesdb_single_delete_primary`, default OFF. Enabling it is a promise
+same reason. Either pattern leaves more than one put under a later single-delete, outside the
+library's contract, and the engine cannot tell from outside which rows those are. So primary-CF
+single-delete is behind the session variable `tidesdb_single_delete_primary`, default OFF. Enabling it is a promise
 that the session performs no UPDATE on non-PK columns, no `REPLACE INTO` or
 `INSERT ... ON DUPLICATE KEY UPDATE` on the silent-overwrite path, and that a new row for a given PK
 is always preceded by a DELETE of that PK.
@@ -49,8 +57,8 @@ INSERT INTO events (...) VALUES ...;   -- monotonic PK
 DELETE FROM events WHERE ts < NOW() - INTERVAL 1 HOUR;
 ```
 
-Leave it OFF for any session that may issue those statements, because setting it ON there can leak
-older row versions through reads after a compaction.
+Leave it OFF for any session that may issue those statements, since they break the at-most-one-put
+promise the library's API asks of every single-delete caller.
 
 ## Tombstone-density trigger
 
@@ -84,14 +92,16 @@ DELETE FROM events WHERE ts < NOW() - INTERVAL 30 DAY;
 The default `0` disables it. A non-zero value is both an opt-in and a row-count threshold, so only a
 DELETE touching at least that many rows triggers the synchronous compaction and a one-row DELETE
 never pays for it. The engine tracks the comparable minimum and maximum primary-key bytes seen during
-the statement, two string swaps per `delete_row` with no extra scan or locking, and on
-`end_bulk_delete` compacts the observed range on the primary CF. Secondary-index tombstones are not
-compacted this way, because a PK range does not bound a secondary-index range, and are left to the
-tombstone-density trigger. The compaction runs synchronously on the caller's thread at the end of
-the statement, before the transaction commits, so the DELETE returns only after it finishes, and the
-threshold should be high enough that the compaction time is small relative to the DELETE that
-triggered it. If another compaction already holds the column family the request is skipped
-silently.
+the statement, a comparison against each bound per `delete_row` with no extra scan or locking, and on
+`end_bulk_delete` queues that range on the transaction, with an end bound just past the last
+deleted key. Secondary-index tombstones are not compacted this way, because a PK range does not
+bound a secondary-index range, and are left to the tombstone-density trigger. After the transaction
+commits, the engine flushes the memtable once so the tombstones reach SSTables, then compacts each
+queued range synchronously on the committing thread, so the commit returns only after it finishes,
+and the threshold should be high enough that the compaction time is small relative to the DELETE
+that triggered it. A transaction that rolls back compacts nothing. A compaction already running over the
+column family absorbs the request, so `TDB_ERR_LOCKED` is ignored quietly, and any other failure is
+logged as a warning.
 
 ## Range tombstone for a whole-range delete
 
@@ -111,8 +121,8 @@ scattered rows, leaves more live rows than buffered keys, and the buffer falls b
 tombstones with no change in result. The whole thing lives in the transaction, so a `ROLLBACK`
 restores the rows like any other write.
 
-Deferral applies only to a table with an explicit primary key. It is skipped for a table with a
-delete trigger, since a deferred tombstone must never hide a row from a trigger reading the table
+Deferral applies only to a table with an explicit primary key. It is skipped for a table with any
+trigger, since a deferred tombstone must never hide a row from a trigger reading the table
 mid-statement, and under Galera, where a deferred range tombstone would not line up with the per-row
 certification the write path already issues. Secondary-index entries are still deleted per row,
 because a primary-key range does not bound a secondary-index range, so the range tombstone covers
@@ -125,22 +135,27 @@ the span, so the compact-after-range-delete pass above is skipped for that state
 
 ## Batched bulk statements
 
-A multi-row INSERT, UPDATE, or DELETE that MariaDB runs as a bulk operation commits its writes in
-batches rather than holding the whole write set in one transaction. The engine counts one operation
-per row plus one per secondary index (two per secondary index for an UPDATE), and when the count
-reaches 500 (`TIDESDB_BULK_INSERT_BATCH_OPS`) it commits mid-statement. It does not reset the
-committed transaction. It begins a fresh READ COMMITTED transaction for the rest of the statement
-and parks the committed one until the transaction ends, because the source table of an
-`INSERT ... SELECT` or of an `ALTER` copy can still be scanning through an iterator opened under it,
-and a reset would end that scan early. Rows committed by a batch are durable, so a later failure in
-the same statement cannot roll them back.
+A multi-row INSERT or DELETE that MariaDB runs as a bulk operation commits its writes in batches
+rather than holding the whole write set in one transaction, but only when the statement is its own
+transaction, under autocommit or as the copy step of DDL such as `ALTER TABLE`. Inside `BEGIN` or
+with `autocommit=0` every write stays in the transaction, so its `COMMIT` or `ROLLBACK` covers all of
+it. An UPDATE does not batch, because the engine does not advertise `HA_CAN_FORCE_BULK_UPDATE`. The
+engine counts one operation per row plus one per secondary index, and when the count reaches 500
+(`TIDESDB_BULK_INSERT_BATCH_OPS`) it commits mid-statement. It does not reset the committed
+transaction. It begins a fresh READ COMMITTED transaction for the rest of the statement and parks
+the committed one until the transaction ends, because the source table of an `INSERT ... SELECT`,
+the scan of a batched `DELETE`, or an `ALTER` copy can still be iterating under it, and a reset
+would end that scan early. Rows committed by a batch are durable, so a later failure in the same
+statement cannot roll them back.
 
-A bulk insert whose known row count times one plus the number of secondary indexes reaches the same
-threshold moves a transaction that holds no writes yet to a fresh READ COMMITTED transaction before
-its first row, the level it would drop to after the first batch anyway, so the first batch does not
-commit at the session's snapshot level either. A statement that stays under the threshold, a
-transaction that already holds writes, and an unknown row count, which LOAD DATA passes as zero, keep
-the session's level and its snapshot.
+Because only autocommit and DDL statements batch, and the engine already runs both at READ
+COMMITTED, the first batch commits at READ COMMITTED like every later one. A statement inside
+`BEGIN` keeps the session's level and its snapshot, since it never batches.
+
+A `DELETE` with no `WHERE` clause takes this same row-by-row path inside its transaction, because the
+engine declines `delete_all_rows`, and on a table with an explicit primary key the range tombstone
+above can collapse it into one interval. Only `TRUNCATE TABLE` drops and recreates the table's
+column families.
 
 ## Backpressure absorption
 

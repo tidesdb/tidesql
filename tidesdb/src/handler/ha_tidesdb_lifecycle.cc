@@ -17,7 +17,7 @@
 
 /* table and database teardown: rename_table moves a table's column families to the new name,
    delete_table and the handlerton drop_table callback remove one table's families and directory,
-   the drop_database callback sweeps every family under a dropped database, and delete_all_rows
+   the drop_database callback sweeps every family under a dropped database, and truncate
    drops and recreates a table's families to serve TRUNCATE.  the shared helpers force a
    column-family directory removal and translate a server path into the base names the library keys
    its column families by. */
@@ -248,11 +248,22 @@ int ha_tidesdb::delete_table(const char *name)
     DBUG_RETURN(tidesdb_drop_table_impl(name));
 }
 
-/* ******************** delete_all_rows (TRUNCATE) ******************** */
+/* ******************** truncate / delete_all_rows ******************** */
 
+/* A DELETE with no WHERE clause reaches the engine as delete_all_rows, inside whatever transaction
+   the statement belongs to, with every other session's snapshot still able to see the rows.
+   Emptying the table by swapping its column families would bypass both, and it also discards the
+   connection's transaction, so refuse it and let the server delete row by row, which the bulk
+   delete path turns into one range tombstone where it can.  TRUNCATE TABLE commits implicitly and
+   holds an exclusive lock, so it alone takes the fast path, through truncate() below. */
 int ha_tidesdb::delete_all_rows(void)
 {
-    DBUG_ENTER("ha_tidesdb::delete_all_rows");
+    return HA_ERR_WRONG_COMMAND;
+}
+
+int ha_tidesdb::truncate()
+{
+    DBUG_ENTER("ha_tidesdb::truncate");
 
     /* We free cached iterators before dropping/recreating CFs.
        The iterators hold refs to SSTables in the CFs being dropped. */
@@ -339,5 +350,5 @@ int ha_tidesdb::delete_all_rows(void)
 
     share->next_row_id.store(HIDDEN_PK_FIRST_ROW_ID, std::memory_order_relaxed);
 
-    DBUG_RETURN(0);
+    DBUG_RETURN(reset_auto_increment(0));
 }

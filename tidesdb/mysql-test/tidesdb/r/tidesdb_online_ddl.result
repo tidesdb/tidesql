@@ -103,8 +103,10 @@ SELECT id, d FROM t_ddl WHERE id IN (1, 7) ORDER BY id;
 id	d
 1	0
 7	42
-# =+=+= INSTANT: drop column =+=+=
+# =+=+= DROP COLUMN rewrites the table, it is not instant =+=+=
 ALTER TABLE t_ddl DROP COLUMN d, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported. Reason: TidesDB reads old rows by column position, so only appending columns is instant. Try ALGORITHM=COPY
+ALTER TABLE t_ddl DROP COLUMN d;
 SELECT * FROM t_ddl WHERE id = 1;
 id	a	b_name	c
 1	10	alpha	100

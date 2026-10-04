@@ -1,0 +1,118 @@
+CREATE TABLE t (id INT PRIMARY KEY, dt DATETIME, ts TIMESTAMP NULL, d6 DATETIME(6),
+t3 TIMESTAMP(3) NULL, dd DATE, tm TIME, note VARCHAR(10),
+KEY kdt (dt), KEY kts (ts), KEY kd6 (d6), KEY kt3 (t3), KEY kdd (dd), KEY ktm (tm))
+ENGINE=TIDESDB;
+INSERT INTO t VALUES
+(1,'2024-03-15 10:20:30','2024-03-15 10:20:30','2024-03-15 10:20:30.123456',
+'2024-03-15 10:20:30.123','2024-03-15','10:20:30','a'),
+(2,'1999-12-31 23:59:59','2001-01-01 00:00:01','1999-12-31 23:59:59.000001',
+'2001-01-01 00:00:01.999','1999-12-31','-05:06:07','b'),
+(3,'2037-12-31 03:14:07','2037-12-31 03:14:07','2037-12-31 03:14:07.5',
+'2037-12-31 03:14:07.5','2037-12-31','838:59:59','c');
+SELECT id, dt FROM t FORCE INDEX (kdt) WHERE dt > '1990-01-01' ORDER BY dt;
+id	dt
+2	1999-12-31 23:59:59
+1	2024-03-15 10:20:30
+3	2037-12-31 03:14:07
+SELECT id, ts FROM t FORCE INDEX (kts) WHERE ts > '1990-01-01' ORDER BY ts;
+id	ts
+2	2001-01-01 00:00:01
+1	2024-03-15 10:20:30
+3	2037-12-31 03:14:07
+SELECT id, d6 FROM t FORCE INDEX (kd6) WHERE d6 > '1990-01-01' ORDER BY d6;
+id	d6
+2	1999-12-31 23:59:59.000001
+1	2024-03-15 10:20:30.123456
+3	2037-12-31 03:14:07.500000
+SELECT id, t3 FROM t FORCE INDEX (kt3) WHERE t3 > '1990-01-01' ORDER BY t3;
+id	t3
+2	2001-01-01 00:00:01.999
+1	2024-03-15 10:20:30.123
+3	2037-12-31 03:14:07.500
+SELECT id, dd FROM t FORCE INDEX (kdd) WHERE dd > '1990-01-01' ORDER BY dd;
+id	dd
+2	1999-12-31
+1	2024-03-15
+3	2037-12-31
+SELECT id, tm FROM t FORCE INDEX (ktm) WHERE tm > '-10:00:00' ORDER BY tm;
+id	tm
+2	-05:06:07
+1	10:20:30
+3	838:59:59
+# a condition pushed to the index with a column only the row holds
+SELECT id, dt, note FROM t FORCE INDEX (kdt) WHERE dt BETWEEN '2000-01-01' AND '2030-01-01';
+id	dt	note
+1	2024-03-15 10:20:30	a
+SELECT id, ts, note FROM t FORCE INDEX (kts) WHERE ts BETWEEN '2000-01-01' AND '2030-01-01'
+    ORDER BY id;
+id	ts	note
+1	2024-03-15 10:20:30	a
+2	2001-01-01 00:00:01	b
+# every value read through its index matches the row
+SELECT COUNT(*) AS mismatched FROM t a
+WHERE NOT (a.dt <=> (SELECT dt FROM t FORCE INDEX (kdt) WHERE dt = a.dt))
+OR NOT (a.ts <=> (SELECT ts FROM t FORCE INDEX (kts) WHERE ts = a.ts));
+mismatched
+0
+DROP TABLE t;
+# the legacy temporal formats
+SET @save_fmt = @@global.mysql56_temporal_format;
+SET GLOBAL mysql56_temporal_format = OFF;
+CREATE TABLE t (id INT PRIMARY KEY, dt DATETIME, ts TIMESTAMP NULL, d6 DATETIME(6),
+t3 TIMESTAMP(3) NULL, dd DATE, tm TIME, note VARCHAR(10),
+KEY kdt (dt), KEY kts (ts), KEY kd6 (d6), KEY kt3 (t3), KEY kdd (dd), KEY ktm (tm))
+ENGINE=TIDESDB;
+SET GLOBAL mysql56_temporal_format = @save_fmt;
+INSERT INTO t VALUES
+(1,'2024-03-15 10:20:30','2024-03-15 10:20:30','2024-03-15 10:20:30.123456',
+'2024-03-15 10:20:30.123','2024-03-15','10:20:30','a'),
+(2,'1999-12-31 23:59:59','2001-01-01 00:00:01','1999-12-31 23:59:59.000001',
+'2001-01-01 00:00:01.999','1999-12-31','-05:06:07','b'),
+(3,'2037-12-31 03:14:07','2037-12-31 03:14:07','2037-12-31 03:14:07.5',
+'2037-12-31 03:14:07.5','2037-12-31','838:59:59','c');
+SELECT id, dt FROM t FORCE INDEX (kdt) WHERE dt > '1990-01-01' ORDER BY dt;
+id	dt
+2	1999-12-31 23:59:59
+1	2024-03-15 10:20:30
+3	2037-12-31 03:14:07
+SELECT id, ts FROM t FORCE INDEX (kts) WHERE ts > '1990-01-01' ORDER BY ts;
+id	ts
+2	2001-01-01 00:00:01
+1	2024-03-15 10:20:30
+3	2037-12-31 03:14:07
+SELECT id, d6 FROM t FORCE INDEX (kd6) WHERE d6 > '1990-01-01' ORDER BY d6;
+id	d6
+2	1999-12-31 23:59:59.000001
+1	2024-03-15 10:20:30.123456
+3	2037-12-31 03:14:07.500000
+SELECT id, t3 FROM t FORCE INDEX (kt3) WHERE t3 > '1990-01-01' ORDER BY t3;
+id	t3
+2	2001-01-01 00:00:01.999
+1	2024-03-15 10:20:30.123
+3	2037-12-31 03:14:07.500
+SELECT id, dd FROM t FORCE INDEX (kdd) WHERE dd > '1990-01-01' ORDER BY dd;
+id	dd
+2	1999-12-31
+1	2024-03-15
+3	2037-12-31
+SELECT id, tm FROM t FORCE INDEX (ktm) WHERE tm > '-10:00:00' ORDER BY tm;
+id	tm
+2	-05:06:07
+1	10:20:30
+3	838:59:59
+# a condition pushed to the index with a column only the row holds
+SELECT id, dt, note FROM t FORCE INDEX (kdt) WHERE dt BETWEEN '2000-01-01' AND '2030-01-01';
+id	dt	note
+1	2024-03-15 10:20:30	a
+SELECT id, ts, note FROM t FORCE INDEX (kts) WHERE ts BETWEEN '2000-01-01' AND '2030-01-01'
+    ORDER BY id;
+id	ts	note
+1	2024-03-15 10:20:30	a
+2	2001-01-01 00:00:01	b
+# every value read through its index matches the row
+SELECT COUNT(*) AS mismatched FROM t a
+WHERE NOT (a.dt <=> (SELECT dt FROM t FORCE INDEX (kdt) WHERE dt = a.dt))
+OR NOT (a.ts <=> (SELECT ts FROM t FORCE INDEX (kts) WHERE ts = a.ts));
+mismatched
+0
+DROP TABLE t;
