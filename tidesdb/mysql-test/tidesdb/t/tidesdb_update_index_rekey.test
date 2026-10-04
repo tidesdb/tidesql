@@ -1,0 +1,62 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# Every index entry carries its row's primary key, and on a table with an expiry it carries the
+# row's deadline.  An UPDATE that changed only the primary key used to leave FULLTEXT and SPATIAL
+# entries under the old key, so the row dropped out of search and an unrelated row that later took
+# the old key was returned instead.  An UPDATE of an unindexed column on a table with an expiry
+# refreshed the row's deadline but not its index entries, so after the original deadline the row
+# was still there by primary key and missing through every index.
+#
+
+--echo #
+--echo # ============================================
+--echo # Changing only the primary key re-keys FULLTEXT and SPATIAL entries
+--echo # ============================================
+--echo #
+CREATE TABLE f (id INT PRIMARY KEY, body TEXT, geo GEOMETRY NOT NULL,
+                FULLTEXT KEY fb (body), SPATIAL KEY sg (geo)) ENGINE=TIDESDB;
+INSERT INTO f VALUES (1,'hello tidal world', ST_GeomFromText('POINT(1 1)')),
+                     (2,'other text here',  ST_GeomFromText('POINT(9 9)'));
+UPDATE f SET id = 100 WHERE id = 1;
+SELECT id FROM f WHERE MATCH(body) AGAINST('tidal');
+SELECT id FROM f WHERE MATCH(body) AGAINST('+tidal' IN BOOLEAN MODE);
+SELECT id FROM f FORCE INDEX (sg)
+  WHERE MBRWithin(geo, ST_GeomFromText('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
+--echo # the old key taken by another row brings no stale match with it
+INSERT INTO f VALUES (1,'completely unrelated', ST_GeomFromText('POINT(50 50)'));
+SELECT id, body FROM f WHERE MATCH(body) AGAINST('tidal');
+SELECT id FROM f FORCE INDEX (sg)
+  WHERE MBRWithin(geo, ST_GeomFromText('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
+SELECT id FROM f WHERE MATCH(body) AGAINST('unrelated');
+DROP TABLE f;
+
+--echo #
+--echo # ============================================
+--echo # An update refreshes the expiry of every index entry, not just the row
+--echo # ============================================
+--echo #
+CREATE TABLE t (id INT PRIMARY KEY, k INT, v VARCHAR(20), body TEXT, geo GEOMETRY NOT NULL,
+                KEY ik (k), FULLTEXT KEY fb (body), SPATIAL KEY sg (geo)) ENGINE=TIDESDB TTL=6;
+INSERT INTO t VALUES (1,10,'a','tidal pool',ST_GeomFromText('POINT(1 1)')),
+                     (2,20,'b','other words',ST_GeomFromText('POINT(9 9)'));
+--disable_result_log
+SELECT SLEEP(3);
+--enable_result_log
+UPDATE t SET v = 'a2' WHERE id = 1;
+--echo # past the original deadline, before the refreshed one
+--disable_result_log
+SELECT SLEEP(4);
+--enable_result_log
+SELECT id, k, v FROM t WHERE id = 1;
+SELECT id FROM t FORCE INDEX (ik) WHERE k = 10;
+SELECT id FROM t WHERE MATCH(body) AGAINST('tidal');
+SELECT id FROM t FORCE INDEX (sg)
+  WHERE MBRWithin(geo, ST_GeomFromText('POLYGON((0 0,2 0,2 2,0 2,0 0))'));
+--echo # the row that was not updated has expired everywhere
+SELECT COUNT(*) FROM t WHERE id = 2;
+SELECT COUNT(*) FROM t FORCE INDEX (ik) WHERE k = 20;
+DROP TABLE t;
+
+--source include/cleanup_tidesdb.inc

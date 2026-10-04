@@ -1,0 +1,87 @@
+CREATE TABLE p (id INT PRIMARY KEY, v INT NOT NULL, u INT NOT NULL, KEY kv (v), UNIQUE KEY ku (u))
+ENGINE=TIDESDB;
+INSERT INTO p VALUES (1,100,1000),(2,200,2000);
+# SET NULL on a NOT NULL child column
+CREATE TABLE c (id INT PRIMARY KEY, pid INT NOT NULL, KEY (pid),
+FOREIGN KEY (pid) REFERENCES p(id) ON DELETE SET NULL) ENGINE=TIDESDB;
+ERROR HY000: TidesDB foreign key c_ibfk_1 uses SET NULL on a column declared NOT NULL
+CREATE TABLE c (id INT PRIMARY KEY, pid INT NOT NULL, KEY (pid),
+FOREIGN KEY (pid) REFERENCES p(id) ON UPDATE SET NULL) ENGINE=TIDESDB;
+ERROR HY000: TidesDB foreign key c_ibfk_1 uses SET NULL on a column declared NOT NULL
+# a nullable column may use SET NULL
+CREATE TABLE c (id INT PRIMARY KEY, pid INT NULL, KEY (pid),
+FOREIGN KEY (pid) REFERENCES p(id) ON DELETE SET NULL) ENGINE=TIDESDB;
+INSERT INTO c VALUES (10,1);
+DELETE FROM p WHERE id = 1;
+SELECT * FROM c;
+id	pid
+10	NULL
+DROP TABLE c;
+# a parent column with only a plain index, or no index at all
+CREATE TABLE c (id INT PRIMARY KEY, pv INT, KEY (pv),
+FOREIGN KEY (pv) REFERENCES p(v)) ENGINE=TIDESDB;
+ERROR HY000: TidesDB foreign key c_ibfk_1 must reference every column of the primary key or of a unique key of test.p
+CREATE TABLE c (id INT PRIMARY KEY, pw INT, KEY (pw),
+FOREIGN KEY (pw) REFERENCES p(nosuchcol)) ENGINE=TIDESDB;
+ERROR HY000: TidesDB foreign key c_ibfk_1 must reference every column of the primary key or of a unique key of test.p
+# the leading column of a composite primary key is not a key of its own
+CREATE TABLE pc (a INT, b INT, PRIMARY KEY (a, b)) ENGINE=TIDESDB;
+CREATE TABLE c (id INT PRIMARY KEY, pa INT, KEY (pa),
+FOREIGN KEY (pa) REFERENCES pc(a)) ENGINE=TIDESDB;
+ERROR HY000: TidesDB foreign key c_ibfk_1 must reference every column of the primary key or of a unique key of test.pc
+# the whole composite key is
+CREATE TABLE c (id INT PRIMARY KEY, pa INT, pb INT, KEY (pa, pb),
+FOREIGN KEY (pa, pb) REFERENCES pc(a, b)) ENGINE=TIDESDB;
+INSERT INTO pc VALUES (1, 2);
+INSERT INTO c VALUES (1, 1, 2);
+INSERT INTO c VALUES (2, 1, 3);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint fails (c_ibfk_1)
+DROP TABLE c, pc;
+# a unique parent key is enforced against that key, not the primary key
+CREATE TABLE c (id INT PRIMARY KEY, pu INT, KEY (pu),
+FOREIGN KEY (pu) REFERENCES p(u)) ENGINE=TIDESDB;
+INSERT INTO c VALUES (1,2000);
+INSERT INTO c VALUES (2,2);
+ERROR 23000: Cannot add or update a child row: a foreign key constraint fails (c_ibfk_1)
+SELECT * FROM c;
+id	pu
+1	2000
+DROP TABLE c;
+# a parent table that does not exist
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid),
+FOREIGN KEY (pid) REFERENCES nosuch(id)) ENGINE=TIDESDB;
+ERROR HY000: TidesDB foreign key c_ibfk_1 references test.nosuch, which does not exist
+# is accepted with foreign key checks off, as InnoDB does
+SET foreign_key_checks = 0;
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid),
+FOREIGN KEY (pid) REFERENCES nosuch(id)) ENGINE=TIDESDB;
+SET foreign_key_checks = 1;
+DROP TABLE c;
+DROP TABLE p;
+#
+# A parent already open when its child is created enforces the new constraint at once.  It
+# used to read its constraints only when first opened, so a parent written to before the
+# child existed let a referenced row be deleted under RESTRICT and skipped CASCADE.
+#
+CREATE TABLE p (id INT PRIMARY KEY) ENGINE=TIDESDB;
+INSERT INTO p VALUES (1),(2),(3);
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid), FOREIGN KEY (pid) REFERENCES p(id))
+ENGINE=TIDESDB;
+INSERT INTO c VALUES (10,1);
+DELETE FROM p WHERE id = 1;
+ERROR 23000: Cannot delete or update a parent row: a foreign key constraint fails (c_ibfk_1)
+DROP TABLE c;
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid),
+FOREIGN KEY (pid) REFERENCES p(id) ON DELETE CASCADE) ENGINE=TIDESDB;
+INSERT INTO c VALUES (20,2);
+DELETE FROM p WHERE id = 2;
+SELECT COUNT(*) FROM c;
+COUNT(*)
+0
+# and stops enforcing it once the child is dropped
+DROP TABLE c;
+DELETE FROM p WHERE id = 1;
+SELECT * FROM p;
+id
+3
+DROP TABLE p;

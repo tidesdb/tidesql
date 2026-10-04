@@ -5,18 +5,24 @@ description: What TideSQL does not do, and the behaviors to plan around.
 
 # Limitations
 
-**Foreign keys carry two shape restrictions.** TideSQL enforces foreign keys inside the engine,
+**Foreign keys carry a few shape restrictions.** TideSQL enforces foreign keys inside the engine,
 including `ON DELETE` and `ON UPDATE` with `CASCADE`, `SET NULL`, and `RESTRICT`, references to a
-primary key or to a non-nullable unique key, and self-references. Two constraint shapes are rejected
-at `CREATE TABLE` and `ALTER TABLE`. A foreign key column declared with descending order is not
-allowed, because the engine matches child rows against a forward sort key. A foreign key that
-references a nullable unique key is not allowed either, because the value-only child probe cannot
-reproduce that key's null indicator. Everything else behaves as in InnoDB. See
-[Foreign Keys](/reference/foreign-keys) for the full description.
+primary key or to a non-nullable unique key, and self-references. A foreign key column declared with
+descending order is rejected at `CREATE TABLE` and `ALTER TABLE`, because the engine matches child
+rows against a forward sort key, and so is a reference to a nullable unique key, because the
+value-only child probe cannot reproduce that key's null indicator. A reference to parent columns
+with only a plain index is also rejected, where InnoDB accepts it. One difference goes the other
+way, since a self-referencing `ON UPDATE CASCADE` is applied, where InnoDB treats it as `RESTRICT`.
+Everything else behaves as in InnoDB. See [Foreign Keys](/reference/foreign-keys) for the full
+description.
 
-**Changing the primary key or a column type needs a full copy.** The engine does not support an
-inplace primary-key change, and changing a column type such as `INT` to `BIGINT` also rebuilds the
-table by copy. See [Online DDL](/administration/online-ddl).
+**Only appending a column is instant.** Rows store their fields by position, so `DROP COLUMN`,
+`ADD COLUMN ... FIRST` or `AFTER`, and any column reorder rebuild the table by copy, as do a change to
+the primary key or to a column type such as `INT` to `BIGINT`. Appending a `BIT` column or a stored
+generated column copies too. Adding a regular secondary index runs inplace but blocks writes until
+the build finishes, so `LOCK=NONE` is refused, and a `FULLTEXT` or `SPATIAL` index is added by copy.
+See
+[Online DDL](/administration/online-ddl).
 
 **Statistics are cached for up to two seconds.** Right after a bulk load the optimizer may briefly
 see stale row counts. `ANALYZE TABLE` forces an immediate refresh.

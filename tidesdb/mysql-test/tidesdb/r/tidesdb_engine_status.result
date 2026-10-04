@@ -32,7 +32,7 @@ Next CF index: N
 =+=+= Write Amplification =+=+=
 User bytes written: N
 Flush bytes written: N (N sstables)
-Compaction bytes written: N (N sstables)
+Compaction bytes written: N (N compactions)
 Compaction bytes read: N
 Vlog bytes written: N
 Total WA ratio: N.Nx

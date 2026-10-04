@@ -1,0 +1,38 @@
+call mtr.add_suppression("\\[TIDESDB\\] Stop word table .* not found");
+call mtr.add_suppression("\\[TIDESDB\\] ft_stopword_table format must be");
+call mtr.add_suppression("\\[TIDESDB\\] tidesdb_ft_stopword_table .* could not be loaded at startup");
+CREATE TABLE swords (value VARCHAR(30)) ENGINE=TIDESDB;
+INSERT INTO swords VALUES ('zebra'), ('giraffe');
+# an unreadable table is refused and the variable keeps its value
+SET GLOBAL tidesdb_ft_stopword_table = 'test/no_such_table';
+ERROR 42000: Variable 'tidesdb_ft_stopword_table' can't be set to the value of 'test/no_such_table'
+SET GLOBAL tidesdb_ft_stopword_table = 'not_a_db_slash_table';
+ERROR 42000: Variable 'tidesdb_ft_stopword_table' can't be set to the value of 'not_a_db_slash_table'
+SELECT @@global.tidesdb_ft_stopword_table IS NULL AS still_default;
+still_default
+1
+# named in the configuration, the table is in use from startup
+# restart: --tidesdb-ft-stopword-table=test/swords
+SELECT @@global.tidesdb_ft_stopword_table;
+@@global.tidesdb_ft_stopword_table
+test/swords
+CREATE TABLE d (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY fb (body)) ENGINE=TIDESDB;
+INSERT INTO d VALUES (1, 'zebra stripes'), (2, 'giraffe necks'), (3, 'plain words');
+SELECT id FROM d WHERE MATCH(body) AGAINST('zebra');
+id
+SELECT id FROM d WHERE MATCH(body) AGAINST('giraffe');
+id
+SELECT id FROM d WHERE MATCH(body) AGAINST('stripes');
+id
+1
+DROP TABLE d;
+# a startup value that cannot be read keeps the defaults and the server starts
+# restart: --tidesdb-ft-stopword-table=test/no_such_table
+CREATE TABLE d (id INT PRIMARY KEY, body TEXT, FULLTEXT KEY fb (body)) ENGINE=TIDESDB;
+INSERT INTO d VALUES (1, 'zebra stripes');
+SELECT id FROM d WHERE MATCH(body) AGAINST('zebra');
+id
+1
+DROP TABLE d;
+# restart
+DROP TABLE swords;

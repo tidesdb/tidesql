@@ -1,0 +1,40 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# Changing only ENCRYPTION_KEY_ID on an encrypted table used to be an instant change.  Rows carry
+# the key version but not the key id and are decrypted with the table's id, so every existing row
+# became unreadable while rows written after the change used the new key, leaving no single key id
+# that could read the whole table.  The change now copies the table, re-encrypting every row.
+#
+
+CREATE TABLE e (id INT PRIMARY KEY, v VARCHAR(20), KEY kv (v))
+  ENGINE=TIDESDB ENCRYPTED=YES ENCRYPTION_KEY_ID=2;
+INSERT INTO e VALUES (1,'one'),(2,'two'),(3,'three');
+
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE e ENCRYPTION_KEY_ID=3, ALGORITHM=INSTANT;
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
+ALTER TABLE e ENCRYPTION_KEY_ID=3, ALGORITHM=INPLACE;
+ALTER TABLE e ENCRYPTION_KEY_ID=3;
+SELECT * FROM e ORDER BY id;
+INSERT INTO e VALUES (4,'four');
+SELECT v FROM e FORCE INDEX (kv) ORDER BY v;
+
+--echo # and back again, every row old and new still reads
+ALTER TABLE e ENCRYPTION_KEY_ID=2;
+SELECT * FROM e ORDER BY id;
+
+--echo # the rewritten rows survive a restart
+--source include/restart_mysqld.inc
+SELECT * FROM e ORDER BY id;
+
+--echo # an unencrypted table may change its key id in place, nothing is encrypted with it
+CREATE TABLE p (id INT PRIMARY KEY) ENGINE=TIDESDB;
+INSERT INTO p VALUES (1);
+ALTER TABLE p ENCRYPTION_KEY_ID=3, ALGORITHM=INSTANT;
+SELECT * FROM p;
+
+DROP TABLE e, p;
+
+--source include/cleanup_tidesdb.inc

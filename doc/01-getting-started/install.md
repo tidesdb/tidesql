@@ -61,8 +61,11 @@ The options it accepts:
 | `--skip-engines <list>` | Comma-separated storage engines to exclude from the build |
 | `--list-engines` | List available storage engines and exit |
 | `--pgo` | Profile-guided optimization, a longer build for faster binaries |
-| `--s3` | Build the library with its S3 connector compiled in, which requires libcurl |
 | `--allocator <name>` | Link the library against `system` (default), `jemalloc`, `mimalloc`, or `tcmalloc` |
+| `--help`, `-h` | Print the option summary and exit |
+
+The path defaults are for Linux and macOS. Under MSYS2 or Git Bash on Windows they are
+`C:/mariadb`, `C:/tidesdb`, and `C:/tidesql-build`.
 
 After it finishes, start the server and connect over the socket:
 
@@ -76,7 +79,7 @@ After it finishes, start the server and connect over the socket:
 The zstd, lz4, and snappy compression backends are optional. `install.sh` installs their
 development packages as part of the dependency step, and the plugin build links each backend only
 when it finds that library, so a missing one is not a reason for the plugin build to fail. When the
-plugin build finds no installed TidesDB library or headers, it fetches and builds TidesDB v10.1.0 from source
+plugin build finds no installed TidesDB library or headers, it fetches and builds TidesDB v10.1.1 from source
 and links it statically. That fallback build enables a backend only when both its library and its
 header are present on the machine, and a machine without any of them gets a library that stores
 data uncompressed.

@@ -335,6 +335,35 @@ static int tidesdb_savepoint_release(handlerton *, THD *thd, void *sv)
 /* Perform the durable final commit of a real (non statement-level) transaction, leaving the txn
    object alive and reset-pending for reuse.  Shared by commit() and commit_ordered() so the actual
    commit happens exactly once whichever path the server drives. */
+/* Run the range compactions the committed transaction's large DELETEs asked for.  The memtable is
+   flushed first, once, so the tombstones are in SSTables the compaction can merge away.  A
+   compaction already running over the family absorbs the request, so TDB_ERR_LOCKED is quiet. */
+static void tdb_run_pending_compacts(tidesdb_trx_t *trx)
+{
+    if (trx->pending_compacts.empty()) return;
+    std::vector<tidesdb_trx_t::pending_compact> todo;
+    todo.swap(trx->pending_compacts);
+    bool flushed = false;
+    for (const auto &pc : todo)
+    {
+        tidesdb_column_family_t *cf = tidesdb_get_column_family(tdb_global, pc.cf_name.c_str());
+        if (!cf) continue;
+        if (!flushed)
+        {
+            int frc = tidesdb_flush_memtable(tdb_global);
+            if (frc != TDB_SUCCESS && frc != TDB_ERR_LOCKED)
+                sql_print_warning("[TIDESDB] post-DELETE memtable flush failed (err=%d)", frc);
+            flushed = true;
+        }
+        int crc = tidesdb_compact_range(tdb_global, cf, (const uint8_t *)pc.lo.data(), pc.lo.size(),
+                                        pc.hi.empty() ? NULL : (const uint8_t *)pc.hi.data(),
+                                        pc.hi.size());
+        if (crc != TDB_SUCCESS && crc != TDB_ERR_LOCKED)
+            sql_print_warning("[TIDESDB] post-DELETE compact_range on '%s' failed (err=%d)",
+                              pc.cf_name.c_str(), crc);
+    }
+}
+
 static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
 {
     /* We must release any active statement savepoint before final commit/rollback.
@@ -374,6 +403,7 @@ static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
             trx->txn_generation++;
             trx->dirty = false;
             trx->stmt_savepoint_active = false;
+            trx->pending_compacts.clear();
             return tdb_rc_to_ha(frc, "hton_commit fts_meta_flush");
         }
 
@@ -392,6 +422,7 @@ static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
             trx->txn_generation++;
             trx->dirty = false;
             trx->stmt_savepoint_active = false;
+            trx->pending_compacts.clear();
             return tdb_rc_to_ha(rc, "hton_commit");
         }
         /* We keep txn alive for reuse via txn_reset on next use. */
@@ -401,6 +432,7 @@ static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
     else
     {
         /* Read-only transaction -- we rollback, keep alive for reuse. */
+        trx->pending_compacts.clear();
         trx->fts_meta_pending.clear();
         trx->fts_meta_dirty = false;
         tidesdb_txn_rollback(trx->txn);
@@ -433,6 +465,12 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
         trx->commit_ordered_done = false;
         int rc = trx->commit_ordered_rc;
         trx->commit_ordered_rc = 0;
+        /* commit() runs outside the binlog's commit-order lock, so the compactions a DELETE asked
+           for run here rather than in commit_ordered, where they would hold up every commit. */
+        if (rc == 0)
+            tdb_run_pending_compacts(trx);
+        else
+            trx->pending_compacts.clear();
         return rc;
     }
 
@@ -457,7 +495,12 @@ static int tidesdb_commit(handlerton *, THD *thd, bool all)
         return 0;
     }
 
-    return tdb_finalize_commit(thd, trx);
+    int rc = tdb_finalize_commit(thd, trx);
+    if (rc == 0)
+        tdb_run_pending_compacts(trx);
+    else
+        trx->pending_compacts.clear();
+    return rc;
 }
 
 /* Group commit.  The server calls this in the binlog commit order for the whole transaction, ahead
@@ -497,6 +540,10 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
         trx->commit_ordered_done = false;
         int rc = trx->commit_ordered_rc;
         trx->commit_ordered_rc = 0;
+        if (rc == 0)
+            tdb_run_pending_compacts(trx);
+        else
+            trx->pending_compacts.clear();
         return rc;
     }
 
@@ -541,6 +588,7 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
        XA PREPAREd on this same connection takes the phase-two rollback path. */
     tdb_txn_rollback_stateful(trx->txn);
     tdb_trx_free_retired(trx);
+    trx->pending_compacts.clear();
     trx->txn_generation++;
 #ifdef WITH_WSREP
     /* the transaction resolved, so drop its galera write-intent keys from the shared map. */
@@ -703,6 +751,9 @@ int ha_tidesdb::external_lock_acquire(THD *thd)
        hash lookup on every row operation. */
     cached_thd_ = thd;
     cached_trx_ = trx;
+    /* The table's foreign keys as of this statement, rebuilt if a constraint was added or dropped
+       since the last one. */
+    fk_stmt_ = fk_current();
 
     trans_register_ha(thd, false, ht, 0);
 
@@ -730,7 +781,9 @@ void ha_tidesdb::external_lock_release(THD *thd)
        freed it on its own thread, unlinking it from a transaction list this connection was
        committing, freeing or detaching at the same moment, which crashed the server under a
        contended run. */
-    (void)thd;
+    /* The handler a self-referencing cascade used is locked for the statement, so it is released
+       with this one. */
+    fk_self_handler_unlock(thd);
     if (scan_iter)
     {
         tidesdb_iter_free(scan_iter);
@@ -756,6 +809,7 @@ void ha_tidesdb::external_lock_release(THD *thd)
     stmt_txn_dirty = false;
     cached_thd_ = NULL;
     cached_trx_ = NULL;
+    fk_stmt_.reset();
 
     /* We invalidate statement shape cache last so the above checks still see it. */
     cached_stmt_shape_valid_ = false;

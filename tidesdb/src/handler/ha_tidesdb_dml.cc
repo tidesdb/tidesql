@@ -18,7 +18,7 @@
 /* the INSERT and DELETE data paths and their bulk-DML lifecycle: write_row inserts a row and its
    secondary/fts/spatial index entries (enforcing UNIQUE constraints), delete_row removes them, and
    the start/end bulk hooks plus maybe_bulk_commit flush a large statement's writes in bounded
-   batches. update_row lives in ha_tidesdb_dml_update.cc; the TRUNCATE path delete_all_rows stays
+   batches. update_row lives in ha_tidesdb_dml_update.cc; the TRUNCATE path, truncate, stays
    in ha_tidesdb.cc with the column-family config builders it depends on. */
 
 #include "ha_tidesdb.h"
@@ -265,6 +265,7 @@ int ha_tidesdb::write_maintain_indexes(const uchar *buf, tidesdb_txn_t *txn, tid
                 uint sk_len = spatial_build_key(cx, cy, pk, pk_len, sk);
                 uchar sv[SPATIAL_MBR_VALUE_LEN];
                 spatial_build_value(xmin, ymin, xmax, ymax, sv);
+                spatial_note_extent(i, xmin, ymin, xmax, ymax);
                 int rc = tdb_txn_put_blocking(cached_thd_, txn, share->idx_cfs[i], sk, sk_len, sv,
                                               SPATIAL_MBR_VALUE_LEN, row_ttl);
                 if (rc != TDB_SUCCESS) return rc;
@@ -308,8 +309,21 @@ uint ha_tidesdb::write_build_pk(const uchar *buf, uchar *pk)
     return HIDDEN_PK_SIZE;
 }
 
+bool ha_tidesdb::bulk_statement_may_commit()
+{
+    THD *thd = cached_thd_ ? cached_thd_ : ha_thd();
+    const int cmd = cached_stmt_shape_valid_ ? cached_sql_cmd_ : thd_sql_command(thd);
+    const bool ddl = cmd == SQLCOM_ALTER_TABLE || cmd == SQLCOM_CREATE_TABLE ||
+                     cmd == SQLCOM_CREATE_INDEX || cmd == SQLCOM_DROP_INDEX ||
+                     cmd == SQLCOM_OPTIMIZE;
+    return ddl || !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
+}
+
 int ha_tidesdb::bulk_flush_if_threshold(tidesdb_trx_t *trx, ha_rows weight)
 {
+    /* A statement inside a transaction keeps every write in that transaction, so its COMMIT or
+       ROLLBACK covers all of them. */
+    if (!bulk_may_commit_) return 0;
     bulk_insert_ops_ += weight;
     if (bulk_insert_ops_ >= TIDESDB_BULK_INSERT_BATCH_OPS)
     {
@@ -466,7 +480,7 @@ int ha_tidesdb::delete_row(const uchar *buf)
        reads the referenced columns out of buf.  A primary-key-only table with
        neither deletes by current_pk_buf_ and never reads buf, so it skips the
        per-row bitmap flip entirely. */
-    const bool flip_read_set = share->num_secondary_indexes != 0 || !share->fk_parent.empty();
+    const bool flip_read_set = share->num_secondary_indexes != 0 || !fks().parent.empty();
     MY_BITMAP *old_map = flip_read_set ? tmp_use_all_columns(table, &table->read_set) : nullptr;
 
     /* We use cached_trx_ from external_lock to avoid per-row hash lookups. */
@@ -760,14 +774,11 @@ int ha_tidesdb::maybe_bulk_commit(tidesdb_trx_t *trx)
     stmt_txn = trx->txn;
     trx->txn_generation++;
 
-    if (scan_iter)
-    {
-        tidesdb_iter_free(scan_iter);
-        scan_iter = NULL;
-        scan_iter_cf_ = NULL;
-        scan_iter_txn_ = NULL;
-    }
-    scan_txn = trx->txn;
+    /* This handler's own scan, a DELETE walking the rows it removes, keeps reading through its
+       iterator under the retired transaction, which stays valid until the statement's real commit.
+       Freeing it here ended that scan at the first batch, and the DELETE then reported success
+       having removed only that batch.  The next statement sees the generation change and opens a
+       fresh iterator under the new transaction. */
     /* The mid-statement commit reset the txn, so the armed statement savepoint
        no longer means anything.  Disarm it -- the remainder of this statement
        can no longer be rolled back atomically (the committed rows are durable),
@@ -781,6 +792,7 @@ void ha_tidesdb::start_bulk_insert(ha_rows rows, uint flags)
 {
     in_bulk_insert_ = true;
     bulk_insert_ops_ = 0;
+    bulk_may_commit_ = bulk_statement_may_commit();
 
     /* A bulk statement flushes its writes in bounded batches through
        maybe_bulk_commit, and after the first batch it resets the transaction
@@ -804,7 +816,8 @@ void ha_tidesdb::start_bulk_insert(ha_rows rows, uint flags)
        dropped to READ_COMMITTED after its first batch anyway is moved there
        up front.  An unknown row count, which LOAD DATA passes as zero, is
        left alone rather than guessed at. */
-    if (rows == 0 || rows * (1 + share->num_secondary_indexes) < TIDESDB_BULK_INSERT_BATCH_OPS)
+    if (!bulk_may_commit_ || rows == 0 ||
+        rows * (1 + share->num_secondary_indexes) < TIDESDB_BULK_INSERT_BATCH_OPS)
         return;
     tidesdb_trx_t *trx = cached_trx_;
     if (!trx || !trx->txn || trx->dirty || trx->isolation_level <= TDB_ISOLATION_READ_COMMITTED)
@@ -852,8 +865,12 @@ int ha_tidesdb::end_bulk_insert()
 */
 bool ha_tidesdb::start_bulk_update()
 {
+    /* The server calls this only for an engine that advertises HA_CAN_FORCE_BULK_UPDATE, which
+       TidesDB does not, so an UPDATE never batches today.  It is kept consistent with the insert
+       and delete paths should that flag be advertised. */
     in_bulk_update_ = true;
     bulk_insert_ops_ = 0;
+    bulk_may_commit_ = bulk_statement_may_commit();
     return 0;
 }
 
@@ -943,12 +960,13 @@ bool ha_tidesdb::start_bulk_delete()
 {
     in_bulk_delete_ = true;
     bulk_insert_ops_ = 0;
+    bulk_may_commit_ = bulk_statement_may_commit();
     bulk_delete_rows_ = 0;
     bulk_delete_min_pk_.clear();
     bulk_delete_max_pk_.clear();
     bulk_delete_keys_.clear();
     /* defer primary-row tombstones into one range tombstone only for a plain user-pk table with no
-       delete triggers, since deferral must not hide a row from a trigger reading the table
+       triggers of any kind, since deferral must not hide a row from a trigger reading the table
        mid-statement, and never under galera, where a deferred range tombstone would not line up
        with the per-row certification the write path already issued. */
     bulk_delete_defer_ = share && share->has_user_pk && share->cf && table->triggers == nullptr;
@@ -1007,27 +1025,25 @@ int ha_tidesdb::end_bulk_delete()
     bulk_delete_defer_ = false;
 
     /* Auto compact-after-range-delete.  Threshold zero (default) keeps the previous behavior, no
-       synchronous compaction at end-of-statement.  When the threshold is met we compact the
-       observed [min_pk, max_pk] range on the primary CF, unless we already turned the run into a
-       range tombstone, which reclaims the span on its own.  Secondary index tombstones are
-       reclaimed by the per-CF tombstone_density_trigger. */
+       compaction after the statement.  When the threshold is met the observed [min_pk, max_pk]
+       range on the primary CF is queued on the transaction and compacted after it commits, when
+       the tombstones have left the transaction, unless the run already became a range tombstone,
+       which reclaims the span on its own.  The library range is half-open, so the end is the key
+       just past max_pk.  Secondary index tombstones are reclaimed by the per-CF
+       tombstone_density_trigger. */
     if (!did_range_tombstone && cached_compact_after_range_delete_min_rows_ > 0 &&
         bulk_delete_rows_ >= cached_compact_after_range_delete_min_rows_ && share && share->cf &&
-        !bulk_delete_min_pk_.empty() && !bulk_delete_max_pk_.empty())
+        cached_trx_ && !bulk_delete_min_pk_.empty() && !bulk_delete_max_pk_.empty())
     {
-        int crc = tidesdb_compact_range(
-            tdb_global, share->cf, (const uint8_t *)bulk_delete_min_pk_.data(),
-            bulk_delete_min_pk_.size(), (const uint8_t *)bulk_delete_max_pk_.data(),
-            bulk_delete_max_pk_.size());
-        /* TDB_ERR_LOCKED is benign here -- another compaction is already
-           running over a superset of our range, so our reclamation
-           request will be absorbed by it.  Only log real failures. */
-        if (crc != TDB_SUCCESS && crc != TDB_ERR_LOCKED)
-        {
-            sql_print_warning(
-                "[TIDESDB] post-DELETE compact_range on '%s' failed (rows=%llu, err=%d)",
-                share->cf_name.c_str(), (unsigned long long)bulk_delete_rows_, crc);
-        }
+        tidesdb_trx_t::pending_compact pc;
+        pc.cf_name = share->cf_name;
+        pc.lo = bulk_delete_min_pk_;
+        uchar hi[DATA_KEY_BUF_LEN];
+        uint hi_len = 0;
+        if (data_key_successor((const uchar *)bulk_delete_max_pk_.data(),
+                               (uint)bulk_delete_max_pk_.size(), hi, hi_len))
+            pc.hi.assign((const char *)hi, hi_len);
+        cached_trx_->pending_compacts.push_back(std::move(pc));
     }
 
     bulk_delete_rows_ = 0;

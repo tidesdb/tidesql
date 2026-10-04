@@ -52,7 +52,6 @@
 #   --list-engines              List storage engines that can be skipped and exit
 #   --rebuild-plugin             Rebuild only the TidesDB plugin (fast dev cycle)
 #   --pgo                       Enable Profile-Guided Optimization (3-phase build)
-#   --s3                        Build TidesDB with S3 object store connector (requires libcurl)
 #   --allocator  NAME           Memory allocator for libtidesdb.so: system (default), jemalloc, mimalloc, or tcmalloc.
 #                               Only affects TidesDB's internal allocations; mariadbd's allocator is unchanged.
 #                               For a process-wide swap also LD_PRELOAD the allocator at mariadbd startup.
@@ -72,7 +71,7 @@
 #
 # Examples:
 #  ./install.sh
-#  ./install.sh --tidesdb-version v10.1.0 --mariadb-version mariadb-13.0.1
+#  ./install.sh --tidesdb-version v10.1.1 --mariadb-version mariadb-13.0.1
 #  ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
 #  ./install.sh --mariadb-version mariadb-13.0.1
 #  ./install.sh --skip-deps --skip-tidesdb
@@ -148,7 +147,7 @@ get_latest_tidesdb_version() {
     version=$(_fetch_url "https://api.github.com/repos/tidesdb/tidesdb/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "v10.1.0"  # fallback, the TidesDB release TideSQL 5.1.0 pins
+        echo "v10.1.1"  # fallback, the TidesDB release TideSQL 5.1.1 pins
     else
         echo "$version"
     fi
@@ -159,7 +158,7 @@ get_latest_mariadb_version() {
     version=$(_fetch_url "https://api.github.com/repos/MariaDB/server/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "mariadb-13.0.1"  # fallback, the version-13 tag TideSQL 5.0.0 targets
+        echo "mariadb-13.0.1"  # fallback, the version-13 tag TideSQL 5.1.1 targets
     else
         echo "$version"
     fi
@@ -176,7 +175,6 @@ SKIP_TIDESDB=false
 REBUILD_PLUGIN=false
 PGO_ENABLED=false
 SKIP_ENGINES=""
-WITH_S3=false
 # Memory allocator to build libtidesdb against.  One of:
 #   system     glibc / platform default (no extra dep)
 #   jemalloc   routes TidesDB allocations through jemalloc (pkg: libjemalloc-dev)
@@ -281,7 +279,6 @@ while [[ $# -gt 0 ]]; do
         --skip-engines)     SKIP_ENGINES="$2";      shift 2 ;;
         --list-engines)     list_engines ;;
         --pgo)              PGO_ENABLED=true;       shift   ;;
-        --s3)               WITH_S3=true;           shift   ;;
         --allocator)
             ALLOCATOR="$2"
             case "$ALLOCATOR" in
@@ -539,11 +536,6 @@ build_tidesdb() {
         -DBUILD_SHARED_LIBS=ON
     )
 
-    if $WITH_S3; then
-        cmake_args+=(-DTIDESDB_WITH_S3=ON)
-        info "S3 object store connector enabled"
-    fi
-
     case "$ALLOCATOR" in
         jemalloc)
             cmake_args+=(-DTIDESDB_WITH_JEMALLOC=ON)
@@ -654,11 +646,6 @@ build_mariadb() {
         -DWITH_MARIABACKUP=ON
         -DWITH_UNIT_TESTS=OFF
     )
-
-    # S3 object store connector for the plugin
-    if $WITH_S3; then
-        cmake_args+=(-DTIDESDB_WITH_S3=ON)
-    fi
 
     # Disable skipped engines
     if [[ -n "$SKIP_ENGINES" ]]; then
@@ -1208,16 +1195,10 @@ rebuild_plugin() {
     rm -rf "${mariadb_src}/mysql-test/suite/tidesdb" \
            "${mariadb_src}/mysql-test/suite/tidesdb_galera"
 
-    # Point cmake at the TidesDB library
+    # Point cmake at the TidesDB library, and reconfigure so the copied plugin sources and that
+    # library location are picked up by the cached build
     export TIDESDB_ROOT="${TIDESDB_PREFIX}"
-
-    # Sync the S3 setting with the current --s3 flag so cached builds
-    # don't keep a stale TIDESDB_WITH_S3 value from a previous configure.
-    if $WITH_S3; then
-        cmake "${mariadb_build}" -DTIDESDB_WITH_S3=ON
-    else
-        cmake "${mariadb_build}" -DTIDESDB_WITH_S3=OFF
-    fi
+    cmake "${mariadb_build}"
 
     # Build just the plugin target
     info "Building tidesdb plugin target (${JOBS} jobs)..."

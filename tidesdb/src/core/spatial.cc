@@ -246,9 +246,10 @@ static inline bool mbr_equals(const mbr_t &a, const mbr_t &b)
 
 bool mbr_predicate(predicate mode, const mbr_t &query, const mbr_t &entry)
 {
-    /* contain and within both reduce to the row rectangle lying inside the query
-     * rectangle once the server has normalised its argument order, so they share a
-     * within test; intersect is symmetric and disjoint is its negation. */
+    /* the server names contain and within from the query's side, as MyISAM's rtree does. contain
+     * asks for rows the query rectangle contains, MBRWithin(col, box), and within asks for rows the
+     * query rectangle lies within, that is rows that contain it, MBRContains(col, box).
+     * intersect is symmetric and disjoint is its negation. */
     switch (mode)
     {
         case predicate::intersect:
@@ -256,7 +257,7 @@ bool mbr_predicate(predicate mode, const mbr_t &query, const mbr_t &entry)
         case predicate::contain:
             return mbr_within(entry, query);
         case predicate::within:
-            return mbr_within(entry, query);
+            return mbr_within(query, entry);
         case predicate::equal:
             return mbr_equals(entry, query);
         case predicate::disjoint:

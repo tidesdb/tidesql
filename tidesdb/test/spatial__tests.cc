@@ -250,10 +250,18 @@ void test_mbr_predicate_matrix(void)
     ASSERT_TRUE(mbr_predicate(predicate::intersect, query, overlap));
     ASSERT_FALSE(mbr_predicate(predicate::intersect, query, outside));
 
-    ASSERT_TRUE(mbr_predicate(predicate::within, query, inside));
-    ASSERT_FALSE(mbr_predicate(predicate::within, query, overlap));
-
+    /* the server names contain and within from the query's side. contain matches rows the query
+     * contains, within matches rows the query lies within, that is rows that contain it. */
+    mbr_t around = {-1.0, -1.0, 11.0, 11.0};
     ASSERT_TRUE(mbr_predicate(predicate::contain, query, inside));
+    ASSERT_TRUE(mbr_predicate(predicate::contain, query, same));
+    ASSERT_FALSE(mbr_predicate(predicate::contain, query, overlap));
+    ASSERT_FALSE(mbr_predicate(predicate::contain, query, around));
+
+    ASSERT_TRUE(mbr_predicate(predicate::within, query, around));
+    ASSERT_TRUE(mbr_predicate(predicate::within, query, same));
+    ASSERT_FALSE(mbr_predicate(predicate::within, query, inside));
+    ASSERT_FALSE(mbr_predicate(predicate::within, query, overlap));
 
     ASSERT_TRUE(mbr_predicate(predicate::equal, query, same));
     ASSERT_FALSE(mbr_predicate(predicate::equal, query, inside));

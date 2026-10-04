@@ -19,9 +19,9 @@ that server version.
 | 12.3.1  | 4.2.6    | Yes |
 | 13.0.2  | 4.5.4    | Yes |
 
-This is the TideSQL 5.x manual and it pairs with TidesDB v10. The current pinned release is 5.1.0
-(hex `0x50100`), linking TidesDB v10.1.0. It still writes on-disk format 10, the same as 5.0.0, so
-a database moves between 5.0.0 and 5.1.0 in either direction without a dump. A 5.x minor or patch
+This is the TideSQL 5.x manual and it pairs with TidesDB v10. The current pinned release is 5.1.1
+(hex `0x50101`), linking TidesDB v10.1.1. It still writes on-disk format 10, the same as 5.0.0, so
+a database moves between 5.0.0 and 5.1.1 in either direction without a dump. A 5.x minor or patch
 links a TidesDB v10 release and extends this same manual, so only a new major opens a new manual. See
 [Versioning](https://github.com/tidesdb/tidesql/blob/master/VERSIONING.md) for how the plugin and
 the library versions relate.

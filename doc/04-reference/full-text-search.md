@@ -61,10 +61,13 @@ are set by `tidesdb_fts_bm25_k1` (default 1.2) and `tidesdb_fts_bm25_b` (default
 
 ## Tokenization
 
-The tokenizer is charset-aware and handles multi-byte scripts including UTF-8, CJK, Cyrillic, and
-Greek. Text is split on word boundaries using MariaDB's charset classification and lowercased with
-the charset's case-folding rules. Words shorter than `tidesdb_fts_min_word_len` (default 3) or
-longer than `tidesdb_fts_max_word_len` (default 84) are excluded from the index and from queries.
+The tokenizer is charset-aware. A word is a run of characters the column's charset classifies as
+alphanumeric, and every multi-byte character counts as a word character, so a script written without
+spaces, such as CJK, indexes one token per unbroken run. Tokens are lowercased with the charset's
+case-folding rules. Words shorter than `tidesdb_fts_min_word_len` (default 3) or longer than
+`tidesdb_fts_max_word_len` (default 84) characters are excluded from the index, from
+natural-language queries, and from phrases. A plain boolean-mode term is looked up as typed, so a
+required term outside those bounds, or on the stop-word list, matches no row.
 
 ## Stop words
 
@@ -74,8 +77,12 @@ they are never stored and never match. The list is customizable with `tidesdb_ft
 which names a `db_name/table_name` table whose only column is a `value` VARCHAR holding one word
 per row, since the loader reads each stored row as that single packed column.
 The stop-word table must itself be a TidesDB table, since the loader resolves it as a TidesDB column
-family. Pointing the variable at a table on another engine logs a warning and leaves the previous
-list in place rather than taking effect. Setting it to NULL or empty restores the default:
+family. A `SET GLOBAL` naming a missing table, a table on another engine, or a value not in
+`db_name/table_name` form fails with `ER_WRONG_VALUE_FOR_VAR` and the variable keeps its old value.
+A TidesDB table of another shape is accepted, and any row that does not hold a single VARCHAR is
+skipped. A value set in my.cnf is loaded at
+startup, and if that table cannot be read the server logs a warning and keeps the default list.
+Setting it to NULL or empty restores the default:
 
 ```sql
 CREATE TABLE mydb.my_stopwords (value VARCHAR(50)) ENGINE=TidesDB;
@@ -120,5 +127,7 @@ CREATE TABLE docs (
 
 Index entries are maintained inside the same transaction as the row change. An insert tokenizes the
 document and writes one entry per unique term, a delete removes the entries, and an update that
-changes the indexed columns removes the old entries and writes new ones. The document count and
-average document length for BM25 are maintained atomically in the data column family.
+changes the indexed columns or the primary key removes the old entries and writes new ones. An
+update on a table with a TTL also rewrites the row's entries with its new expiry, or with none. The
+document count and total word count behind BM25's average document length are maintained atomically
+in the data column family.

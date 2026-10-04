@@ -445,10 +445,21 @@ bool ha_tidesdb::decode_sort_key_part(const uint8_t *src, uint sort_len, Field *
             break;
 
         case MYSQL_TYPE_DATETIME:
-        case MYSQL_TYPE_DATETIME2:
         case MYSQL_TYPE_TIMESTAMP:
-        case MYSQL_TYPE_TIMESTAMP2:
+            /* The legacy formats store a little-endian integer that the sort key writes
+               big-endian, so decoding reverses it. */
             d.k = tidesdb::sort_key::kind::datetime;
+            break;
+
+        case MYSQL_TYPE_DATETIME2:
+        case MYSQL_TYPE_TIMESTAMP2:
+            /* The current formats are stored big-endian already, so the sort key is the stored
+               bytes themselves and decoding copies them.  Reversing them, as the legacy formats
+               need, read back a different date and dropped rows a pushed condition then tested. */
+            if (sort_len != f->pack_length()) return false;
+            d.k = tidesdb::sort_key::kind::char_fixed;
+            d.pack_length = f->pack_length();
+            d.pad_byte = 0x00;
             break;
 
         case MYSQL_TYPE_STRING:

@@ -118,13 +118,13 @@ t_schema	CREATE TABLE `t_schema` (
 ) ENGINE=TidesDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci
 SELECT * FROM t_schema ORDER BY id;
 id	val	extra
-1	one	NULL
-2	two	NULL
+1	one	0
+2	two	0
 INSERT INTO t_schema VALUES (3, 'three', 99);
 SELECT * FROM t_schema ORDER BY id;
 id	val	extra
-1	one	NULL
-2	two	NULL
+1	one	0
+2	two	0
 3	three	99
 DROP TABLE t_schema;
 #

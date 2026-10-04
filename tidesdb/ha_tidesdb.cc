@@ -221,10 +221,12 @@ static MYSQL_THDVAR_ULONGLONG(ttl, PLUGIN_VAR_RQCMDARG,
 /* Per-session skip unique check (for bulk loads where PK duplicates
    are known impossible).  Same pattern as MyRocks rocksdb_skip_unique_check. */
 static MYSQL_THDVAR_BOOL(skip_unique_check, PLUGIN_VAR_RQCMDARG,
-                         "Skip uniqueness check on primary key and unique secondary indexes "
-                         "during INSERT.  Only safe when the application guarantees no "
-                         "duplicates (e.g. bulk loads with monotonic PKs).  "
-                         "SET SESSION tidesdb_skip_unique_check=1",
+                         "Skip uniqueness checks on the primary key and unique secondary "
+                         "indexes during INSERT and UPDATE, and skip the uniqueness sentinels "
+                         "that let concurrent writers of one value collide at commit, so rows "
+                         "written with it on are not protected from a concurrent duplicate "
+                         "later either.  Only safe when the application guarantees no "
+                         "duplicates, such as a bulk load with monotonic keys",
                          NULL, NULL, 0);
 
 /* Per-session row-count threshold for the post-delete range compaction
@@ -232,16 +234,17 @@ static MYSQL_THDVAR_BOOL(skip_unique_check, PLUGIN_VAR_RQCMDARG,
    the comparable min/max PK bytes touched by a single multi-row DELETE
    statement (the start_bulk_delete / end_bulk_delete envelope around
    range deletes) and, if the deleted row count is at least the threshold,
-   calls tidesdb_compact_range on the primary CF over the touched range
-   at end-of-statement to physically reclaim the freshly-tombstoned range
-   without waiting for a structural compaction trigger.  Threshold avoids
-   making small DELETEs pay synchronous compaction cost. */
+   queues the touched range on the transaction.  Once the transaction
+   commits the memtable is flushed and tidesdb_compact_range runs over the
+   range, so the tombstones the DELETE wrote are in SSTables the compaction
+   can reclaim.  Threshold avoids making small DELETEs pay synchronous
+   compaction cost. */
 static MYSQL_THDVAR_ULONGLONG(
     compact_after_range_delete_min_rows, PLUGIN_VAR_RQCMDARG,
-    "If non-zero, after a multi-row DELETE statement that touches at least "
-    "this many rows, call tidesdb_compact_range over the touched primary-key "
-    "range to physically reclaim tombstoned space.  Default 0 disables the "
-    "feature; set to 0 to keep the post-DELETE behavior unchanged",
+    "If non-zero, a multi-row DELETE statement that touches at least this "
+    "many rows has its primary-key range flushed and compacted once its "
+    "transaction commits, physically reclaiming the tombstoned space.  A "
+    "rolled back DELETE compacts nothing.  Default 0 disables the feature",
     NULL, NULL, 0, 0, ULONGLONG_MAX, 1);
 
 /* Per-session opt-in for single-delete semantics on the primary row CF.
@@ -253,18 +256,18 @@ static MYSQL_THDVAR_ULONGLONG(
    writes tidesdb_txn_put(share->cf, data_key(pk), ...) with the same PK,
    producing a put-over-put, and REPLACE INTO / INSERT ... ON DUPLICATE
    KEY UPDATE on tables with no secondary indexes does the same via a
-   silent overwrite.  Under either pattern, dropping a put+single-delete
-   pair at compaction can re-expose an older put.  Enabling this variable
+   silent overwrite.  Either pattern breaks the library's contract of at
+   most one put per single-delete, which TidesDB 10.1.1 tolerates by keeping
+   the delete while another table holds the key.  Enabling this variable
    is the caller's promise that the session does none of the above --
    typical insert-then-delete, log-style, append-only workloads. */
 static MYSQL_THDVAR_BOOL(single_delete_primary, PLUGIN_VAR_RQCMDARG,
                          "Use single-delete semantics for the primary row CF on DELETE. "
                          "Caller promises no UPDATE on non-PK columns, no REPLACE INTO, "
                          "and no INSERT ... ON DUPLICATE KEY UPDATE on tables without "
-                         "secondary indexes for this session.  Violating the contract may "
-                         "re-expose older row versions after compaction.  Safe choice: "
-                         "leave OFF unless the session is INSERT-and-DELETE only.  "
-                         "SET SESSION tidesdb_single_delete_primary=1",
+                         "secondary indexes for this session, keeping the library's "
+                         "contract of at most one put per single-delete.  Leave it OFF "
+                         "unless the session only inserts and deletes",
                          NULL, NULL, 0);
 
 /* Session-level defaults for table options.
@@ -336,16 +339,16 @@ static MYSQL_THDVAR_ULONGLONG(default_dividing_level_offset, PLUGIN_VAR_RQCMDARG
                               NULL, NULL, TIDESQL_DEFAULT_DIVIDING_LEVEL_OFFSET, 0, 64, 1);
 
 /* Tombstone-density compaction trigger (parts per 10000 -- 5000 = 0.50 ratio).
-   When non-zero, after each flush the engine inspects level-1 SSTables and
-   escalates compaction for any single SST whose tombstone count divided by
-   entry count exceeds this ratio while having at least
+   When non-zero, the compaction planner inspects every SSTable at every level
+   and escalates compaction when any single one has a tombstone count divided
+   by entry count at or above this ratio while having at least
    tombstone_density_min_entries entries.  Default 0 keeps the existing
    structural-trigger behavior. */
 static MYSQL_THDVAR_ULONGLONG(default_tombstone_density_trigger, PLUGIN_VAR_RQCMDARG,
                               "Default tombstone-density compaction trigger ratio for new tables, "
                               "expressed as parts per 10000 (5000 = 0.50, 0 disables).  When set, "
-                              "compaction is escalated for any level-1 SSTable whose tombstone "
-                              "count divided by entry count exceeds the ratio",
+                              "compaction is escalated when any SSTable at any level has a "
+                              "tombstone count divided by entry count at or above the ratio",
                               NULL, NULL, 0, 0, 10000, 1);
 
 static MYSQL_THDVAR_ULONGLONG(default_tombstone_density_min_entries, PLUGIN_VAR_RQCMDARG,
@@ -374,9 +377,8 @@ static TYPELIB log_level_typelib = {array_elements(log_level_names) - 1, "log_le
 
 static MYSQL_SYSVAR_ULONG(flush_threads, srv_flush_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-                          "Number of TidesDB flush threads.  0 lets the library auto-size the "
-                          "shared flush pool to min(CPU count, 4) at open",
-                          NULL, NULL, 4, 0, 64, 0);
+                          "Number of TidesDB flush threads.  0 uses the library default of 2", NULL,
+                          NULL, 4, 0, 64, 0);
 
 static MYSQL_SYSVAR_ULONG(compaction_threads, srv_compaction_threads,
                           PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -426,8 +428,9 @@ static MYSQL_SYSVAR_STR(ft_stopword_table, srv_ft_stopword_table,
                         "The table must have a VARCHAR column named 'value'. "
                         "When NULL (default), uses the same default stop words as "
                         "information_schema.INNODB_FT_DEFAULT_STOPWORD. "
-                        "Setting it to an empty string also restores the default list",
-                        NULL, tdb_ft_stopword_table_update, NULL);
+                        "Setting it to an empty string also restores the default list. "
+                        "A table that cannot be read as a stop word list is refused",
+                        tdb_ft_stopword_table_check, tdb_ft_stopword_table_update, NULL);
 
 static MYSQL_SYSVAR_ULONGLONG(block_cache_size, srv_block_cache_size,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
@@ -456,7 +459,7 @@ static MYSQL_SYSVAR_ULONGLONG(log_truncation_at, srv_log_truncation_at,
 static MYSQL_SYSVAR_ULONGLONG(memtable_write_buffer_size, srv_memtable_write_buffer_size,
                               PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
                               "Write buffer size in bytes for the memtable. "
-                              "0 lets the library auto-size it",
+                              "0 uses the library default of 64 MB",
                               NULL, NULL, 256ULL * 1024 * 1024, 0, ULONGLONG_MAX, 0);
 
 static ulong srv_memtable_sync_mode = 2; /* FULL */
@@ -637,11 +640,14 @@ static void tidesdb_backup_dir_update(THD *thd, struct st_mysql_sys_var *, void 
 
 static MYSQL_SYSVAR_STR(backup_dir, srv_backup_dir, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
                         "Set to a directory path to trigger an online TidesDB backup. "
-                        "The directory must not exist or be empty. "
+                        "The last directory of the path is created if missing and its parent must "
+                        "exist.  Use a new or empty one, since files an earlier backup left there "
+                        "are not removed. "
                         "Example: SET GLOBAL tidesdb_backup_dir = '/path/to/backup'",
                         NULL, tidesdb_backup_dir_update, NULL);
 
-/* Checkpoint (hard-link snapshot) via system variable */
+/* Checkpoint via system variable, a memtable flush and a durable sync of the WAL, value log and
+   manifest, followed by a copy of the manifest, the value log and the sstables it references */
 
 static char *srv_checkpoint_dir = NULL;
 
@@ -712,10 +718,12 @@ static void tidesdb_checkpoint_dir_update(THD *thd, struct st_mysql_sys_var *, v
 
 static MYSQL_SYSVAR_STR(checkpoint_dir, srv_checkpoint_dir,
                         PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
-                        "Set to a directory path to write a consistent checkpoint copy of the data "
-                        "directory there, a durable flush of the WAL, value log, and manifest "
-                        "followed by a byte-for-byte copy. "
-                        "The directory must not exist or be empty. "
+                        "Set to a directory path to write a consistent checkpoint there.  The "
+                        "memtable is flushed and the WAL, value log and manifest are synced, then "
+                        "the manifest, value log and referenced SSTables are copied.  The last "
+                        "directory of the path is created if missing and its parent must exist.  "
+                        "Use a new or empty one, since files an earlier checkpoint left there are "
+                        "not removed. "
                         "Example: SET GLOBAL tidesdb_checkpoint_dir = '/path/to/checkpoint'",
                         NULL, tidesdb_checkpoint_dir_update, NULL);
 
@@ -921,6 +929,10 @@ static int tidesdb_init_func(void *p)
 
     sql_print_information("[TIDESDB] TidesDB opened at %s", tdb_path.c_str());
 
+    /* A stop word table named in the configuration is a TidesDB table, so it can only be read
+       now that the store is open. */
+    fts_load_configured_stopwords(srv_ft_stopword_table);
+
     DBUG_RETURN(0);
 }
 
@@ -1059,8 +1071,8 @@ void ha_tidesdb::get_auto_increment(ulonglong offset, ulonglong increment,
 }
 
 /*
-  Reset the auto-increment counter(s) to the given value.  MariaDB's default
-  truncate() path calls this after delete_all_rows, and ALTER TABLE ...
+  Reset the auto-increment counter(s) to the given value.  truncate() calls
+  this after emptying the table, and ALTER TABLE ...
   AUTO_INCREMENT=N routes here as well.  The next auto-generated ID equals
   `value` itself, so we store `value - 1` (get_auto_increment does
   fetch-add and returns cur+1).  `value == 0` is the TRUNCATE case reset
@@ -1074,7 +1086,7 @@ int ha_tidesdb::reset_auto_increment(ulonglong value)
     ulonglong new_val = value > 0 ? value - 1 : 0;
     share->auto_inc_val.store(new_val, std::memory_order_relaxed);
 
-    /* Hidden PK row-ids are one-based (delete_all_rows stores
+    /* Hidden PK row-ids are one-based (truncate stores
        HIDDEN_PK_FIRST_ROW_ID for empty tables).  Treat value==0 as restart. */
     uint64_t new_rowid = value > 0 ? (uint64_t)value : HIDDEN_PK_FIRST_ROW_ID;
     share->next_row_id.store(new_rowid, std::memory_order_relaxed);

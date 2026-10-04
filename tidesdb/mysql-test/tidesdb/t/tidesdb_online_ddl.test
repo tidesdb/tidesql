@@ -69,8 +69,10 @@ SELECT id, a, b_name, c, d FROM t_ddl ORDER BY id;
 INSERT INTO t_ddl VALUES (7, 70, 'eta', 700, 42);
 SELECT id, d FROM t_ddl WHERE id IN (1, 7) ORDER BY id;
 
---echo # =+=+= INSTANT: drop column =+=+=
+--echo # =+=+= DROP COLUMN rewrites the table, it is not instant =+=+=
+--error ER_ALTER_OPERATION_NOT_SUPPORTED_REASON
 ALTER TABLE t_ddl DROP COLUMN d, ALGORITHM=INSTANT;
+ALTER TABLE t_ddl DROP COLUMN d;
 SELECT * FROM t_ddl WHERE id = 1;
 
 --echo # =+=+= Verify all rows readable after DROP COLUMN =+=+=

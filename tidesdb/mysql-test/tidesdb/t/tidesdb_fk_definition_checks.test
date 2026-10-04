@@ -1,0 +1,101 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# A foreign key is checked when it is defined, so it is never enforced against the wrong thing.
+# SET NULL on a column declared NOT NULL used to be accepted and then do nothing, leaving the child
+# pointing at a parent row that was gone.  A reference to a parent column that is not the primary
+# key or a unique key, or to a parent table that does not exist, used to be enforced silently
+# against the parent's primary key, rejecting valid rows and accepting orphans.  All of these are
+# now refused at CREATE, which InnoDB also refuses, except that TidesDB needs a primary or unique
+# parent key where InnoDB also accepts a plain index.
+#
+
+CREATE TABLE p (id INT PRIMARY KEY, v INT NOT NULL, u INT NOT NULL, KEY kv (v), UNIQUE KEY ku (u))
+  ENGINE=TIDESDB;
+INSERT INTO p VALUES (1,100,1000),(2,200,2000);
+
+--echo # SET NULL on a NOT NULL child column
+--error ER_CANT_CREATE_TABLE
+CREATE TABLE c (id INT PRIMARY KEY, pid INT NOT NULL, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES p(id) ON DELETE SET NULL) ENGINE=TIDESDB;
+--error ER_CANT_CREATE_TABLE
+CREATE TABLE c (id INT PRIMARY KEY, pid INT NOT NULL, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES p(id) ON UPDATE SET NULL) ENGINE=TIDESDB;
+--echo # a nullable column may use SET NULL
+CREATE TABLE c (id INT PRIMARY KEY, pid INT NULL, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES p(id) ON DELETE SET NULL) ENGINE=TIDESDB;
+INSERT INTO c VALUES (10,1);
+DELETE FROM p WHERE id = 1;
+SELECT * FROM c;
+DROP TABLE c;
+
+--echo # a parent column with only a plain index, or no index at all
+--error ER_CANT_CREATE_TABLE
+CREATE TABLE c (id INT PRIMARY KEY, pv INT, KEY (pv),
+                FOREIGN KEY (pv) REFERENCES p(v)) ENGINE=TIDESDB;
+--error ER_CANT_CREATE_TABLE
+CREATE TABLE c (id INT PRIMARY KEY, pw INT, KEY (pw),
+                FOREIGN KEY (pw) REFERENCES p(nosuchcol)) ENGINE=TIDESDB;
+
+--echo # the leading column of a composite primary key is not a key of its own
+CREATE TABLE pc (a INT, b INT, PRIMARY KEY (a, b)) ENGINE=TIDESDB;
+--error ER_CANT_CREATE_TABLE
+CREATE TABLE c (id INT PRIMARY KEY, pa INT, KEY (pa),
+                FOREIGN KEY (pa) REFERENCES pc(a)) ENGINE=TIDESDB;
+--echo # the whole composite key is
+CREATE TABLE c (id INT PRIMARY KEY, pa INT, pb INT, KEY (pa, pb),
+                FOREIGN KEY (pa, pb) REFERENCES pc(a, b)) ENGINE=TIDESDB;
+INSERT INTO pc VALUES (1, 2);
+INSERT INTO c VALUES (1, 1, 2);
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO c VALUES (2, 1, 3);
+DROP TABLE c, pc;
+
+--echo # a unique parent key is enforced against that key, not the primary key
+CREATE TABLE c (id INT PRIMARY KEY, pu INT, KEY (pu),
+                FOREIGN KEY (pu) REFERENCES p(u)) ENGINE=TIDESDB;
+INSERT INTO c VALUES (1,2000);
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO c VALUES (2,2);
+SELECT * FROM c;
+DROP TABLE c;
+
+--echo # a parent table that does not exist
+--error ER_CANT_CREATE_TABLE
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES nosuch(id)) ENGINE=TIDESDB;
+--echo # is accepted with foreign key checks off, as InnoDB does
+SET foreign_key_checks = 0;
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES nosuch(id)) ENGINE=TIDESDB;
+SET foreign_key_checks = 1;
+DROP TABLE c;
+
+DROP TABLE p;
+
+--echo #
+--echo # A parent already open when its child is created enforces the new constraint at once.  It
+--echo # used to read its constraints only when first opened, so a parent written to before the
+--echo # child existed let a referenced row be deleted under RESTRICT and skipped CASCADE.
+--echo #
+CREATE TABLE p (id INT PRIMARY KEY) ENGINE=TIDESDB;
+INSERT INTO p VALUES (1),(2),(3);
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid), FOREIGN KEY (pid) REFERENCES p(id))
+  ENGINE=TIDESDB;
+INSERT INTO c VALUES (10,1);
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM p WHERE id = 1;
+DROP TABLE c;
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES p(id) ON DELETE CASCADE) ENGINE=TIDESDB;
+INSERT INTO c VALUES (20,2);
+DELETE FROM p WHERE id = 2;
+SELECT COUNT(*) FROM c;
+--echo # and stops enforcing it once the child is dropped
+DROP TABLE c;
+DELETE FROM p WHERE id = 1;
+SELECT * FROM p;
+DROP TABLE p;
+
+--source include/cleanup_tidesdb.inc

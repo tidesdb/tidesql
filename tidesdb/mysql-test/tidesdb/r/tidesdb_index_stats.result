@@ -40,7 +40,7 @@ Table	Op	Msg_type	Msg_text
 test.t_stats	analyze	status	Engine-independent statistics collected
 test.t_stats	analyze	Note	[TIDESDB] CF 'test__t_stats'  total_keys=N  data_size=N bytes  levels=0  read_amp=N
 test.t_stats	analyze	Note	[TIDESDB] avg_key=N bytes  avg_value=N bytes
-test.t_stats	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N ssts)  compact_read=N  ratio=Nx
+test.t_stats	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N compactions)  compact_read=N  ratio=Nx
 test.t_stats	analyze	Note	[TIDESDB] idx CF 'test__t_stats__idx_k_idx'  keys=N  data_size=N bytes  levels=0
 test.t_stats	analyze	Note	[TIDESDB] idx 'k_idx' sampled=N distinct=N rec_per_key=N
 test.t_stats	analyze	status	OK
@@ -64,7 +64,7 @@ Table	Op	Msg_type	Msg_text
 test.t_stats2	analyze	status	Engine-independent statistics collected
 test.t_stats2	analyze	Note	[TIDESDB] CF 'test__t_stats2'  total_keys=N  data_size=N bytes  levels=0  read_amp=N
 test.t_stats2	analyze	Note	[TIDESDB] avg_key=N bytes  avg_value=N bytes
-test.t_stats2	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N ssts)  compact_read=N  ratio=Nx
+test.t_stats2	analyze	Note	[TIDESDB] WA  user=N  wal=N  flush=0  compact_write=N (N compactions)  compact_read=N  ratio=Nx
 test.t_stats2	analyze	Note	[TIDESDB] idx CF 'test__t_stats2__idx_code_idx'  keys=N  data_size=N bytes  levels=0
 test.t_stats2	analyze	Note	[TIDESDB] idx 'code_idx' sampled=N distinct=N rec_per_key=N
 test.t_stats2	analyze	status	OK

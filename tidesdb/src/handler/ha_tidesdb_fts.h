@@ -155,6 +155,21 @@ void tdb_fts_blend_chars_update(MYSQL_THD thd, struct st_mysql_sys_var *var, voi
                                 const void *save);
 
 /**
+ * tdb_ft_stopword_table_check
+ * sysvar check for tidesdb_ft_stopword_table, refusing a table that cannot be read as a stop word
+ * list so the variable keeps its old value
+ */
+int tdb_ft_stopword_table_check(MYSQL_THD thd, struct st_mysql_sys_var *var, void *save,
+                                struct st_mysql_value *value);
+
+/**
+ * fts_load_configured_stopwords
+ * load the stop word table named at startup, once the store is open, keeping the defaults with a
+ * warning when it cannot be read
+ */
+void fts_load_configured_stopwords(const char *table_spec);
+
+/**
  * tdb_ft_stopword_table_update
  * sysvar update callback that reloads the stop-word set after tidesdb_ft_stopword_table is set
  */

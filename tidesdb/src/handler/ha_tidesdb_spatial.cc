@@ -77,3 +77,19 @@ bool spatial_mbr_predicate(enum ha_rkey_function mode, const tdb_mbr_t *query,
     }
     return tidesdb::spatial::mbr_predicate(p, *query, *entry);
 }
+
+static void tdb_atomic_grow(std::atomic<double> &a, double v)
+{
+    double cur = a.load(std::memory_order_relaxed);
+    while (v > cur && !a.compare_exchange_weak(cur, v, std::memory_order_relaxed))
+    {
+    }
+}
+
+void ha_tidesdb::spatial_note_extent(uint keynr, double xmin, double ymin, double xmax, double ymax)
+{
+    if (!share || !share->spatial_extent || keynr >= share->spatial_extent_keys) return;
+    tdb_spatial_extent &e = share->spatial_extent[keynr];
+    tdb_atomic_grow(e.half_w, (xmax - xmin) / 2);
+    tdb_atomic_grow(e.half_h, (ymax - ymin) / 2);
+}

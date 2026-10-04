@@ -1,0 +1,44 @@
+CREATE TABLE e (id INT PRIMARY KEY, v VARCHAR(20), KEY kv (v))
+ENGINE=TIDESDB ENCRYPTED=YES ENCRYPTION_KEY_ID=2;
+INSERT INTO e VALUES (1,'one'),(2,'two'),(3,'three');
+ALTER TABLE e ENCRYPTION_KEY_ID=3, ALGORITHM=INSTANT;
+ERROR 0A000: ALGORITHM=INSTANT is not supported. Reason: TidesDB rewrites every row on an encryption change, which needs a table copy. Try ALGORITHM=COPY
+ALTER TABLE e ENCRYPTION_KEY_ID=3, ALGORITHM=INPLACE;
+ERROR 0A000: ALGORITHM=INPLACE is not supported. Reason: TidesDB rewrites every row on an encryption change, which needs a table copy. Try ALGORITHM=COPY
+ALTER TABLE e ENCRYPTION_KEY_ID=3;
+SELECT * FROM e ORDER BY id;
+id	v
+1	one
+2	two
+3	three
+INSERT INTO e VALUES (4,'four');
+SELECT v FROM e FORCE INDEX (kv) ORDER BY v;
+v
+four
+one
+three
+two
+# and back again, every row old and new still reads
+ALTER TABLE e ENCRYPTION_KEY_ID=2;
+SELECT * FROM e ORDER BY id;
+id	v
+1	one
+2	two
+3	three
+4	four
+# the rewritten rows survive a restart
+# restart
+SELECT * FROM e ORDER BY id;
+id	v
+1	one
+2	two
+3	three
+4	four
+# an unencrypted table may change its key id in place, nothing is encrypted with it
+CREATE TABLE p (id INT PRIMARY KEY) ENGINE=TIDESDB;
+INSERT INTO p VALUES (1);
+ALTER TABLE p ENCRYPTION_KEY_ID=3, ALGORITHM=INSTANT;
+SELECT * FROM p;
+id
+1
+DROP TABLE e, p;

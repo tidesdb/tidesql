@@ -7,7 +7,8 @@ description: Approximate nearest-neighbor search through MariaDB's MHNSW index, 
 
 TidesDB supports approximate nearest-neighbor search through MariaDB's built-in MHNSW vector index.
 The server handles graph construction and search, and TidesDB provides the storage for both the
-table data and the hidden MHNSW graph.
+table data and the hidden MHNSW graph. The `VECTOR` type and its index need MariaDB 11.7 or later,
+since older servers have no `VECTOR` type.
 
 ```sql
 CREATE TABLE embeddings (

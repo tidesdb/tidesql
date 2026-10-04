@@ -32,8 +32,8 @@ parts that are specific to TidesDB.
 ## The one idea to carry forward
 
 A TideSQL table is one column family for its rows, plus one more column family for each secondary
-index. Each column family is an independent LSM-tree with its own memtable presence, its own
-SSTables, and its own compaction schedule. That mapping is what the [Data Model](/concepts/data-model)
+index. Each column family is an independent LSM-tree with its own SSTables and its own compaction
+schedule, while all of them share one memtable and one write-ahead log. That mapping is what the [Data Model](/concepts/data-model)
 chapter builds on, and it is worth keeping in mind because it explains where storage, statistics,
 and maintenance operations act.
 

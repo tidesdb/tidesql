@@ -39,15 +39,71 @@
 #include "src/handler/ha_tidesdb_keycodec.h"
 #include "src/handler/ha_tidesdb_spatial.h"
 
+/* Whether rows written under the old schema still read correctly under the new one without being
+   rewritten.  A row stores its null bitmap and then every field in table order, with only the
+   field count in its header and nothing naming the columns, so an old row decodes by position.
+   That holds only when every existing column keeps its position, its null bit and, for a BIT
+   column, the bits it keeps in the null bitmap, and new columns are appended after all of them.
+   Dropping a column never qualifies, because old rows keep its bytes and a column appended later
+   would read them.  A stored generated column needs its value computed for every existing row,
+   and a new BIT column keeps part of its value in the null bitmap where old rows hold nothing, so
+   both take a copy too.  Adding the first variable length column to a table of fixed length ones
+   is a case the column flags alone do not reveal, since the server then lays the null bits out
+   one position later. */
+static bool tdb_old_rows_read_unchanged(const TABLE *table, const TABLE *altered_table,
+                                        Alter_inplace_info *ha_alter_info)
+{
+    const alter_table_operations flags = ha_alter_info->handler_flags;
+    if (flags & (ALTER_DROP_COLUMN | ALTER_STORED_COLUMN_ORDER | ALTER_VIRTUAL_COLUMN_ORDER |
+                 ALTER_ADD_STORED_GENERATED_COLUMN))
+        return false;
+
+    const uint old_fields = table->s->fields;
+    if (altered_table->s->fields < old_fields) return false;
+
+    /* Each surviving column must sit at the index it had, and new ones only after them. */
+    List_iterator_fast<Create_field> it(ha_alter_info->alter_info->create_list);
+    uint j = 0;
+    for (Create_field *def; (def = it++); j++)
+    {
+        if (def->field ? def->field->field_index != j : j < old_fields) return false;
+    }
+
+    for (uint i = 0; i < old_fields; i++)
+    {
+        const Field *of = table->field[i];
+        const Field *nf = altered_table->field[i];
+        if ((of->null_ptr == NULL) != (nf->null_ptr == NULL)) return false;
+        if (of->null_ptr &&
+            ((of->null_ptr - table->record[0]) != (nf->null_ptr - altered_table->record[0]) ||
+             of->null_bit != nf->null_bit))
+            return false;
+        if (of->type() == MYSQL_TYPE_BIT)
+        {
+            const Field_bit *ob = static_cast<const Field_bit *>(of);
+            const Field_bit *nb = static_cast<const Field_bit *>(nf);
+            if (ob->bit_len != nb->bit_len ||
+                (ob->bit_len &&
+                 ((ob->bit_ptr - table->record[0]) != (nb->bit_ptr - altered_table->record[0]) ||
+                  ob->bit_ofs != nb->bit_ofs)))
+                return false;
+        }
+    }
+    for (uint i = old_fields; i < altered_table->s->fields; i++)
+        if (altered_table->field[i]->type() == MYSQL_TYPE_BIT) return false;
+    return true;
+}
+
 /*
   Classify ALTER TABLE operations into INSTANT / INPLACE / COPY.
 
   INSTANT     metadata-only changes (.frm rewrite, no engine work):
               rename column/index, change default, change table options,
-              ADD COLUMN, DROP COLUMN (row format is self-describing via
-              the ROW_HEADER_MAGIC header written by serialize_row)
+              and ADD COLUMN when the new columns are appended and every
+              existing column keeps its place, see tdb_old_rows_read_unchanged
   INPLACE     add/drop secondary indexes (create/drop CFs, populate)
-  COPY        column type changes, PK changes
+  COPY        column type changes, PK changes, DROP COLUMN, column reorders,
+              and an ADD COLUMN that is not a plain append
 */
 enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
     TABLE *altered_table, Alter_inplace_info *ha_alter_info)
@@ -56,16 +112,24 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
 
     alter_table_operations flags = ha_alter_info->handler_flags;
 
-    /* Operations that are pure metadata (INSTANT).
-       ADD/DROP COLUMN is instant because the packed row format includes
-       a header with the stored null_bytes and field_count, so
-       deserialize_row adapts to rows written with any prior schema. */
+    /* Any change to the set or order of columns must leave old rows readable as they are, or the
+       table is copied so every row is rewritten under the new layout. */
+    if ((flags & (ALTER_ADD_COLUMN | ALTER_DROP_COLUMN | ALTER_STORED_COLUMN_ORDER |
+                  ALTER_VIRTUAL_COLUMN_ORDER)) &&
+        !tdb_old_rows_read_unchanged(table, altered_table, ha_alter_info))
+    {
+        ha_alter_info->unsupported_reason =
+            "TidesDB reads old rows by column position, so only appending columns is instant";
+        DBUG_RETURN(HA_ALTER_INPLACE_NOT_SUPPORTED);
+    }
+
+    /* Operations that are pure metadata (INSTANT).  ADD COLUMN reaches this point only as a plain
+       append, which deserialize_row handles by filling the new columns from their defaults. */
     static const alter_table_operations TIDESDB_INSTANT =
         ALTER_COLUMN_NAME | ALTER_RENAME_COLUMN | ALTER_CHANGE_COLUMN_DEFAULT |
         ALTER_COLUMN_DEFAULT | ALTER_COLUMN_OPTION | ALTER_CHANGE_CREATE_OPTION |
         ALTER_DROP_CHECK_CONSTRAINT | ALTER_VIRTUAL_GCOL_EXPR | ALTER_RENAME | ALTER_RENAME_INDEX |
-        ALTER_INDEX_IGNORABILITY | ALTER_ADD_COLUMN | ALTER_DROP_COLUMN |
-        ALTER_STORED_COLUMN_ORDER | ALTER_VIRTUAL_COLUMN_ORDER;
+        ALTER_INDEX_IGNORABILITY | ALTER_ADD_VIRTUAL_COLUMN | ALTER_ADD_STORED_BASE_COLUMN;
 
     /* Operations we can do inplace (add/drop secondary indexes) */
     static const alter_table_operations TIDESDB_INPLACE_INDEX =
@@ -79,9 +143,15 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
        read path now treated them as the other, corrupting access to them.  Force a copy so every
        row is rewritten through write_row, the same reason FULLTEXT and SPATIAL force a copy below.
      */
+    /* A key id change on an encrypted table is the same.  Rows carry the key version but not the
+       key id, and are decrypted with the table's id, so swapping the id in place would leave every
+       existing row encrypted under a key the table no longer names. */
     if ((flags & ALTER_CHANGE_CREATE_OPTION) && TDB_TABLE_OPTIONS(table) &&
         TDB_TABLE_OPTIONS(altered_table) &&
-        TDB_TABLE_OPTIONS(table)->encrypted != TDB_TABLE_OPTIONS(altered_table)->encrypted)
+        (TDB_TABLE_OPTIONS(table)->encrypted != TDB_TABLE_OPTIONS(altered_table)->encrypted ||
+         (TDB_TABLE_OPTIONS(table)->encrypted &&
+          TDB_TABLE_OPTIONS(table)->encryption_key_id !=
+              TDB_TABLE_OPTIONS(altered_table)->encryption_key_id)))
     {
         ha_alter_info->unsupported_reason =
             "TidesDB rewrites every row on an encryption change, which needs a table copy";
@@ -91,10 +161,8 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
     /* If only instant operations, return INSTANT */
     if (!(flags & ~TIDESDB_INSTANT)) DBUG_RETURN(HA_ALTER_INPLACE_INSTANT);
 
-    /* If only instant + index operations, return INPLACE with no lock.
-       TidesDB handles all concurrency via MVCC internally -- the index
-       population scan runs inside its own transaction and does not need
-       server-level MDL blocking. */
+    /* Index operations, alone or with instant ones, run inplace.  Adding an index holds off writes
+       for the build, see below, and dropping one needs no lock. */
     if (!(flags & ~(TIDESDB_INSTANT | TIDESDB_INPLACE_INDEX)))
     {
         /**** Changing PK requires full rebuild */
@@ -126,7 +194,16 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
                     DBUG_RETURN(HA_ALTER_INPLACE_NOT_SUPPORTED);
                 }
             }
+            /* The new index is filled from a scan of the table, and writes made while it runs go
+               only to the indexes that already exist, with no log of them to replay, so a row
+               written behind the scan would be missing from the new index or left in it after a
+               delete.  Reads carry on, writes wait for the build. */
+            ha_alter_info->unsupported_reason =
+                "TidesDB fills a new index from a table scan and keeps no log of concurrent writes";
+            DBUG_RETURN(HA_ALTER_INPLACE_SHARED_LOCK);
         }
+        /* Dropping an index needs no scan, and writes keep maintaining it until the drop
+           commits. */
         DBUG_RETURN(HA_ALTER_INPLACE_NO_LOCK);
     }
 
@@ -135,8 +212,8 @@ enum_alter_inplace_result ha_tidesdb::check_if_supported_inplace_alter(
 }
 
 /*
-  Create CFs for newly added indexes.
-  Called with shared MDL lock (concurrent DML is allowed).
+  Create CFs for newly added indexes.  An index add runs under a shared lock, so reads continue
+  and writes wait until the build commits.
 */
 bool ha_tidesdb::prepare_inplace_alter_table(TABLE *altered_table,
                                              Alter_inplace_info *ha_alter_info)
@@ -218,8 +295,8 @@ bool ha_tidesdb::prepare_inplace_alter_table(TABLE *altered_table,
 }
 
 /*
-  Inplace phase -- we populate newly added indexes by scanning the table.
-  Called with no MDL lock blocking (HA_ALTER_INPLACE_NO_LOCK).
+  Inplace phase -- we populate newly added indexes by scanning the table, under the shared lock
+  check_if_supported_inplace_alter asked for, so no write can land behind the scan.
 */
 uint ha_tidesdb::inplace_build_index_key(KEY *ki, my_ptrdiff_t ptdiff, uchar *ik,
                                          bool &row_has_null)

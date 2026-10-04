@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -78,8 +79,8 @@ static inline void tdb_memalloc_sysvar_set(void *var_ptr, const char *value)
 
 /* The TideSQL plugin's own version, reported through tidesdb_version / _version_hex and the
    maria_declare_plugin block.  Distinct from the vendored library version (TIDESDB_VERSION). */
-#define TIDESQL_VERSION_STR "5.1.0"
-#define TIDESQL_VERSION_HEX 0x50100
+#define TIDESQL_VERSION_STR "5.1.1"
+#define TIDESQL_VERSION_HEX 0x50101
 
 /* shared compile-time constants (key/row format, spatial, fts, cost model, library defaults) */
 #include "ha_tidesdb_constants.h"
@@ -117,6 +118,38 @@ struct tdb_fk_def
     int child_key_no{-1};
     int parent_key_no{-1};
     bool parent_is_pk{false}; /* referenced columns are the parent pk    */
+};
+
+/* One table's foreign keys as of one version of the engine's constraint catalog.  It is never
+   changed once built; a catalog change builds a new one and swaps it into the share, so a
+   statement that took the previous one keeps reading it unchanged.  child holds the constraints
+   where this table references another, driving the parent-existence checks on insert and update.
+   parent holds the constraints where another table references this one, driving the restrict,
+   cascade and set-null actions on delete and update.  Both stay empty for a table with no foreign
+   keys, so the enforcement path costs nothing there. */
+struct tdb_fk_set
+{
+    std::vector<tdb_fk_def> child;
+    std::vector<tdb_fk_def> parent;
+    uint64_t gen{0}; /* tdb_fk_catalog_gen it was built at */
+};
+
+/* Bumped after every change to the constraint catalog, so each table rebuilds its tdb_fk_set at
+   its next statement.  Creating a child table changes what its parent must enforce, and the
+   parent may already be open. */
+extern std::atomic<uint64_t> tdb_fk_catalog_gen;
+
+/* The largest half width and half height of any shape written to one spatial index.  Entries
+   are keyed by the centre of their bounding box, so a shape that crosses a query box can be
+   centred well outside it, and a scan has to reach out this far past the box to find it.  Writers
+   only ever grow these, so they stay an upper bound.  known turns true once a scan has read every
+   entry since the table was opened, and until then the scans that need the reach read the whole
+   index, learning the extents as they go. */
+struct tdb_spatial_extent
+{
+    std::atomic<double> half_w{0.0};
+    std::atomic<double> half_h{0.0};
+    std::atomic<bool> known{false};
 };
 
 /*
@@ -163,21 +196,18 @@ class TidesDB_share : public Handler_share
     uint num_secondary_indexes; /* count of non-NULL secondary index CFs */
     size_t cached_row_est{0};   /* cached serialize_row size estimate for non-BLOB tables */
 
-    /* Foreign keys loaded from the engine's own catalog at open time.  fk_child
-       holds the constraints where this table references another, driving the
-       parent-existence checks on insert and update.  fk_parent holds the
-       constraints where another table references this one, driving the
-       restrict, cascade, and set-null actions on delete and update.  Both stay
-       empty for a table with no foreign keys, so the enforcement path costs
-       nothing there. */
-    std::vector<tdb_fk_def> fk_child;
-    std::vector<tdb_fk_def> fk_parent;
-    bool fk_loaded{false};
+    /* This table's foreign keys, read and swapped only with std::atomic_load and
+       std::atomic_store, see tdb_fk_set and ha_tidesdb::fk_current. */
+    std::shared_ptr<const tdb_fk_set> fk;
 
     /* Field indices of BLOB/TEXT columns -- populated at open() when
        has_blobs is true.  serialize_row iterates only these instead of
        scanning all fields for the BLOB_FLAG. */
     std::vector<uint16> blob_field_indices;
+
+    /* One entry per key of the table, used only by spatial ones, see tdb_spatial_extent. */
+    std::unique_ptr<tdb_spatial_extent[]> spatial_extent;
+    uint spatial_extent_keys{0};
 
     /* Per-field plan for the serialize/deserialize hot path.
        Built once at open() so the row loops avoid per-row recomputation
@@ -343,6 +373,18 @@ struct tidesdb_trx_t
        ALTER copy, is usually still scanning through one.  Freed once the transaction ends. */
     std::vector<tidesdb_txn_t *> retired_txns;
 
+    /* Range compactions a large DELETE asked for, run once the transaction has committed, since
+       before then the tombstones they are meant to reclaim are still in the transaction and not
+       in any SSTable a compaction could merge.  Dropped on rollback, which leaves nothing to
+       reclaim. */
+    struct pending_compact
+    {
+        std::string cf_name;
+        std::string lo; /* first deleted data key */
+        std::string hi; /* key just past the last deleted one, empty for unbounded */
+    };
+    std::vector<pending_compact> pending_compacts;
+
     /* When this connection's transaction has been XA PREPAREd, the serialized XID it was registered
        in the prepared-transaction map under, so a same-connection XA COMMIT/ROLLBACK (resolved
        through the normal commit/rollback callbacks) can drop that registry entry.  Empty otherwise.
@@ -469,6 +511,13 @@ class ha_tidesdb : public handler
         HA_READ_KEY_EXACT
     };
     double spatial_qmbr_[SPATIAL_MBR_DIMS]{}; /* query MBR (xmin, ymin, xmax, ymax) */
+    /* Set while a whole-index scan is also learning the index's extents, with the largest half
+       width and half height it has read so far. */
+    bool spatial_learning_{false};
+    double spatial_seen_half_w_{0.0};
+    double spatial_seen_half_h_{0.0};
+    /* Grow the recorded extents of spatial index keynr to cover this bounding box. */
+    void spatial_note_extent(uint keynr, double xmin, double ymin, double xmax, double ymax);
 
     /* Hilbert range decomposition are sorted non-overlapping [lo, hi] ranges
        covering the query box.  spatial_range_idx_ tracks which range we're
@@ -578,6 +627,12 @@ class ha_tidesdb : public handler
     bool in_bulk_update_;
     bool in_bulk_delete_;
     ha_rows bulk_insert_ops_; /* ops buffered since last mid-txn commit */
+    /* Whether this bulk statement may commit its writes in batches.  Only a statement that is its
+       own transaction may, an autocommit statement or a DDL copy, which commits implicitly.  Inside
+       BEGIN, or with autocommit off, a batch commit would make everything the transaction wrote so
+       far durable and visible, out of reach of a later ROLLBACK. */
+    bool bulk_may_commit_;
+    bool bulk_statement_may_commit();
 
     /* Auto-compact-after-range-delete tracking.  When the session var
        tidesdb_compact_after_range_delete_min_rows is non-zero, delete_row
@@ -941,14 +996,21 @@ class ha_tidesdb : public handler
 
     /* Foreign-key internals, implemented in ha_tidesdb_fk.cc.  fk_persist_defs
        parses the foreign keys off the create clause and records them in the
-       engine catalog.  fk_load reads the catalog into share->fk_child and
-       share->fk_parent at open.  fk_purge_catalog removes a table's rows when it
-       is dropped.  The three enforce helpers run the referential checks in the
+       engine catalog.  fk_build reads the catalog into a tdb_fk_set, which
+       fk_current keeps current in the share.  fk_purge_catalog removes a table's
+       rows when it is dropped.  The three enforce helpers run the referential checks in the
        row ops and return 0 to proceed or a handler error to surface, and each is
        a cheap early return when the relevant list is empty or foreign_key_checks
        is off. */
     int fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_INFO *create_info);
-    void fk_load();
+    /* Build this table's tdb_fk_set from the catalog as of generation gen. */
+    std::shared_ptr<const tdb_fk_set> fk_build(uint64_t gen);
+    /* The share's tdb_fk_set, rebuilt first when the catalog has changed since it was built. */
+    std::shared_ptr<const tdb_fk_set> fk_current();
+    /* The set this statement took when it locked the table, so the enforcement path reads one
+       version throughout. */
+    std::shared_ptr<const tdb_fk_set> fk_stmt_;
+    const tdb_fk_set &fks();
     static int fk_purge_catalog(const char *child_cf_name);
     int fk_check_child(const uchar *new_row);
     int fk_enforce_parent_delete(const uchar *old_row);
@@ -963,6 +1025,21 @@ class ha_tidesdb : public handler
        child's own parent-existence check is skipped for the value the cascade is
        writing, which the cascade already knows to be valid. */
     bool fk_in_cascade_{false};
+    /* How many cascades deep this handler is being driven, so a chain of cascades stops at
+       TDB_FK_MAX_CASCADE_DEPTH the way InnoDB's does instead of recursing without bound. */
+    uint fk_cascade_depth_{0};
+    /* A second handler on this same table for a constraint that references its own table.  The
+       cascade cannot drive the referencing rows through this handler, which is in the middle of
+       the parent row's own delete or update with its scan position and current key in use, so it
+       uses this one, opened on first need and kept until close, and locked for the statement on
+       first use in it. */
+    handler *fk_self_h_{nullptr};
+    MEM_ROOT fk_self_root_;
+    bool fk_self_root_inited_{false};
+    bool fk_self_locked_{false};
+    handler *fk_self_handler(THD *thd);
+    void fk_self_handler_unlock(THD *thd);
+    void fk_self_handler_close();
     /* Does one constraint have a referencing child row for the key in old_row?
        Returns 1 referenced, 0 none, or a negative handler error. */
     int fk_child_ref_exists(const tdb_fk_def &d, const uchar *old_row);
@@ -1013,7 +1090,7 @@ class ha_tidesdb : public handler
                               uint new_pk_len, uint32 new_wc, bool doc_len_changed, time_t row_ttl);
     int update_spatial_index(uint i, const uchar *old_data, const uchar *new_data,
                              const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
-                             uint new_pk_len, time_t row_ttl);
+                             uint new_pk_len, bool pk_changed, time_t row_ttl);
     int update_regular_index(uint i, const uchar *old_data, const uchar *new_data,
                              const uchar *old_pk, uint old_pk_len, const uchar *new_pk,
                              uint new_pk_len, bool pk_changed, time_t row_ttl);
@@ -1028,6 +1105,7 @@ class ha_tidesdb : public handler
                                 uint old_pk_len, const uchar *new_pk, uint new_pk_len,
                                 bool pk_changed, time_t row_ttl);
     int delete_all_rows(void) override;
+    int truncate() override;
 
     /* Full-text search */
     int ft_init() override;

@@ -15,10 +15,11 @@
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
-/* the row wire format: the self-describing on-disk record (a magic byte, the stored null-bitmap
-   width and field count, then the packed fields, enabling instant add/drop column) and the
-   data-at-rest encryption envelope wrapped around it. serialize_row builds it from a server record,
-   deserialize_row rebuilds a record from any prior schema's bytes. */
+/* the row wire format: the on-disk record (a magic byte, the stored null-bitmap width and field
+   count, then the packed fields in table order) and the data-at-rest encryption envelope wrapped
+   around it. serialize_row builds it from a server record. deserialize_row rebuilds a record from
+   it, and reads a row written before columns were appended by filling them from their defaults.
+   Nothing in the row names its columns, so any other column change rewrites the table. */
 
 #include "ha_tidesdb.h"
 
@@ -134,7 +135,8 @@ static std::string tidesdb_decrypt_row(const char *data, size_t len, uint key_id
 /* Row format header constants live in ha_tidesdb.h so the stop-word
    loader and other callers can reference them without forward decls.
    Layout is [ROW_HEADER_MAGIC] [null_bytes_stored (2 LE)] [field_count (2 LE)]
-   for ROW_HEADER_SIZE bytes total.  Enables instant ADD/DROP COLUMN. */
+   for ROW_HEADER_SIZE bytes total.  The field count lets a row written before columns were
+   appended be read under the wider schema, which is what makes an appending ADD COLUMN instant. */
 
 size_t ha_tidesdb::serialize_estimate_size(const uchar *buf, my_ptrdiff_t ptrdiff)
 {
@@ -315,6 +317,17 @@ void ha_tidesdb::deserialize_row(uchar *buf, const uchar *data, size_t len)
         {
             const TidesDB_share::field_plan_t &fp = plan_d[i];
             memcpy(buf + fp.src_off, table->s->default_values + fp.src_off, fp.pack_len);
+            /* A new column's null bit can share a byte with the old columns' bits, which the copy
+               above took from the stored row, where that bit was unused.  Take it from the default
+               record instead, so a nullable column added with a default reads that default rather
+               than NULL. */
+            const Field *f = table->field[i];
+            if (f->null_ptr)
+            {
+                const size_t off = (size_t)(f->null_ptr - table->record[0]);
+                buf[off] = (uchar)((buf[off] & ~f->null_bit) |
+                                   (table->s->default_values[off] & f->null_bit));
+            }
         }
     }
 

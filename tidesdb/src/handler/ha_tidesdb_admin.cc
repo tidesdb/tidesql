@@ -268,7 +268,7 @@ void ha_tidesdb::analyze_report_cf_stats(THD *thd, const tidesdb_cf_stats_t &st)
         const double wa = (double)out_bytes / (double)st.user_bytes_written;
         push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE, ER_UNKNOWN_ERROR,
                             "[TIDESDB] WA  user=%llu  wal=%llu  flush=%llu"
-                            "  compact_write=%llu (%llu ssts)  compact_read=%llu"
+                            "  compact_write=%llu (%llu compactions)  compact_read=%llu"
                             "  ratio=%.2fx",
                             (unsigned long long)st.user_bytes_written,
                             (unsigned long long)st.wal_bytes_written,
@@ -449,10 +449,10 @@ int ha_tidesdb::analyze(THD *thd, HA_CHECK_OPT *check_opt)
 /* ******************** optimize ******************** */
 
 /*
-  OPTIMIZE TABLE -- trigger compaction on all CFs (data + secondary indexes).
+  OPTIMIZE TABLE -- compact every CF of the table (data + secondary indexes).
   Compaction merges SSTables, removes tombstones, and reduces read
-  amplification.  TidesDB enqueues the work to background compaction
-  threads and returns immediately.
+  amplification.  Each CF gets one forced compaction pass, run inline, so the
+  statement returns when the passes finish.
 */
 int ha_tidesdb::optimize(THD *thd, HA_CHECK_OPT *check_opt)
 {
@@ -460,9 +460,9 @@ int ha_tidesdb::optimize(THD *thd, HA_CHECK_OPT *check_opt)
 
     if (!share || !share->cf) DBUG_RETURN(HA_ADMIN_FAILED);
 
-    /* tidesdb_compact() runs a full compaction inline, blocking until complete, which is the
-       right semantic for OPTIMIZE TABLE -- the caller expects the table fully compacted when
-       the statement returns. */
+    /* tidesdb_compact() runs one forced compaction pass inline and blocks until it finishes.  It
+       does not flush the memtable first, and a compaction already running on the CF makes it
+       return TDB_ERR_LOCKED, which is reported rather than waited out. */
     bool any_locked = false;
     int rc = tidesdb_compact(tdb_global, share->cf);
     if (rc == TDB_ERR_LOCKED)
@@ -505,11 +505,10 @@ int ha_tidesdb::check(THD *thd, HA_CHECK_OPT *check_opt)
 
     if (!share || !share->cf) DBUG_RETURN(HA_ADMIN_CORRUPT);
 
-    /* CHECK TABLE verifies all CFs are readable by fetching stats.
-       tidesdb_get_cf_stats reads metadata from all SSTables, which validates
-       that manifests, block indexes, bloom filters, and metadata blocks
-       are intact. For a deeper check, users can run REPAIR TABLE which
-       does a full compaction pass that reads and re-checksums every block. */
+    /* CHECK TABLE confirms each CF's statistics can be gathered.  tidesdb_get_cf_stats builds them
+       from the SSTable metadata the library holds in memory and reads no blocks, so this catches
+       a missing or unloadable CF rather than damaged data.  REPAIR TABLE runs one forced
+       compaction pass per CF, which reads every block it merges. */
     tidesdb_cf_stats_t st;
     int rc = tidesdb_get_cf_stats(share->cf, &st);
     if (rc != TDB_SUCCESS)

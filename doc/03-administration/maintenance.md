@@ -15,7 +15,7 @@ automatically the first time a populated table is planned against, as described 
 demand and surfaces the internals below:
 
 ```
-[TIDESDB] CF 'demo__products'  total_keys=10  data_size=636 bytes  levels=5  read_amp=2.00
+[TIDESDB] CF 'demo__products'  total_keys=10  data_size=636 bytes  levels=3  read_amp=2.00
 [TIDESDB] avg_key=18.8 bytes  avg_value=44.0 bytes
 [TIDESDB] level 1  sstables=0  size=0 bytes  keys=0
 [TIDESDB] level 2  sstables=1  size=636 bytes  keys=10
@@ -51,14 +51,14 @@ directory per SSTable, so it grows with the SSTable count and shrinks as compact
 When a column family has committed any user bytes, a write-amplification note is emitted:
 
 ```
-[TIDESDB] WA  user=4096  wal=4096  flush=8192  compact_write=12288 (1 ssts)  compact_read=8192  ratio=6.00x
+[TIDESDB] WA  user=4096  wal=4096  flush=8192  compact_write=12288 (1 compactions)  compact_read=8192  ratio=6.00x
 ```
 
 `user` is the logical bytes the engine wrote through the library's API, `wal` is the WAL bytes
 attributed to this family, `flush` and `compact_write` are the bytes written to SSTables by flush
-and by compaction, `compact_write` also carries the number of SSTables compaction produced,
+and by compaction, `compact_write` also carries the number of compactions that have run,
 `compact_read` is the bytes compaction pulled in as input, and `ratio` is
-`(wal + flush + compact_write) / user`. A high ratio with few compaction SSTables points at
+`(wal + flush + compact_write) / user`. A high ratio with few compactions points at
 oversized flushes, and a high ratio with many points at L0 churn or an under-sized
 `L1_FILE_COUNT_TRIGGER`.
 

@@ -1,0 +1,99 @@
+CREATE TABLE b (id INT PRIMARY KEY, v INT, KEY kv (v)) ENGINE=TIDESDB;
+INSERT INTO b VALUES (0, 0);
+connect  other,localhost,root,,test;
+connection default;
+# BEGIN, an UPDATE, a 2000 row INSERT ... SELECT, then ROLLBACK
+BEGIN;
+UPDATE b SET v = 99 WHERE id = 0;
+INSERT INTO b SELECT seq, seq FROM seq_1_to_2000;
+connection other;
+# another connection sees none of it before COMMIT
+SELECT COUNT(*), MAX(v) FROM b;
+COUNT(*)	MAX(v)
+1	0
+connection default;
+ROLLBACK;
+SELECT COUNT(*), MAX(v) FROM b;
+COUNT(*)	MAX(v)
+1	0
+SELECT COUNT(*) FROM b FORCE INDEX (kv) WHERE v > 0;
+COUNT(*)
+0
+# the same with autocommit off
+SET autocommit = 0;
+INSERT INTO b SELECT seq, seq FROM seq_1_to_2000;
+ROLLBACK;
+SET autocommit = 1;
+SELECT COUNT(*) FROM b;
+COUNT(*)
+1
+# the transaction commits as a whole when asked to
+BEGIN;
+INSERT INTO b SELECT seq, seq FROM seq_1_to_2000;
+UPDATE b SET v = 5 WHERE id = 0;
+COMMIT;
+SELECT COUNT(*), SUM(v = 5) FROM b;
+COUNT(*)	SUM(v = 5)
+2001	2
+SELECT COUNT(*) FROM b FORCE INDEX (kv) WHERE v BETWEEN 1 AND 2000;
+COUNT(*)
+2001
+# a large autocommit statement still loads every row
+TRUNCATE TABLE b;
+INSERT INTO b SELECT seq, seq FROM seq_1_to_5000;
+SELECT COUNT(*), SUM(id) FROM b;
+COUNT(*)	SUM(id)
+5000	12502500
+#
+# A DELETE of every row of a table without a primary key, inside BEGIN
+#
+CREATE TABLE h (v INT, w INT, KEY kw (w)) ENGINE=TIDESDB;
+INSERT INTO h SELECT seq, seq FROM seq_1_to_2000;
+BEGIN;
+DELETE FROM h;
+connection other;
+SELECT COUNT(*) FROM h;
+COUNT(*)
+2000
+connection default;
+ROLLBACK;
+SELECT COUNT(*), SUM(v) FROM h;
+COUNT(*)	SUM(v)
+2000	2001000
+SELECT COUNT(*) FROM h FORCE INDEX (kw) WHERE w > 0;
+COUNT(*)
+2000
+# with autocommit on it deletes every matching row, past the first batch
+DELETE FROM h WHERE v > 100;
+SELECT COUNT(*), MAX(v) FROM h;
+COUNT(*)	MAX(v)
+100	100
+SELECT COUNT(*) FROM h FORCE INDEX (kw) WHERE w > 0;
+COUNT(*)
+100
+DELETE FROM h;
+SELECT COUNT(*) FROM h;
+COUNT(*)
+0
+#
+# A DELETE that asks for its range to be compacted, which now runs only after a commit
+#
+SET SESSION tidesdb_compact_after_range_delete_min_rows = 100;
+CREATE TABLE cd (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO cd SELECT seq, seq FROM seq_1_to_2000;
+BEGIN;
+DELETE FROM cd WHERE v % 2 = 0;
+ROLLBACK;
+SELECT COUNT(*), SUM(v) FROM cd;
+COUNT(*)	SUM(v)
+2000	2001000
+DELETE FROM cd WHERE v % 2 = 0;
+SELECT COUNT(*), SUM(v % 2) FROM cd;
+COUNT(*)	SUM(v % 2)
+1000	1000
+SELECT COUNT(*) FROM cd WHERE id = 2000;
+COUNT(*)
+0
+SET SESSION tidesdb_compact_after_range_delete_min_rows = DEFAULT;
+disconnect other;
+DROP TABLE b, h, cd;

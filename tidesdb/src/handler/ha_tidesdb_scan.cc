@@ -28,6 +28,7 @@
 #include <ft_global.h>
 #include <mysql/plugin.h>
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 
@@ -379,6 +380,13 @@ int ha_tidesdb::spatial_scan_next(uchar *buf)
                           "tdb_mbr_t must match on-disk spatial value layout");
             tdb_mbr_t entry_mbr;
             memcpy(&entry_mbr, val, SPATIAL_MBR_VALUE_LEN);
+            if (spatial_learning_)
+            {
+                spatial_seen_half_w_ =
+                    std::max(spatial_seen_half_w_, (entry_mbr.xmax - entry_mbr.xmin) / 2);
+                spatial_seen_half_h_ =
+                    std::max(spatial_seen_half_h_, (entry_mbr.ymax - entry_mbr.ymin) / 2);
+            }
 
             /* We apply MBR predicate */
             if (!spatial_mbr_predicate(spatial_mode_, &query_mbr, &entry_mbr))
@@ -418,6 +426,19 @@ int ha_tidesdb::spatial_scan_next(uchar *buf)
         }
     }
 
+    /* A whole-index scan that ran to the end has read every entry, so its extents, together with
+       whatever writers recorded meanwhile, bound every shape in the index. */
+    if (spatial_learning_)
+    {
+        spatial_learning_ = false;
+        if (share->spatial_extent && active_index < share->spatial_extent_keys)
+        {
+            tdb_spatial_extent &e = share->spatial_extent[active_index];
+            spatial_note_extent(active_index, 0.0, 0.0, 2 * spatial_seen_half_w_,
+                                2 * spatial_seen_half_h_);
+            e.known.store(true, std::memory_order_release);
+        }
+    }
     table->status = STATUS_NOT_FOUND;
     DBUG_RETURN(HA_ERR_END_OF_FILE);
 }

@@ -64,6 +64,9 @@ static constexpr uint8_t KEY_NS_DATA = 0x01;
    keeps it out of the per-table listing in SHOW ENGINE TIDESDB STATUS along with the other
    engine-owned families. */
 static constexpr const char TIDESDB_UNIQ_SENTINEL_CF[] = "__tidesdb_uniq";
+
+/* How many foreign key cascades deep one statement may go, the same limit InnoDB enforces. */
+static constexpr uint TDB_FK_MAX_CASCADE_DEPTH = 15;
 static constexpr uint TIDESDB_UNIQ_SENTINEL_BUF_LEN = FN_REFLEN + 2 + MAX_KEY_LENGTH;
 
 /* Size of the namespace prefix that every TidesDB key starts with. */

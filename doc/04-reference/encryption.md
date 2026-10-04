@@ -36,9 +36,16 @@ the current rows are stored as ciphertext:
 ALTER TABLE existing_table `ENCRYPTED`=YES;
 ```
 
-Encryption composes with everything else, including secondary indexes, BLOB columns, and TTL. The
-secondary-index keys are not encrypted, because they must stay comparable for seeking, but the row
-data those keys point at is encrypted in the data column family. Because ciphertext does not
+Changing `ENCRYPTION_KEY_ID` on an encrypted table also copies the table and re-encrypts every row
+under the new key, and `ALGORITHM=INSTANT` or `INPLACE` is refused for it. A row carries its key
+version but not its key id, and is decrypted with the table's key id, so the existing rows cannot be
+left under the old one. An unencrypted table may change its key id instantly, since nothing is yet
+encrypted with it.
+
+Encryption composes with everything else, including secondary indexes, BLOB columns, and TTL.
+Secondary-index keys, full-text terms, and spatial bounding boxes are not encrypted, because they
+must stay comparable for seeking, but the row data they point at is encrypted in the data column
+family. Because ciphertext does not
 compress, the engine forces the data column family's compression to `NONE` regardless of the table's
 `COMPRESSION` option, and the index CFs are unaffected. See [Table Options](/reference/table-options)
 for the compression interaction.
@@ -53,3 +60,8 @@ the read path the statement fails with handler error 192, decryption failed, so 
 key version no longer in the keyring cannot be read until the key is restored, and no statement ever
 returns it with wrong contents. An in-place ADD INDEX that meets such a row stops and leaves the table
 unchanged. Watch the error log for `encryption_key_get failed` after a key rotation.
+
+The envelope carries no integrity check, so encryption keeps row data confidential but does not
+authenticate it. If the keyring returns different bytes for a key id and version than the rows were
+written with, reading those rows fails with error 192 as above, except that roughly one row in 256
+still passes the cipher's padding check and decrypts to garbage instead.
