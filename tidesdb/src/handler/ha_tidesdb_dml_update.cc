@@ -157,7 +157,8 @@ int ha_tidesdb::update_fts_index(uint i, const uchar *old_data, const uchar *new
        refreshed on every update, so both rewrite the entries. */
     /* A table that can carry expiries rewrites unchanged entries too, so each takes the row's new
        deadline, or loses its old one when the update leaves the row with none. */
-    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0;
+    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0 ||
+                             share->session_ttl_seen.load(std::memory_order_relaxed);
     bool fts_changed = false;
     for (uint p = 0; p < ki->user_defined_key_parts; p++)
     {
@@ -286,7 +287,8 @@ int ha_tidesdb::update_spatial_index(uint i, const uchar *old_data, const uchar 
     const bool geom_changed = bitmap_is_set(table->write_set, fieldnr);
     /* A table that can carry expiries rewrites unchanged entries too, so each takes the row's new
        deadline, or loses its old one when the update leaves the row with none. */
-    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0;
+    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0 ||
+                             share->session_ttl_seen.load(std::memory_order_relaxed);
     if (!geom_changed && !pk_changed && !ttl_refresh) return TDB_SUCCESS;
     /* With the geometry and PK unchanged the entry keeps its key, and it is only rewritten. */
     const bool same_entry = !geom_changed && !pk_changed;
@@ -352,7 +354,8 @@ int ha_tidesdb::update_regular_index(uint i, const uchar *old_data, const uchar 
        updates that touch only unrelated columns. */
     /* A table that can carry expiries rewrites unchanged entries too, so each takes the row's new
        deadline, or loses its old one when the update leaves the row with none. */
-    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0;
+    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0 ||
+                             share->session_ttl_seen.load(std::memory_order_relaxed);
     if (!pk_changed && !ttl_refresh)
     {
         bool idx_changed = false;
@@ -481,6 +484,14 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
        cached_sess_ttl_ to avoid THDVAR + ha_thd() per row. */
     time_t row_ttl =
         (share->has_ttl || cached_sess_ttl_ > 0) ? compute_row_ttl(new_data) : TIDESDB_TTL_NONE;
+    if (row_ttl != TIDESDB_TTL_NONE && !share->has_ttl)
+    {
+        if (int nrc = note_session_ttl_row())
+        {
+            tmp_restore_column_map(&table->read_set, old_map);
+            DBUG_RETURN(nrc);
+        }
+    }
 
     if (!cached_skip_unique_)
     {

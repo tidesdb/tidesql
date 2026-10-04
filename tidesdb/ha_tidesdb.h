@@ -178,6 +178,10 @@ class TidesDB_share : public Handler_share
        Seeded once from index_last() at open time; incremented atomically. */
     std::atomic<ulonglong> auto_inc_val{0};
 
+    /* Some row of this table has been given an expiry by a session TTL although the table has no
+       TTL of its own, see SESSION_TTL_META_KEY.  Loaded at open, set by the first such write. */
+    std::atomic<bool> session_ttl_seen{false};
+
     /* Per-table isolation level (from CREATE TABLE options) */
     tidesdb_isolation_level_t isolation_level;
 
@@ -814,6 +818,8 @@ class ha_tidesdb : public handler
        given column family so an empty table's counter still begins at N after a restart, when there
        are no rows to recover it from. */
     void write_auto_inc_meta(tidesdb_column_family_t *cf, ulonglong next_value);
+    /* Record durably that a session TTL gave a row of this table an expiry. */
+    int note_session_ttl_row();
 
     /* Read the persisted AUTO_INCREMENT=N start value under the txn and raise the counter to it
        when it exceeds the value already recovered from the rows.  No-op when the table has no

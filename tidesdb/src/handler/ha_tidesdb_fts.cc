@@ -298,8 +298,16 @@ static void tdb_extract_stopword_from_row(const uint8_t *val, size_t val_size,
     }
     if (prefix && str_len > 0)
     {
-        std::string word((const char *)(data + prefix), str_len);
-        std::transform(word.begin(), word.end(), word.begin(), ::tolower);
+        /* Fold case with the charset's own rules, as the tokenizer does for indexed text, so a
+           stop word with uppercase letters outside ASCII still matches.  The column holding the
+           words is read as raw bytes, so utf8mb4 is assumed, which covers ASCII and latin1 words
+           written in a utf8mb4 table, the server default. */
+        CHARSET_INFO *cs = &my_charset_utf8mb4_general_ci;
+        /* Lowercasing can lengthen a character, so fold into a buffer with room to grow. */
+        std::string word(str_len * 3, '\0');
+        size_t n =
+            cs->cset->casedn(cs, (const char *)(data + prefix), str_len, &word[0], word.size());
+        word.resize(n);
         out.insert(std::move(word));
     }
 }

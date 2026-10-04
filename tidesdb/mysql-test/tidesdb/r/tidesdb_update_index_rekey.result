@@ -65,3 +65,27 @@ SELECT COUNT(*) FROM t FORCE INDEX (ik) WHERE k = 20;
 COUNT(*)
 0
 DROP TABLE t;
+#
+# ============================================
+# A session TTL on a table without one, cleared by a later update
+# ============================================
+#
+# The row's old expiry cannot be read back, so once a session TTL has written to the table
+# every update rewrites the row's index entries too, also after a restart.
+CREATE TABLE s (id INT PRIMARY KEY, k INT, v VARCHAR(10), KEY ik (k)) ENGINE=TIDESDB;
+SET SESSION tidesdb_ttl = 4;
+INSERT INTO s VALUES (1, 10, 'a'), (2, 20, 'b');
+SET SESSION tidesdb_ttl = 0;
+UPDATE s SET v = 'a2' WHERE id = 1;
+# restart
+UPDATE s SET v = 'b2' WHERE id = 2;
+SELECT SLEEP(6);
+SELECT id, k, v FROM s ORDER BY id;
+id	k	v
+1	10	a2
+2	20	b2
+SELECT id FROM s FORCE INDEX (ik) WHERE k IN (10, 20) ORDER BY id;
+id
+1
+2
+DROP TABLE s;

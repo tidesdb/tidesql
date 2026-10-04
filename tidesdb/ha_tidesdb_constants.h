@@ -48,6 +48,13 @@ static constexpr uint8_t KEY_NS_META = 0x00;
 static constexpr uint8_t AUTOINC_META_KEY[] = {KEY_NS_META, 'A', 'I', 'N', 'C'};
 static constexpr uint AUTOINC_META_KEY_LEN = 5;
 static constexpr uint AUTOINC_META_VALUE_LEN = 8;
+
+/* Written once, in the same transaction, the first time a session TTL gives a row an expiry in a
+   table that has no TTL of its own.  Its presence tells every later UPDATE to rewrite the row's
+   unchanged index entries with the row's new expiry, since the old one cannot be read back, so an
+   index entry never expires while its row lives on.  Key is [KEY_NS_META]["STTL"], value empty. */
+static constexpr uint8_t SESSION_TTL_META_KEY[] = {KEY_NS_META, 'S', 'T', 'T', 'L'};
+static constexpr uint SESSION_TTL_META_KEY_LEN = 5;
 static constexpr uint8_t KEY_NS_DATA = 0x01;
 
 /* Uniqueness sentinels.  A secondary index entry carries the row's primary key as its suffix, so
@@ -254,8 +261,8 @@ static constexpr int64_t BM25_MIN_TOTAL_DOCS = 1;
 static constexpr ha_rows TIDESDB_INDEX_BUILD_BATCH = 100;
 
 /* Bulk DML ops between mid-txn commits during start_bulk_insert /
-   start_bulk_update / start_bulk_delete.  Counts both the primary put
-   and each secondary-index put. */
+   start_bulk_delete, for a statement that is its own transaction.  Counts
+   both the primary put and each secondary-index put. */
 static constexpr ha_rows TIDESDB_BULK_INSERT_BATCH_OPS = 500;
 
 /* Deferred data-key cap for a range-tombstone bulk DELETE.  While a bulk delete defers its
