@@ -212,6 +212,31 @@ static inline int tdb_txn_delete_cf_blocking(THD *thd, tidesdb_txn_t *txn,
         thd, [&] { return tidesdb_txn_delete_cf(txn, cf, key, key_size, use_single_delete); });
 }
 
+/* Whether an iterator call failed outright.  TDB_ERR_NOT_FOUND only means the stream has no entry
+   at the position asked for, which a caller handles as the end of the data. */
+static inline bool tdb_iter_failed(int rc)
+{
+    return rc != TDB_SUCCESS && rc != TDB_ERR_NOT_FOUND;
+}
+
+/* Seeks retry a transient TDB_ERR_LOCKED, since each repositions from scratch.  Steps have no
+   such wrapper, because a failed next or prev does not promise where it left the iterator, so a
+   caller treats any failed step as an error. */
+static inline int tdb_iter_seek_blocking(THD *thd, tidesdb_iter_t *it, const void *key, size_t len)
+{
+    return tdb_retry_locked(thd, [&] { return tidesdb_iter_seek(it, (const uint8_t *)key, len); });
+}
+
+static inline int tdb_iter_seek_to_first_blocking(THD *thd, tidesdb_iter_t *it)
+{
+    return tdb_retry_locked(thd, [&] { return tidesdb_iter_seek_to_first(it); });
+}
+
+static inline int tdb_iter_seek_to_last_blocking(THD *thd, tidesdb_iter_t *it)
+{
+    return tdb_retry_locked(thd, [&] { return tidesdb_iter_seek_to_last(it); });
+}
+
 static inline int tdb_iter_new_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
                                         tidesdb_iter_t **out)
 {

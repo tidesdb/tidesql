@@ -133,6 +133,63 @@ time_t ha_tidesdb::compute_row_ttl(const uchar *buf)
 
 /* ******************** iter_read_current ******************** */
 
+void ha_tidesdb::scan_note(int rc)
+{
+    if (rc != TDB_SUCCESS && rc != TDB_ERR_NOT_FOUND && !scan_iter_err_) scan_iter_err_ = rc;
+}
+
+int ha_tidesdb::scan_end_rc(int eof)
+{
+    return scan_iter_err_ ? tdb_rc_to_ha(scan_iter_err_, "scan iterator") : eof;
+}
+
+void ha_tidesdb::scan_seek(const void *key, size_t len)
+{
+    scan_note(tdb_retry_locked(
+        cached_thd_, [&] { return tidesdb_iter_seek(scan_iter, (const uint8_t *)key, len); }));
+}
+
+void ha_tidesdb::scan_seek_for_prev(const void *key, size_t len)
+{
+    scan_note(tdb_retry_locked(
+        cached_thd_,
+        [&] { return tidesdb_iter_seek_for_prev(scan_iter, (const uint8_t *)key, len); }));
+}
+
+void ha_tidesdb::scan_seek_to_first()
+{
+    scan_note(tdb_retry_locked(cached_thd_, [&] { return tidesdb_iter_seek_to_first(scan_iter); }));
+}
+
+void ha_tidesdb::scan_seek_to_last()
+{
+    scan_note(tdb_retry_locked(cached_thd_, [&] { return tidesdb_iter_seek_to_last(scan_iter); }));
+}
+
+int ha_tidesdb::scan_key(uint8_t **key, size_t *key_size)
+{
+    int rc = tidesdb_iter_key(scan_iter, key, key_size);
+    if (rc != TDB_SUCCESS) scan_note(rc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : rc);
+    return rc;
+}
+
+int ha_tidesdb::scan_value(uint8_t **value, size_t *value_size)
+{
+    int rc = tidesdb_iter_value(scan_iter, value, value_size);
+    if (rc != TDB_SUCCESS) scan_note(rc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : rc);
+    return rc;
+}
+
+void ha_tidesdb::scan_next()
+{
+    scan_note(tidesdb_iter_next(scan_iter));
+}
+
+void ha_tidesdb::scan_prev()
+{
+    scan_note(tidesdb_iter_prev(scan_iter));
+}
+
 /*
   Read the current iterator position in the main data CF.
   Skips non-data keys (meta keys).  Sets current_pk + last_row.
@@ -146,13 +203,17 @@ int ha_tidesdb::iter_read_current(uchar *buf)
         size_t key_size = 0;
         uint8_t *value = NULL;
         size_t value_size = 0;
-        if (tidesdb_iter_key_value(scan_iter, &key, &key_size, &value, &value_size) != TDB_SUCCESS)
-            return HA_ERR_END_OF_FILE;
+        int krc = tidesdb_iter_key_value(scan_iter, &key, &key_size, &value, &value_size);
+        if (krc != TDB_SUCCESS)
+        {
+            scan_note(krc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : krc);
+            return scan_end_rc(HA_ERR_END_OF_FILE);
+        }
         tdb_owned_buf key_g(key), value_g(value);
 
         if (!is_data_key(key, key_size))
         {
-            tidesdb_iter_next(scan_iter);
+            scan_next();
             continue;
         }
 
@@ -172,7 +233,7 @@ int ha_tidesdb::iter_read_current(uchar *buf)
         }
         return 0;
     }
-    return HA_ERR_END_OF_FILE;
+    return scan_end_rc(HA_ERR_END_OF_FILE);
 }
 
 /*

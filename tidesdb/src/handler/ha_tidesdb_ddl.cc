@@ -454,13 +454,19 @@ int ha_tidesdb::inplace_batch_commit_reseek(tidesdb_txn_t *&txn, tidesdb_iter_t 
         txn = NULL;
         return 1;
     }
-    int src = tidesdb_iter_seek(iter, last_data_key, last_data_key_len);
-    if (src != TDB_SUCCESS)
+    /* Not found only means no row is left at or past the last one built. Any other failure stops
+       the build, since ending the scan there would commit an index missing every later row. */
+    int src = tdb_iter_seek_blocking(ha_thd(), iter, last_data_key, last_data_key_len);
+    if (tdb_iter_failed(src))
     {
-        sql_print_warning("[TIDESDB] inplace ADD INDEX: iter_seek failed rc=%d", src);
-        return 2; /* end scan gracefully */
+        sql_print_error("[TIDESDB] inplace ADD INDEX: iter_seek failed rc=%d", src);
+        return 1;
     }
-    if (tidesdb_iter_valid(iter)) tidesdb_iter_next(iter);
+    if (tidesdb_iter_valid(iter) && tdb_iter_failed(tidesdb_iter_next(iter)))
+    {
+        sql_print_error("[TIDESDB] inplace ADD INDEX: iter_next failed after a batch");
+        return 1;
+    }
     return 0;
 }
 
@@ -505,7 +511,13 @@ bool ha_tidesdb::inplace_alter_table(TABLE *altered_table, Alter_inplace_info *h
         tmp_restore_column_map(&altered_table->read_set, old_map);
         DBUG_RETURN(true);
     }
-    tidesdb_iter_seek_to_first(iter);
+    int frc = tdb_iter_seek_to_first_blocking(ha_thd(), iter);
+    if (tdb_iter_failed(frc))
+    {
+        sql_print_error("[TIDESDB] inplace ADD INDEX: iter_seek failed (err=%d)", frc);
+        my_error(ER_INTERNAL_ERROR, MYF(0), "[TIDESDB] a table read failed during index build");
+        DBUG_RETURN(inplace_abort_build(iter, txn, altered_table, old_map));
+    }
 
     DBUG_RETURN(inplace_scan_and_build(ctx, altered_table, txn, iter, old_map));
 }
@@ -560,16 +572,22 @@ bool ha_tidesdb::inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
         uint8_t *val_data = NULL;
         size_t val_size = 0;
 
+        /* A row that cannot be read stops the build rather than leave it out of the index. */
         if (tidesdb_iter_key_value(iter, &key_data, &key_size, &val_data, &val_size) != TDB_SUCCESS)
         {
-            tidesdb_iter_next(iter);
-            continue;
+            my_error(ER_INTERNAL_ERROR, MYF(0), "[TIDESDB] a table read failed during index build");
+            return inplace_abort_build(iter, txn, altered_table, old_map);
         }
         tdb_owned_buf key_data_g(key_data), val_data_g(val_data);
 
         if (key_size < KEY_NAMESPACE_LEN || key_data[0] != KEY_NS_DATA)
         {
-            tidesdb_iter_next(iter);
+            if (tdb_iter_failed(tidesdb_iter_next(iter)))
+            {
+                my_error(ER_INTERNAL_ERROR, MYF(0),
+                         "[TIDESDB] a table read failed during index build");
+                return inplace_abort_build(iter, txn, altered_table, old_map);
+            }
             continue;
         }
 
@@ -613,11 +631,14 @@ bool ha_tidesdb::inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
                 my_error(ER_INTERNAL_ERROR, MYF(0), "[TIDESDB] batch failed during index build");
                 return inplace_abort_build(iter, txn, altered_table, old_map);
             }
-            if (brc == 2) break; /* iter_seek failed -- end scan gracefully */
-            continue;            /* Don't call iter_next again */
+            continue; /* Don't call iter_next again */
         }
 
-        tidesdb_iter_next(iter);
+        if (tdb_iter_failed(tidesdb_iter_next(iter)))
+        {
+            my_error(ER_INTERNAL_ERROR, MYF(0), "[TIDESDB] a table read failed during index build");
+            return inplace_abort_build(iter, txn, altered_table, old_map);
+        }
     }
 
     tidesdb_iter_free(iter);

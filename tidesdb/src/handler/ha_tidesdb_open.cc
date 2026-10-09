@@ -100,10 +100,8 @@ TidesDB_share *ha_tidesdb::get_share()
     if (!(tmp_share = static_cast<TidesDB_share *>(get_ha_share_ptr())))
     {
         tmp_share = new TidesDB_share;
-        if (!tmp_share) goto err;
-        set_ha_share_ptr(static_cast<Handler_share *>(tmp_share));
+        if (tmp_share) set_ha_share_ptr(static_cast<Handler_share *>(tmp_share));
     }
-err:
     unlock_shared_ha_data();
     DBUG_RETURN(tmp_share);
 }
@@ -116,22 +114,40 @@ err:
   so that get_auto_increment() can return O(1) instead of doing index_last()
   on every INSERT.
 */
-void ha_tidesdb::recover_counters()
+int ha_tidesdb::recover_counters()
 {
+    /* The counters are seeded from the last stored row, so a read that fails here fails the open.
+       Opening anyway would restart the hidden row id below rows that exist, and new rows would
+       overwrite them. */
     tidesdb_txn_t *txn = NULL;
-    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return;
-
+    int brc = tidesdb_txn_begin(tdb_global, &txn);
+    if (brc != TDB_SUCCESS) return tdb_rc_to_ha(brc, "recover_counters txn_begin");
     tidesdb_iter_t *iter = NULL;
-    if (tdb_iter_new_blocking(ha_thd(), txn, share->cf, &iter) == TDB_SUCCESS)
+    auto fail = [&](int rc, const char *ctx)
     {
-        tidesdb_iter_seek_to_last(iter);
+        if (iter) tidesdb_iter_free(iter);
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        sql_print_error("[TIDESDB] could not read '%s' to recover its counters (err=%d)",
+                        share->cf_name.c_str(), rc);
+        return tdb_rc_to_ha(rc, ctx);
+    };
+
+    int irc = tdb_iter_new_blocking(ha_thd(), txn, share->cf, &iter);
+    if (irc != TDB_SUCCESS) return fail(irc, "recover_counters iter_new");
+    if (iter)
+    {
+        int lrc = tdb_iter_seek_to_last_blocking(ha_thd(), iter);
+        if (tdb_iter_failed(lrc)) return fail(lrc, "recover_counters seek");
         if (tidesdb_iter_valid(iter))
         {
             uint8_t *key = NULL;
             size_t key_size = 0;
             tdb_owned_buf key_g(key);
-            if (tidesdb_iter_key(iter, &key, &key_size) == TDB_SUCCESS &&
-                is_data_key(key, key_size))
+            int krc = tidesdb_iter_key(iter, &key, &key_size);
+            if (krc != TDB_SUCCESS)
+                return fail(krc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : krc, "recover_counters key");
+            if (is_data_key(key, key_size))
             {
                 if (!share->has_user_pk && key_size == KEY_NAMESPACE_LEN + HIDDEN_PK_SIZE)
                 {
@@ -164,7 +180,10 @@ void ha_tidesdb::recover_counters()
                     uint8_t *val = NULL;
                     size_t val_size = 0;
                     tdb_owned_buf val_g(val);
-                    if (tidesdb_iter_value(iter, &val, &val_size) == TDB_SUCCESS)
+                    int vrc = tidesdb_iter_value(iter, &val, &val_size);
+                    if (vrc != TDB_SUCCESS)
+                        return fail(vrc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : vrc,
+                                    "recover_counters value");
                     {
                         /* We just unpack the packed row into record[1] using the proper
                            deserialize path so field offsets are correct even when
@@ -214,7 +233,12 @@ void ha_tidesdb::recover_counters()
 
     /* Non-leftmost-PK auto-increment recovers its max from the column's own index first, so the
        persisted start value below is compared against the true row maximum. */
-    recover_auto_inc_secondary();
+    if (int arc = recover_auto_inc_secondary())
+    {
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        return arc;
+    }
     apply_auto_inc_start_meta(txn);
 
     /* A table a session TTL has written to keeps refreshing its index entries on update. */
@@ -224,6 +248,7 @@ void ha_tidesdb::recover_counters()
 
     tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
+    return 0;
 }
 
 void ha_tidesdb::apply_auto_inc_start_meta(tidesdb_txn_t *txn)
@@ -285,15 +310,15 @@ void ha_tidesdb::write_auto_inc_meta(tidesdb_column_family_t *cf, ulonglong next
     tidesdb_txn_free(txn);
 }
 
-void ha_tidesdb::recover_auto_inc_secondary()
+int ha_tidesdb::recover_auto_inc_secondary()
 {
     Field *ai = table->found_next_number_field;
-    if (!share->has_user_pk || !ai) return;
-    if (share->auto_inc_val.load(std::memory_order_relaxed) != 0) return;
+    if (!share->has_user_pk || !ai) return 0;
+    if (share->auto_inc_val.load(std::memory_order_relaxed) != 0) return 0;
 
     /* The leftmost-PK case is already seeded from the last primary-key row. */
     const KEY *pk = &table->key_info[share->pk_index];
-    if (pk->user_defined_key_parts > 0 && pk->key_part[0].field == ai) return;
+    if (pk->user_defined_key_parts > 0 && pk->key_part[0].field == ai) return 0;
 
     /* Find the index whose first part is the auto-increment column; its last entry is the maximum.
      */
@@ -307,15 +332,18 @@ void ha_tidesdb::recover_auto_inc_secondary()
             break;
         }
     }
-    if (ai_key == MAX_KEY || ai_key >= share->idx_cfs.size() || !share->idx_cfs[ai_key]) return;
+    if (ai_key == MAX_KEY || ai_key >= share->idx_cfs.size() || !share->idx_cfs[ai_key]) return 0;
 
+    /* As for the primary key, a failed read fails the open rather than restart the counter low. */
     tidesdb_txn_t *txn = NULL;
-    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return;
+    int rc = tidesdb_txn_begin(tdb_global, &txn);
+    if (rc != TDB_SUCCESS) return tdb_rc_to_ha(rc, "recover_auto_inc txn_begin");
     tidesdb_iter_t *iter = NULL;
-    if (tdb_iter_new_blocking(ha_thd(), txn, share->idx_cfs[ai_key], &iter) == TDB_SUCCESS)
+    rc = tdb_iter_new_blocking(ha_thd(), txn, share->idx_cfs[ai_key], &iter);
+    if (rc == TDB_SUCCESS && iter)
     {
-        tidesdb_iter_seek_to_last(iter);
-        if (tidesdb_iter_valid(iter))
+        rc = tdb_iter_seek_to_last_blocking(ha_thd(), iter);
+        if (!tdb_iter_failed(rc) && tidesdb_iter_valid(iter))
         {
             uint8_t *ik = NULL;
             size_t iks = 0;
@@ -323,7 +351,9 @@ void ha_tidesdb::recover_auto_inc_secondary()
             /* auto-increment columns are NOT NULL, so the comparable key starts with the value's
                sort key directly -- no null-indicator prefix byte to skip. */
             uint len = ai->pack_length();
-            if (tidesdb_iter_key(iter, &ik, &iks) == TDB_SUCCESS && iks >= len &&
+            rc = tidesdb_iter_key(iter, &ik, &iks);
+            if (rc == TDB_ERR_NOT_FOUND) rc = TDB_ERR_IO;
+            if (rc == TDB_SUCCESS && iks >= len &&
                 decode_sort_key_part(ik, len, ai, table->record[1]))
             {
                 ulonglong max_val = ai->val_int_offset((uint)(table->record[1] - table->record[0]));
@@ -334,6 +364,13 @@ void ha_tidesdb::recover_auto_inc_secondary()
     }
     tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
+    if (tdb_iter_failed(rc))
+    {
+        sql_print_error("[TIDESDB] could not read '%s' to recover its AUTO_INCREMENT (err=%d)",
+                        share->cf_name.c_str(), rc);
+        return tdb_rc_to_ha(rc, "recover_auto_inc");
+    }
+    return 0;
 }
 
 /* ******************** open / close / create ******************** */
@@ -506,7 +543,7 @@ void ha_tidesdb::open_build_field_plan()
     }
 }
 
-void ha_tidesdb::open_build_index_meta(const char *name)
+int ha_tidesdb::open_build_index_meta(const char *name)
 {
     /* We precompute comparable key lengths and index-type flags per index.
        Caching the type flags avoids a ki->algorithm dereference per row
@@ -563,12 +600,13 @@ void ha_tidesdb::open_build_index_meta(const char *name)
     /* We recover the hidden-PK counter and seed auto_inc_val at open from the last
        stored row, or from the auto-increment column's own index when it is not the
        leftmost primary-key part. */
-    recover_counters();
+    if (int rrc = recover_counters()) return rrc;
 
     char frm_path[FN_REFLEN];
     fn_format(frm_path, name, "", reg_ext, MY_UNPACK_FILENAME | MY_APPEND_EXT);
     MY_STAT st_buf;
     if (mysql_file_stat(0, frm_path, &st_buf, MYF(0))) share->create_time = st_buf.st_mtime;
+    return 0;
 }
 
 int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
@@ -593,7 +631,13 @@ int ha_tidesdb::open(const char *name, int mode, uint test_if_locked)
             DBUG_RETURN(rc);
         }
         open_build_field_plan();
-        open_build_index_meta(name);
+        if (int mrc = open_build_index_meta(name))
+        {
+            /* Leave the share unresolved so the next open runs the whole setup again. */
+            share->cf = NULL;
+            unlock_shared_ha_data();
+            DBUG_RETURN(mrc);
+        }
     }
     unlock_shared_ha_data();
 

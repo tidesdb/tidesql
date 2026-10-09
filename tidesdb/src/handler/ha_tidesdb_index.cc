@@ -93,7 +93,7 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
         uint seek_len = build_data_key(comp_key, comp_len, seek_key);
         int irc = ensure_scan_iter();
         if (irc) return irc;
-        tidesdb_iter_seek(scan_iter, seek_key, seek_len);
+        scan_seek(seek_key, seek_len);
         pk_partial_exact_active_ = true;
         int ret = iter_read_current(buf);
         /* The seek lands on the first key at or after the prefix, which belongs to the next
@@ -102,7 +102,7 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
            rather than hand back the first row of whatever follows it. */
         if (ret == 0 &&
             (current_pk_len_ < comp_len || memcmp(current_pk_buf_, comp_key, comp_len) != 0))
-            return HA_ERR_KEY_NOT_FOUND;
+            return scan_end_rc(HA_ERR_KEY_NOT_FOUND);
         if (ret == 0) scan_dir_ = DIR_FORWARD;
         return ret;
     }
@@ -115,16 +115,16 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
 
     if (find_flag == HA_READ_KEY_OR_NEXT || find_flag == HA_READ_AFTER_KEY)
     {
-        tidesdb_iter_seek(scan_iter, seek_key, seek_len);
+        scan_seek(seek_key, seek_len);
 
         if (find_flag == HA_READ_AFTER_KEY && tidesdb_iter_valid(scan_iter))
         {
             uint8_t *ik = NULL;
             size_t iks = 0;
             tdb_owned_buf ik_g(ik);
-            if (tidesdb_iter_key(scan_iter, &ik, &iks) == TDB_SUCCESS && iks == seek_len &&
+            if (scan_key(&ik, &iks) == TDB_SUCCESS && iks == seek_len &&
                 memcmp(ik, seek_key, iks) == 0)
-                tidesdb_iter_next(scan_iter);
+                scan_next();
         }
 
         int ret = iter_read_current(buf);
@@ -151,28 +151,28 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
             memset(padded + comp_len, KEY_INF_HI_BYTE, full_pk_comp_len - comp_len);
             seek_len = build_data_key(padded, full_pk_comp_len, seek_key);
         }
-        tidesdb_iter_seek_for_prev(scan_iter, seek_key, seek_len);
+        scan_seek_for_prev(seek_key, seek_len);
         if (find_flag == HA_READ_BEFORE_KEY && tidesdb_iter_valid(scan_iter))
         {
             uint8_t *ik = NULL;
             size_t iks = 0;
             tdb_owned_buf ik_g(ik);
-            if (tidesdb_iter_key(scan_iter, &ik, &iks) == TDB_SUCCESS && iks == seek_len &&
+            if (scan_key(&ik, &iks) == TDB_SUCCESS && iks == seek_len &&
                 memcmp(ik, seek_key, iks) == 0)
-                tidesdb_iter_prev(scan_iter);
+                scan_prev();
         }
 
         /* Data keys share one namespace that sorts after the table's meta keys, so a backward
            seek that finds no row at or below the target lands on a meta key or off the front.
            Either way there is no row.  iter_read_current would step forward past the meta keys
            to the first row of the table, a row above the target, so answer here instead. */
-        if (!tidesdb_iter_valid(scan_iter)) return HA_ERR_KEY_NOT_FOUND;
+        if (!tidesdb_iter_valid(scan_iter)) return scan_end_rc(HA_ERR_KEY_NOT_FOUND);
         {
             uint8_t *bk = NULL;
             size_t bks = 0;
             tdb_owned_buf bk_g(bk);
-            if (tidesdb_iter_key(scan_iter, &bk, &bks) != TDB_SUCCESS || !is_data_key(bk, bks))
-                return HA_ERR_KEY_NOT_FOUND;
+            if (scan_key(&bk, &bks) != TDB_SUCCESS || !is_data_key(bk, bks))
+                return scan_end_rc(HA_ERR_KEY_NOT_FOUND);
         }
 
         int ret = iter_read_current(buf);
@@ -182,13 +182,13 @@ int ha_tidesdb::index_read_pk(uchar *buf, const uchar *comp_key, uint comp_len,
            themselves, newer ones rely on the engine. */
         if (ret == 0 && find_flag == HA_READ_PREFIX_LAST &&
             (current_pk_len_ < comp_len || memcmp(current_pk_buf_, comp_key, comp_len) != 0))
-            return HA_ERR_KEY_NOT_FOUND;
+            return scan_end_rc(HA_ERR_KEY_NOT_FOUND);
         if (ret == 0) scan_dir_ = DIR_BACKWARD;
         return ret;
     }
 
     /* Fallback is to seek forward */
-    tidesdb_iter_seek(scan_iter, seek_key, seek_len);
+    scan_seek(seek_key, seek_len);
     int ret = iter_read_current(buf);
     if (ret == 0) scan_dir_ = DIR_FORWARD;
     return ret;
@@ -254,7 +254,7 @@ int ha_tidesdb::index_read_spatial(uchar *buf, const uchar *key, enum ha_rkey_fu
     {
         uchar seek_key[SPATIAL_HILBERT_KEY_LEN];
         encode_hilbert_be(spatial_ranges_[0].first, seek_key);
-        tidesdb_iter_seek(scan_iter, seek_key, SPATIAL_HILBERT_KEY_LEN);
+        scan_seek(seek_key, SPATIAL_HILBERT_KEY_LEN);
     }
 
     return spatial_scan_next(buf);
@@ -265,7 +265,7 @@ void ha_tidesdb::index_seek_secondary(const uchar *comp_key, uint comp_len,
 {
     if (find_flag == HA_READ_KEY_EXACT || find_flag == HA_READ_KEY_OR_NEXT)
     {
-        tidesdb_iter_seek(scan_iter, comp_key, comp_len);
+        scan_seek(comp_key, comp_len);
     }
     else if (find_flag == HA_READ_AFTER_KEY)
     {
@@ -281,15 +281,15 @@ void ha_tidesdb::index_seek_secondary(const uchar *comp_key, uint comp_len,
         memcpy(upper, comp_key, comp_len);
         memset(upper + comp_len, KEY_INF_HI_BYTE, share->pk_key_len);
         uint upper_len = comp_len + share->pk_key_len;
-        tidesdb_iter_seek(scan_iter, upper, upper_len);
+        scan_seek(upper, upper_len);
         if (tidesdb_iter_valid(scan_iter))
         {
             uint8_t *ik = NULL;
             size_t iks = 0;
             tdb_owned_buf ik_g(ik);
-            if (tidesdb_iter_key(scan_iter, &ik, &iks) == TDB_SUCCESS && iks >= comp_len &&
+            if (scan_key(&ik, &iks) == TDB_SUCCESS && iks >= comp_len &&
                 memcmp(ik, comp_key, comp_len) == 0)
-                tidesdb_iter_next(scan_iter);
+                scan_next();
         }
     }
     else if (find_flag == HA_READ_KEY_OR_PREV || find_flag == HA_READ_BEFORE_KEY ||
@@ -300,11 +300,11 @@ void ha_tidesdb::index_seek_secondary(const uchar *comp_key, uint comp_len,
         memcpy(upper, comp_key, comp_len);
         memset(upper + comp_len, KEY_INF_HI_BYTE, share->pk_key_len);
         uint upper_len = comp_len + share->pk_key_len;
-        tidesdb_iter_seek_for_prev(scan_iter, upper, upper_len);
+        scan_seek_for_prev(upper, upper_len);
     }
     else
     {
-        tidesdb_iter_seek(scan_iter, comp_key, comp_len);
+        scan_seek(comp_key, comp_len);
     }
 }
 
@@ -328,33 +328,34 @@ int ha_tidesdb::index_read_secondary(uchar *buf, const uchar *comp_key, uint com
 
     for (;;)
     {
-        if (!tidesdb_iter_valid(scan_iter)) return HA_ERR_KEY_NOT_FOUND;
+        if (!tidesdb_iter_valid(scan_iter)) return scan_end_rc(HA_ERR_KEY_NOT_FOUND);
 
         uint8_t *ik = NULL;
         size_t iks = 0;
-        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) return HA_ERR_KEY_NOT_FOUND;
+        if (scan_key(&ik, &iks) != TDB_SUCCESS) return scan_end_rc(HA_ERR_KEY_NOT_FOUND);
         tdb_owned_buf ik_g(ik);
 
         /* For EXACT and PREFIX_LAST, we verify the index prefix matches, since an empty prefix
            leaves the seek on a neighbouring value the caller did not ask for */
         if (find_flag == HA_READ_KEY_EXACT || find_flag == HA_READ_PREFIX_LAST)
         {
-            if (iks < comp_len || memcmp(ik, comp_key, comp_len) != 0) return HA_ERR_KEY_NOT_FOUND;
+            if (iks < comp_len || memcmp(ik, comp_key, comp_len) != 0)
+                return scan_end_rc(HA_ERR_KEY_NOT_FOUND);
         }
 
-        if (iks <= idx_col_len) return HA_ERR_KEY_NOT_FOUND;
+        if (iks <= idx_col_len) return scan_end_rc(HA_ERR_KEY_NOT_FOUND);
 
         /* ICP -- we evaluate pushed condition on index columns before PK lookup */
         check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
         if (icp == CHECK_NEG)
         {
             if (is_backward)
-                tidesdb_iter_prev(scan_iter);
+                scan_prev();
             else
-                tidesdb_iter_next(scan_iter);
+                scan_next();
             continue; /* skip this entry */
         }
-        if (icp == CHECK_OUT_OF_RANGE) return HA_ERR_END_OF_FILE;
+        if (icp == CHECK_OUT_OF_RANGE) return scan_end_rc(HA_ERR_END_OF_FILE);
         if (icp == CHECK_ABORTED_BY_USER) return HA_ERR_ABORTED_BY_USER;
 
         /* CHECK_POS -- condition satisfied (or ICP not applicable) */
@@ -370,9 +371,9 @@ int ha_tidesdb::index_read_secondary(uchar *buf, const uchar *comp_key, uint com
         if (ret == HA_ERR_KEY_NOT_FOUND)
         {
             if (is_backward)
-                tidesdb_iter_prev(scan_iter);
+                scan_prev();
             else
-                tidesdb_iter_next(scan_iter);
+                scan_next();
             continue;
         }
         if (ret == 0) scan_dir_ = is_backward ? DIR_BACKWARD : DIR_FORWARD;
@@ -391,7 +392,7 @@ int ha_tidesdb::index_next(uchar *buf)
     {
         int irc = ensure_scan_iter();
         if (irc) DBUG_RETURN(irc);
-        if (scan_dir_ != DIR_NONE) tidesdb_iter_next(scan_iter);
+        if (scan_dir_ != DIR_NONE) scan_next();
         DBUG_RETURN(spatial_scan_next(buf));
     }
 
@@ -402,8 +403,8 @@ int ha_tidesdb::index_next(uchar *buf)
         if (irc) DBUG_RETURN(irc);
         uchar seek_key[DATA_KEY_BUF_LEN];
         uint seek_len = build_data_key(current_pk_buf_, current_pk_len_, seek_key);
-        tidesdb_iter_seek(scan_iter, seek_key, seek_len);
-        if (tidesdb_iter_valid(scan_iter)) tidesdb_iter_next(scan_iter);
+        scan_seek(seek_key, seek_len);
+        if (tidesdb_iter_valid(scan_iter)) scan_next();
         /* iterator is now past the PK exact match -- advance+read below */
     }
     else
@@ -414,7 +415,7 @@ int ha_tidesdb::index_next(uchar *buf)
          * with no pre-advance).  On the first call after index_first
          * sets DIR_NONE, the iterator is already at the correct position
          * so we must not advance. */
-        if (scan_dir_ != DIR_NONE) tidesdb_iter_next(scan_iter);
+        if (scan_dir_ != DIR_NONE) scan_next();
     }
 
     if (is_pk_)
@@ -432,7 +433,7 @@ int ha_tidesdb::index_next(uchar *buf)
             if (current_pk_len_ < idx_search_comp_len_ ||
                 memcmp(current_pk_buf_, idx_search_comp_, idx_search_comp_len_) != 0)
             {
-                DBUG_RETURN(HA_ERR_END_OF_FILE);
+                DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
             }
         }
         scan_dir_ = DIR_FORWARD;
@@ -445,24 +446,23 @@ int ha_tidesdb::index_next(uchar *buf)
         uint idx_key_len = share->idx_comp_key_len[active_index];
         for (;;)
         {
-            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
             uint8_t *ik = NULL;
             size_t iks = 0;
-            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS)
-                DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (scan_key(&ik, &iks) != TDB_SUCCESS) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
             tdb_owned_buf ik_g(ik);
 
-            if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (iks <= idx_key_len) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
             /* ICP -- we evaluate pushed condition before PK lookup */
             check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
             if (icp == CHECK_NEG)
             {
-                tidesdb_iter_next(scan_iter);
+                scan_next();
                 continue;
             }
-            if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
             if (icp == CHECK_ABORTED_BY_USER) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
 
             int ret;
@@ -474,7 +474,7 @@ int ha_tidesdb::index_next(uchar *buf)
                step over it rather than return the miss as an error */
             if (ret == HA_ERR_KEY_NOT_FOUND)
             {
-                tidesdb_iter_next(scan_iter);
+                scan_next();
                 continue;
             }
             scan_dir_ = DIR_FORWARD;
@@ -498,7 +498,7 @@ int ha_tidesdb::index_prev(uchar *buf)
         if (irc) DBUG_RETURN(irc);
         uchar seek_key[DATA_KEY_BUF_LEN];
         uint seek_len = build_data_key(current_pk_buf_, current_pk_len_, seek_key);
-        tidesdb_iter_seek(scan_iter, seek_key, seek_len);
+        scan_seek(seek_key, seek_len);
         /* iterator is at the matched key -- fall through to prev() */
     }
     else
@@ -507,7 +507,7 @@ int ha_tidesdb::index_prev(uchar *buf)
         if (irc) DBUG_RETURN(irc);
     }
 
-    tidesdb_iter_prev(scan_iter);
+    scan_prev();
 
     if (is_pk_)
     {
@@ -515,11 +515,10 @@ int ha_tidesdb::index_prev(uchar *buf)
         {
             uint8_t *key = NULL;
             size_t ks = 0;
-            if (tidesdb_iter_key(scan_iter, &key, &ks) != TDB_SUCCESS)
-                DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (scan_key(&key, &ks) != TDB_SUCCESS) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
             tdb_owned_buf key_g(key);
             if (is_data_key(key, ks)) break;
-            tidesdb_iter_prev(scan_iter);
+            scan_prev();
         }
         scan_dir_ = DIR_BACKWARD;
         DBUG_RETURN(iter_read_current(buf));
@@ -530,24 +529,23 @@ int ha_tidesdb::index_prev(uchar *buf)
         uint idx_key_len = share->idx_comp_key_len[active_index];
         for (;;)
         {
-            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
             uint8_t *ik = NULL;
             size_t iks = 0;
-            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS)
-                DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (scan_key(&ik, &iks) != TDB_SUCCESS) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
             tdb_owned_buf ik_g(ik);
 
-            if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (iks <= idx_key_len) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
             /* ICP -- we evaluate pushed condition before PK lookup */
             check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
             if (icp == CHECK_NEG)
             {
-                tidesdb_iter_prev(scan_iter);
+                scan_prev();
                 continue;
             }
-            if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
             if (icp == CHECK_ABORTED_BY_USER) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
 
             scan_dir_ = DIR_BACKWARD;
@@ -560,7 +558,7 @@ int ha_tidesdb::index_prev(uchar *buf)
                step back over it rather than return the miss as an error */
             if (ret == HA_ERR_KEY_NOT_FOUND)
             {
-                tidesdb_iter_prev(scan_iter);
+                scan_prev();
                 continue;
             }
             DBUG_RETURN(ret);
@@ -579,14 +577,14 @@ int ha_tidesdb::index_first(uchar *buf)
     if (is_pk_)
     {
         uint8_t data_prefix = KEY_NS_DATA;
-        tidesdb_iter_seek(scan_iter, &data_prefix, 1);
+        scan_seek(&data_prefix, 1);
         int ret = iter_read_current(buf);
         if (ret == 0) scan_dir_ = DIR_FORWARD;
         DBUG_RETURN(ret);
     }
     else
     {
-        tidesdb_iter_seek_to_first(scan_iter);
+        scan_seek_to_first();
         scan_dir_ = DIR_NONE; /* index_next will set DIR_FORWARD */
         DBUG_RETURN(index_next(buf));
     }
@@ -613,18 +611,17 @@ int ha_tidesdb::index_last(uchar *buf)
         uint sentinel_len = KEY_NAMESPACE_LEN + share->pk_key_len;
         if (sentinel_len > sizeof(sentinel)) sentinel_len = sizeof(sentinel);
         memset(sentinel + KEY_NAMESPACE_LEN, KEY_INF_HI_BYTE, sentinel_len - KEY_NAMESPACE_LEN);
-        tidesdb_iter_seek_for_prev(scan_iter, sentinel, sentinel_len);
+        scan_seek_for_prev(sentinel, sentinel_len);
         /* Defensive backward scan in case the seek lands on a meta key
            in a CF with no data rows yet. */
         while (tidesdb_iter_valid(scan_iter))
         {
             uint8_t *key = NULL;
             size_t ks = 0;
-            if (tidesdb_iter_key(scan_iter, &key, &ks) != TDB_SUCCESS)
-                DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (scan_key(&key, &ks) != TDB_SUCCESS) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
             tdb_owned_buf key_g(key);
             if (is_data_key(key, ks)) break;
-            tidesdb_iter_prev(scan_iter);
+            scan_prev();
         }
         scan_dir_ = DIR_BACKWARD;
         DBUG_RETURN(iter_read_current(buf));
@@ -638,28 +635,27 @@ int ha_tidesdb::index_last(uchar *buf)
         uint sentinel_len = share->idx_comp_key_len[active_index] + share->pk_key_len;
         if (sentinel_len > sizeof(sentinel)) sentinel_len = sizeof(sentinel);
         memset(sentinel, KEY_INF_HI_BYTE, sentinel_len);
-        tidesdb_iter_seek_for_prev(scan_iter, sentinel, sentinel_len);
+        scan_seek_for_prev(sentinel, sentinel_len);
 
         uint idx_key_len = share->idx_comp_key_len[active_index];
         scan_dir_ = DIR_BACKWARD;
         for (;;)
         {
-            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
             uint8_t *ik = NULL;
             size_t iks = 0;
-            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS)
-                DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (scan_key(&ik, &iks) != TDB_SUCCESS) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
             tdb_owned_buf ik_g(ik);
 
-            if (iks <= idx_key_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+            if (iks <= idx_key_len) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
             /* stale index entry whose row a concurrent delete removed after the iterator read it,
                step back over it rather than return the miss as an error */
             int ret = fetch_row_by_pk(scan_txn, ik + idx_key_len, (uint)(iks - idx_key_len), buf);
             if (ret == HA_ERR_KEY_NOT_FOUND)
             {
-                tidesdb_iter_prev(scan_iter);
+                scan_prev();
                 continue;
             }
             DBUG_RETURN(ret);
@@ -676,8 +672,8 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
     /* Spatial index continuation */
     if (spatial_scan_active_)
     {
-        if (!scan_iter) DBUG_RETURN(HA_ERR_END_OF_FILE);
-        tidesdb_iter_next(scan_iter);
+        if (!scan_iter) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
+        scan_next();
         DBUG_RETURN(spatial_scan_next(buf));
     }
 
@@ -687,26 +683,26 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
         if (idx_search_comp_len_ >= full_pk_comp_len)
         {
             /* Full PK is unique -- after the first match there are no more */
-            DBUG_RETURN(HA_ERR_END_OF_FILE);
+            DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
         }
 
         /* Partial PK prefix on a composite PK -- we iterate through data keys
            that share this prefix-- KEY_NS_DATA + comparable_pk_prefix... */
-        if (!scan_iter) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        if (!scan_iter) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
-        tidesdb_iter_next(scan_iter);
-        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        scan_next();
+        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
         uint8_t *ik = NULL;
         size_t iks = 0;
-        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        if (scan_key(&ik, &iks) != TDB_SUCCESS) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
         tdb_owned_buf ik_g(ik);
 
         /* Data key format-- KEY_NS_DATA + comparable_pk.
            We check if the PK prefix still matches (skip the namespace byte). */
         if (iks < KEY_NAMESPACE_LEN + idx_search_comp_len_ ||
             memcmp(ik + KEY_NAMESPACE_LEN, idx_search_comp_, idx_search_comp_len_) != 0)
-            DBUG_RETURN(HA_ERR_END_OF_FILE);
+            DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
         int ret = iter_read_current(buf);
         if (ret == 0) scan_dir_ = DIR_FORWARD;
@@ -714,34 +710,34 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
     }
 
     /* Secondary index -- we advance past the last-read entry, then ICP loop */
-    if (!scan_iter) DBUG_RETURN(HA_ERR_END_OF_FILE);
-    tidesdb_iter_next(scan_iter);
+    if (!scan_iter) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
+    scan_next();
 
     uint idx_col_len = share->idx_comp_key_len[active_index];
     for (;;)
     {
-        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        if (!tidesdb_iter_valid(scan_iter)) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
         uint8_t *ik = NULL;
         size_t iks = 0;
-        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        if (scan_key(&ik, &iks) != TDB_SUCCESS) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
         tdb_owned_buf ik_g(ik);
 
         if (iks < idx_search_comp_len_ || memcmp(ik, idx_search_comp_, idx_search_comp_len_) != 0)
         {
-            DBUG_RETURN(HA_ERR_END_OF_FILE);
+            DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
         }
 
-        if (iks <= idx_col_len) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        if (iks <= idx_col_len) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 
         /* ICP -- we evaluate pushed condition before PK lookup */
         check_result_t icp = icp_check_secondary(ik, iks, active_index, buf);
         if (icp == CHECK_NEG)
         {
-            tidesdb_iter_next(scan_iter);
+            scan_next();
             continue;
         }
-        if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(HA_ERR_END_OF_FILE);
+        if (icp == CHECK_OUT_OF_RANGE) DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
         if (icp == CHECK_ABORTED_BY_USER) DBUG_RETURN(HA_ERR_ABORTED_BY_USER);
 
         int ret;
@@ -753,7 +749,7 @@ int ha_tidesdb::index_next_same(uchar *buf, const uchar *key, uint keylen)
            step over it rather than return the miss as an error */
         if (ret == HA_ERR_KEY_NOT_FOUND)
         {
-            tidesdb_iter_next(scan_iter);
+            scan_next();
             continue;
         }
         DBUG_RETURN(ret);
@@ -804,12 +800,12 @@ int ha_tidesdb::multi_range_read_next(range_id_t *range_info)
         int irc = ensure_scan_iter();
         if (irc) DBUG_RETURN(irc);
 
-        tidesdb_iter_seek(scan_iter, (const uint8_t *)e.comp_key.data(), (uint)e.comp_key.size());
+        scan_seek((const uint8_t *)e.comp_key.data(), (uint)e.comp_key.size());
         if (!tidesdb_iter_valid(scan_iter)) continue;
 
         uint8_t *ik = NULL;
         size_t iks = 0;
-        if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) continue;
+        if (scan_key(&ik, &iks) != TDB_SUCCESS) continue;
         tdb_owned_buf ik_g(ik);
         if (iks < e.comp_key.size() || memcmp(ik, e.comp_key.data(), e.comp_key.size()) != 0)
             continue; /* no entry for this point */
@@ -825,5 +821,5 @@ int ha_tidesdb::multi_range_read_next(range_id_t *range_info)
         DBUG_RETURN(rc);
     }
 
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
+    DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 }

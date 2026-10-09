@@ -113,15 +113,28 @@ int ha_tidesdb::update_check_unique(const uchar *old_data, const uchar *new_data
         tidesdb_iter_t *dup_iter = NULL;
         int irc = tdb_iter_new_blocking(ha_thd(), txn, share->idx_cfs[i], &dup_iter);
         if (irc != TDB_SUCCESS || !dup_iter) return tdb_rc_to_ha(irc, "update_row dup_iter_new");
-        tidesdb_iter_seek(dup_iter, new_prefix, new_prefix_len);
+        /* A probe that fails must fail the write, since reading it as "no row there" would let a
+           duplicate in. */
+        int src = tdb_iter_seek_blocking(ha_thd(), dup_iter, new_prefix, new_prefix_len);
+        if (tdb_iter_failed(src))
+        {
+            tidesdb_iter_free(dup_iter);
+            return tdb_rc_to_ha(src, "update_row dup_iter_seek");
+        }
         bool dup = false;
         if (tidesdb_iter_valid(dup_iter))
         {
             uint8_t *fk = NULL;
             size_t fks = 0;
             tdb_owned_buf fk_g(fk);
-            if (tidesdb_iter_key(dup_iter, &fk, &fks) == TDB_SUCCESS && fks >= new_prefix_len &&
-                memcmp(fk, new_prefix, new_prefix_len) == 0)
+            int krc = tidesdb_iter_key(dup_iter, &fk, &fks);
+            if (krc != TDB_SUCCESS)
+            {
+                tidesdb_iter_free(dup_iter);
+                return tdb_rc_to_ha(krc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : krc,
+                                    "update_row dup_iter_key");
+            }
+            if (fks >= new_prefix_len && memcmp(fk, new_prefix, new_prefix_len) == 0)
             {
                 dup = true;
                 size_t suffix_len = fks - new_prefix_len;

@@ -360,21 +360,32 @@ static bool tdb_load_stopwords_from_table_spec(const char *table_spec,
         return false;
     }
 
-    tidesdb_iter_seek_to_first(iter);
     out.clear();
-
-    while (tidesdb_iter_valid(iter))
+    /* A list read only in part is no list, so any failed read fails the load and the words in use
+       stay as they are. */
+    int rc = tdb_iter_seek_to_first_blocking(current_thd, iter);
+    while (!tdb_iter_failed(rc) && tidesdb_iter_valid(iter))
     {
         uint8_t *val = NULL;
         size_t val_size = 0;
         tdb_owned_buf val_g(val);
-        if (tidesdb_iter_value(iter, &val, &val_size) == TDB_SUCCESS)
-            tdb_extract_stopword_from_row(val, val_size, out);
-        tidesdb_iter_next(iter);
+        rc = tidesdb_iter_value(iter, &val, &val_size);
+        if (rc != TDB_SUCCESS)
+        {
+            if (rc == TDB_ERR_NOT_FOUND) rc = TDB_ERR_IO;
+            break;
+        }
+        tdb_extract_stopword_from_row(val, val_size, out);
+        rc = tidesdb_iter_next(iter);
     }
 
     tidesdb_iter_free(iter);
     tidesdb_txn_free(txn);
+    if (tdb_iter_failed(rc))
+    {
+        sql_print_warning("[TIDESDB] could not read stop word table '%s' (err=%d)", table_spec, rc);
+        return false;
+    }
 
     sql_print_information("[TIDESDB] Loaded %zu stop words from table '%s'", out.size(),
                           table_spec);

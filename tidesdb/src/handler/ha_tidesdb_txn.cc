@@ -752,8 +752,10 @@ int ha_tidesdb::external_lock_acquire(THD *thd)
     cached_thd_ = thd;
     cached_trx_ = trx;
     /* The table's foreign keys as of this statement, rebuilt if a constraint was added or dropped
-       since the last one. */
+       since the last one.  A catalog that could not be read fails the statement rather than run it
+       with constraints unenforced. */
     fk_stmt_ = fk_current();
+    if (share && !fk_stmt_) return HA_ERR_INTERNAL_ERROR;
 
     trans_register_ha(thd, false, ht, 0);
 
