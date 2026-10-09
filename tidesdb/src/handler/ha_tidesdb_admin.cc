@@ -318,18 +318,23 @@ void ha_tidesdb::analyze_sample_indexes(THD *thd, tidesdb_txn_t *txn, bool verbo
         if (tdb_iter_new_blocking(ha_thd(), txn, share->idx_cfs[i], &ait) != TDB_SUCCESS || !ait)
             continue;
 
-        tidesdb_iter_seek_to_first(ait);
+        int arc = tdb_iter_seek_to_first_blocking(ha_thd(), ait);
 
         static constexpr uint64_t ANALYZE_SAMPLE_LIMIT = 100000;
         uint64_t sampled = 0, distinct = 0;
         uchar prev_prefix[MAX_KEY_LENGTH];
         uint prev_len = 0;
 
-        while (tidesdb_iter_valid(ait) && sampled < ANALYZE_SAMPLE_LIMIT)
+        while (!tdb_iter_failed(arc) && tidesdb_iter_valid(ait) && sampled < ANALYZE_SAMPLE_LIMIT)
         {
             uint8_t *ik = NULL;
             size_t iks = 0;
-            if (tidesdb_iter_key(ait, &ik, &iks) != TDB_SUCCESS) break;
+            arc = tidesdb_iter_key(ait, &ik, &iks);
+            if (arc != TDB_SUCCESS)
+            {
+                if (arc == TDB_ERR_NOT_FOUND) arc = TDB_ERR_IO;
+                break;
+            }
             tdb_owned_buf ik_g(ik);
 
             uint cmp_len = (iks >= idx_prefix_len) ? idx_prefix_len : (uint)iks;
@@ -340,10 +345,19 @@ void ha_tidesdb::analyze_sample_indexes(THD *thd, tidesdb_txn_t *txn, bool verbo
                 memcpy(prev_prefix, ik, cmp_len);
             }
             sampled++;
-            tidesdb_iter_next(ait);
+            arc = tidesdb_iter_next(ait);
         }
         tidesdb_iter_free(ait);
 
+        /* A sample cut short by a failed read would understate the distinct count, so the index
+           keeps the statistics it had and the failure is reported as a note. */
+        if (tdb_iter_failed(arc))
+        {
+            push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE, ER_UNKNOWN_ERROR,
+                                "[TIDESDB] could not sample index '%s' (err=%d)", ki->name.str,
+                                arc);
+            continue;
+        }
         if (distinct == 0) continue;
 
         uint64_t total = (idx_total_keys > 0) ? idx_total_keys : sampled;

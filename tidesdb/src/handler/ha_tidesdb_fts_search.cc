@@ -201,9 +201,10 @@ static tdb_ft_info_t *ft_new_info(ha_tidesdb *h, uint inx)
 
 /* gather every posting for one query term from the FTS iterator, following the wildcard length
    buckets for a truncated term or a single prefix seek for an exact term. */
-static void ft_gather_postings(tidesdb_iter_t *it, const tidesdb::fts::query_term &qt, size_t qlen,
-                               std::vector<fts_posting_t> &postings)
+static int ft_gather_postings(THD *thd, tidesdb_iter_t *it, const tidesdb::fts::query_term &qt,
+                              size_t qlen, std::vector<fts_posting_t> &postings)
 {
+    int rc = TDB_SUCCESS;
     uchar prefix[FTS_TERM_LEN_PREFIX + FTS_MAX_TERM_BYTES];
     uint prefix_len = 0;
     int2store(prefix, (uint16)qlen);
@@ -229,14 +230,19 @@ static void ft_gather_postings(tidesdb_iter_t *it, const tidesdb::fts::query_ter
             memcpy(seek + FTS_TERM_LEN_PREFIX, qt.term.data(), qlen);
             uint seek_len = FTS_TERM_LEN_PREFIX + (uint)qlen;
 
-            tidesdb_iter_seek(it, seek, seek_len);
-            while (tidesdb_iter_valid(it))
+            rc = tdb_iter_seek_blocking(thd, it, seek, seek_len);
+            while (!tdb_iter_failed(rc) && tidesdb_iter_valid(it))
             {
                 uint8_t *ik = NULL;
                 size_t iks = 0;
                 uint8_t *iv = NULL;
                 size_t ivs = 0;
-                if (tidesdb_iter_key_value(it, &ik, &iks, &iv, &ivs) != TDB_SUCCESS) break;
+                rc = tidesdb_iter_key_value(it, &ik, &iks, &iv, &ivs);
+                if (rc != TDB_SUCCESS)
+                {
+                    if (rc == TDB_ERR_NOT_FOUND) rc = TDB_ERR_IO;
+                    break;
+                }
                 tdb_owned_buf ik_g(ik), iv_g(iv);
 
                 if (iks < FTS_TERM_LEN_PREFIX) break;
@@ -249,7 +255,7 @@ static void ft_gather_postings(tidesdb_iter_t *it, const tidesdb::fts::query_ter
                 uint pk_off = FTS_TERM_LEN_PREFIX + stored_len;
                 if (iks <= pk_off)
                 {
-                    tidesdb_iter_next(it);
+                    rc = tidesdb_iter_next(it);
                     continue;
                 }
                 std::string pk((char *)(ik + pk_off), iks - pk_off);
@@ -258,21 +264,27 @@ static void ft_gather_postings(tidesdb_iter_t *it, const tidesdb::fts::query_ter
                     postings.push_back({pk, (uint16)uint2korr(iv),
                                         (uint32)uint4korr(iv + FTS_VALUE_DOC_LEN_OFFSET)});
 
-                tidesdb_iter_next(it);
+                rc = tidesdb_iter_next(it);
             }
+            if (tdb_iter_failed(rc)) return rc;
         }
-        return;
+        return TDB_SUCCESS;
     }
 
-    tidesdb_iter_seek(it, prefix, prefix_len);
+    rc = tdb_iter_seek_blocking(thd, it, prefix, prefix_len);
     /* exact-match path (non-truncated) */
-    while (tidesdb_iter_valid(it))
+    while (!tdb_iter_failed(rc) && tidesdb_iter_valid(it))
     {
         uint8_t *ik = NULL;
         size_t iks = 0;
         uint8_t *iv = NULL;
         size_t ivs = 0;
-        if (tidesdb_iter_key_value(it, &ik, &iks, &iv, &ivs) != TDB_SUCCESS) break;
+        rc = tidesdb_iter_key_value(it, &ik, &iks, &iv, &ivs);
+        if (rc != TDB_SUCCESS)
+        {
+            if (rc == TDB_ERR_NOT_FOUND) rc = TDB_ERR_IO;
+            break;
+        }
         tdb_owned_buf ik_g(ik), iv_g(iv);
 
         if (iks < prefix_len || memcmp(ik, prefix, prefix_len) != 0) break;
@@ -281,17 +293,19 @@ static void ft_gather_postings(tidesdb_iter_t *it, const tidesdb::fts::query_ter
         if (ivs >= FTS_VALUE_LEN)
             postings.push_back(
                 {pk, (uint16)uint2korr(iv), (uint32)uint4korr(iv + FTS_VALUE_DOC_LEN_OFFSET)});
-        tidesdb_iter_next(it);
+        rc = tidesdb_iter_next(it);
     }
+    return tdb_iter_failed(rc) ? rc : TDB_SUCCESS;
 }
 
 /* score every query term against the FTS index, accumulating per-document BM25 scores in
    doc_scores and, for boolean required terms, dropping documents that miss any of them.  reports
-   how many terms were required through num_required. */
-static void ft_score_terms(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *fts_cf,
-                           const std::vector<tidesdb::fts::query_term> &terms, int64_t total_docs,
-                           double inv_avgdl, std::unordered_map<std::string, double> &doc_scores,
-                           uint &num_required)
+   how many terms were required through num_required.  returns TDB_SUCCESS, or the library code of
+   an index read that failed, since scoring from part of the postings would drop matches. */
+static int ft_score_terms(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *fts_cf,
+                          const std::vector<tidesdb::fts::query_term> &terms, int64_t total_docs,
+                          double inv_avgdl, std::unordered_map<std::string, double> &doc_scores,
+                          uint &num_required)
 {
     std::unordered_map<std::string, uint> doc_required_hits;
     std::unordered_set<std::string> excluded_pks;
@@ -305,7 +319,8 @@ static void ft_score_terms(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t
     tidesdb_iter_t *shared_it = NULL;
     {
         int sirc = tdb_iter_new_blocking(thd, txn, fts_cf, &shared_it);
-        if (sirc != TDB_SUCCESS) shared_it = NULL;
+        if (sirc != TDB_SUCCESS) return sirc;
+        if (!shared_it) return TDB_ERR_MEMORY;
     }
 
     for (auto &qt : terms)
@@ -318,9 +333,13 @@ static void ft_score_terms(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t
         size_t qlen = qt.term.size();
         if (qlen > FTS_MAX_TERM_BYTES) qlen = FTS_MAX_TERM_BYTES;
 
-        if (!shared_it) continue;
         std::vector<fts_posting_t> postings;
-        ft_gather_postings(shared_it, qt, qlen, postings);
+        int grc = ft_gather_postings(thd, shared_it, qt, qlen, postings);
+        if (grc != TDB_SUCCESS)
+        {
+            tidesdb_iter_free(shared_it);
+            return grc;
+        }
 
         uint32 df = (uint32)postings.size();
         const double k1 = srv_fts_bm25_k1, b = srv_fts_bm25_b;
@@ -357,7 +376,7 @@ static void ft_score_terms(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t
         }
     }
 
-    if (shared_it) tidesdb_iter_free(shared_it);
+    tidesdb_iter_free(shared_it);
 
     /* Apply exclusions after the positive pass so the order of terms in the
        query does not matter.  Each excluded document leaves both the score and
@@ -380,6 +399,7 @@ static void ft_score_terms(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t
                 ++it;
         }
     }
+    return TDB_SUCCESS;
 }
 
 /* copy the scored documents into the result handle, allocating a server-owned copy of each pk. */
@@ -442,7 +462,13 @@ FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
     if (query_terms.empty()) DBUG_RETURN(reinterpret_cast<FT_INFO *>(ft_new_info(this, inx)));
 
     int64_t total_docs = 0, total_words = 0;
-    fts_load_meta(stmt_txn, share->cf, inx, &total_docs, &total_words);
+    int mrc = fts_load_meta(stmt_txn, share->cf, inx, &total_docs, &total_words);
+    if (mrc != TDB_SUCCESS && mrc != TDB_ERR_NOT_FOUND)
+    {
+        /* Ranking without the index's document counts would score every match wrongly. */
+        print_error(tdb_rc_to_ha(mrc, "ft_init_ext meta"), MYF(0));
+        DBUG_RETURN(NULL);
+    }
     double avgdl = tidesdb::fts_score::avgdl(total_words, total_docs);
     if (total_docs == 0) total_docs = BM25_MIN_TOTAL_DOCS; /* avoid division by zero */
     /* We precompute 1/avgdl so the per-posting BM25 loop multiplies instead of
@@ -452,8 +478,14 @@ FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
 
     std::unordered_map<std::string, double> doc_scores;
     uint num_required = 0;
-    ft_score_terms(ha_thd(), stmt_txn, share->idx_cfs[inx], query_terms, total_docs, inv_avgdl,
-                   doc_scores, num_required);
+    int src = ft_score_terms(ha_thd(), stmt_txn, share->idx_cfs[inx], query_terms, total_docs,
+                             inv_avgdl, doc_scores, num_required);
+    if (src != TDB_SUCCESS)
+    {
+        /* An index read failed, so report it rather than rank part of the matches. */
+        print_error(tdb_rc_to_ha(src, "ft_init_ext"), MYF(0));
+        DBUG_RETURN(NULL);
+    }
 
     tdb_ft_info_t *info = ft_new_info(this, inx);
     ft_fill_results(info, doc_scores);

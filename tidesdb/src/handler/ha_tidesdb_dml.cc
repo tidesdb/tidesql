@@ -143,15 +143,28 @@ int ha_tidesdb::write_check_secondary_unique(const uchar *buf, tidesdb_txn_t *tx
                violation, so propagate the error. */
             return tdb_rc_to_ha(irc, "write_row dup_iter_new");
         }
-        tidesdb_iter_seek(dup_iter, idx_prefix, idx_prefix_len);
+        /* A probe that fails must fail the write, since reading it as "no row there" would let a
+           duplicate in. */
+        int src = tdb_iter_seek_blocking(ha_thd(), dup_iter, idx_prefix, idx_prefix_len);
+        if (tdb_iter_failed(src))
+        {
+            tidesdb_iter_free(dup_iter);
+            return tdb_rc_to_ha(src, "write_row dup_iter_seek");
+        }
         bool is_dup = false;
         if (tidesdb_iter_valid(dup_iter))
         {
             uint8_t *fk = NULL;
             size_t fks = 0;
             tdb_owned_buf fk_g(fk);
-            if (tidesdb_iter_key(dup_iter, &fk, &fks) == TDB_SUCCESS && fks >= idx_prefix_len &&
-                memcmp(fk, idx_prefix, idx_prefix_len) == 0)
+            int krc = tidesdb_iter_key(dup_iter, &fk, &fks);
+            if (krc != TDB_SUCCESS)
+            {
+                tidesdb_iter_free(dup_iter);
+                return tdb_rc_to_ha(krc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : krc,
+                                    "write_row dup_iter_key");
+            }
+            if (fks >= idx_prefix_len && memcmp(fk, idx_prefix, idx_prefix_len) == 0)
             {
                 is_dup = true;
                 /* Extract the pk suffix from the existing index key for dup_ref. */
@@ -933,23 +946,28 @@ static int count_live_data_keys(THD *thd, tidesdb_txn_t *txn, tidesdb_column_fam
 {
     *out_count = 0;
     tidesdb_iter_t *it = NULL;
-    int rc = tidesdb_iter_new_range(txn, cf, lo, lo_len, hi, hi_len, &it);
+    int rc = tdb_iter_new_range_blocking(thd, txn, cf, lo, lo_len, hi, hi_len, &it);
     if (rc != TDB_SUCCESS || !it) return rc != TDB_SUCCESS ? rc : TDB_ERR_IO;
-    tidesdb_iter_seek_to_first(it);
-    (void)thd;
-    while (tidesdb_iter_valid(it))
+    /* The count must be exact.  One cut short by a failed read could match the deleted count while
+       rows the DELETE kept sit uncounted in the span, and the range tombstone would then remove
+       them, so any failure is returned and the caller falls back to per-row tombstones. */
+    rc = tdb_iter_seek_to_first_blocking(thd, it);
+    while (!tdb_iter_failed(rc) && tidesdb_iter_valid(it))
     {
         uint8_t *k = NULL;
         size_t ks = 0;
-        if (tidesdb_iter_key(it, &k, &ks) == TDB_SUCCESS)
+        rc = tidesdb_iter_key(it, &k, &ks);
+        if (rc != TDB_SUCCESS)
         {
-            tdb_owned_buf kg(k);
-            if (is_data_key(k, ks)) (*out_count)++;
+            if (rc == TDB_ERR_NOT_FOUND) rc = TDB_ERR_IO;
+            break;
         }
-        tidesdb_iter_next(it);
+        tdb_owned_buf kg(k);
+        if (is_data_key(k, ks)) (*out_count)++;
+        rc = tidesdb_iter_next(it);
     }
     tidesdb_iter_free(it);
-    return TDB_SUCCESS;
+    return tdb_iter_failed(rc) ? rc : TDB_SUCCESS;
 }
 
 int ha_tidesdb::bulk_delete_flush_buffered(tidesdb_txn_t *txn)
@@ -1015,9 +1033,14 @@ int ha_tidesdb::end_bulk_delete()
                     cached_thd_, txn, share->cf, (const uchar *)bulk_delete_min_pk_.data(),
                     (uint)bulk_delete_min_pk_.size(), hi, hi_len, &range_live) == TDB_SUCCESS &&
                 range_live == bulk_delete_keys_.size() &&
-                tidesdb_txn_delete_range(txn, share->cf,
+                tdb_retry_locked(cached_thd_,
+                                 [&]
+                                 {
+                                     return tidesdb_txn_delete_range(
+                                         txn, share->cf,
                                          (const uint8_t *)bulk_delete_min_pk_.data(),
-                                         bulk_delete_min_pk_.size(), hi, hi_len) == TDB_SUCCESS)
+                                         bulk_delete_min_pk_.size(), hi, hi_len);
+                                 }) == TDB_SUCCESS)
             {
                 did_range_tombstone = true;
                 ranged = true;

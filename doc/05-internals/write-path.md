@@ -173,7 +173,10 @@ because nothing is locked, counts it in `Tidesdb_stmt_memory_limit`, and the sta
 retried once flush has caught up.
 
 Transient contention the library reports as `TDB_ERR_LOCKED`, typically a memtable rotation that
-outran a single call's own retries, is absorbed in the engine as well. Its read, write, delete, and
-iterator-open wrappers ask again up to 16 times with a short growing backoff, stopping early if the
-session is killed, and only then surface a lock wait timeout. A commit is never retried, because a
-failed commit leaves the transaction aborted.
+outran a single call's own retries, is absorbed in the engine as well. Its read, write, delete,
+iterator-open, and iterator-seek wrappers ask again up to 16 times with a short growing backoff,
+stopping early if the session is killed, and only then surface a lock wait timeout. A commit is never
+retried, because a failed commit leaves the transaction aborted, and neither is a step to the next or
+previous entry, because a failed step does not say where it left the iterator. In a query or a
+write, an iterator call that still fails ends the statement with an error rather than as the end
+of the data, so a scan does not hand back part of its rows as the whole result.

@@ -82,9 +82,11 @@ at `REPEATABLE READ` or higher needs retry logic for 1180.
 An error the library reports inside a statement, before `COMMIT`, reaches the client as the plain
 server error, `ER_LOCK_DEADLOCK` (1213) for a conflict and `ER_LOCK_WAIT_TIMEOUT` (1205) for
 transient contention or memory backpressure. The engine first retries a transient contention error
-from a read, iterator, or write call a bounded number of times with a short backoff, about sixty
-milliseconds in all, so 1205 only surfaces when that retry runs out. A cross-node conflict in a
-Galera cluster is described in [Replication and High Availability](/administration/replication-ha).
+from a read, iterator open or seek, or write call a bounded number of times with a short backoff,
+about sixty milliseconds in all, so 1205 only surfaces when that retry runs out. A scan that fails
+partway reports the error rather than returning the rows it had read as the whole result. A
+cross-node conflict in a Galera cluster is described in
+[Replication and High Availability](/administration/replication-ha).
 
 Plain reads never take a lock at any isolation level, matching InnoDB's non-locking reads.
 `SELECT ... FOR UPDATE` and `LOCK IN SHARE MODE` take no lock either, and the engine treats them as

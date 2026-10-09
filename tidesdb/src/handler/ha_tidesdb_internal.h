@@ -145,7 +145,11 @@ static inline void tdb_unique_sentinel_purge(const std::string &cf_name)
             TDB_SUCCESS ||
         !txn)
         return;
-    int rc = tidesdb_txn_delete_prefix(txn, ucf, (const uint8_t *)prefix.data(), prefix.size());
+    int rc = tdb_retry_locked(current_thd,
+                              [&] {
+                                  return tidesdb_txn_delete_prefix(
+                                      txn, ucf, (const uint8_t *)prefix.data(), prefix.size());
+                              });
     if (rc == TDB_SUCCESS) rc = tidesdb_txn_commit(txn);
     if (rc != TDB_SUCCESS)
     {
@@ -198,6 +202,21 @@ static inline int tdb_txn_put_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_col
         thd, [&] { return tidesdb_txn_put(txn, cf, key, key_size, value, value_size, ttl); });
 }
 
+static inline int tdb_txn_contains_blocking(THD *thd, tidesdb_txn_t *txn,
+                                            tidesdb_column_family_t *cf, const uint8_t *key,
+                                            size_t key_size)
+{
+    return tdb_retry_locked(thd, [&] { return tidesdb_txn_contains(txn, cf, key, key_size); });
+}
+
+static inline int tdb_txn_get_notrack_blocking(THD *thd, tidesdb_txn_t *txn,
+                                               tidesdb_column_family_t *cf, const uint8_t *key,
+                                               size_t key_size, uint8_t **value, size_t *value_size)
+{
+    return tdb_retry_locked(
+        thd, [&] { return tidesdb_txn_get_notrack(txn, cf, key, key_size, value, value_size); });
+}
+
 static inline int tdb_txn_commit_blocking(THD *thd, tidesdb_txn_t *txn)
 {
     (void)thd;
@@ -210,6 +229,31 @@ static inline int tdb_txn_delete_cf_blocking(THD *thd, tidesdb_txn_t *txn,
 {
     return tdb_retry_locked(
         thd, [&] { return tidesdb_txn_delete_cf(txn, cf, key, key_size, use_single_delete); });
+}
+
+/* Whether an iterator call failed outright.  TDB_ERR_NOT_FOUND only means the stream has no entry
+   at the position asked for, which a caller handles as the end of the data. */
+static inline bool tdb_iter_failed(int rc)
+{
+    return rc != TDB_SUCCESS && rc != TDB_ERR_NOT_FOUND;
+}
+
+/* Seeks retry a transient TDB_ERR_LOCKED, since each repositions from scratch.  Steps have no
+   such wrapper, because a failed next or prev does not promise where it left the iterator, so a
+   caller treats any failed step as an error. */
+static inline int tdb_iter_seek_blocking(THD *thd, tidesdb_iter_t *it, const void *key, size_t len)
+{
+    return tdb_retry_locked(thd, [&] { return tidesdb_iter_seek(it, (const uint8_t *)key, len); });
+}
+
+static inline int tdb_iter_seek_to_first_blocking(THD *thd, tidesdb_iter_t *it)
+{
+    return tdb_retry_locked(thd, [&] { return tidesdb_iter_seek_to_first(it); });
+}
+
+static inline int tdb_iter_seek_to_last_blocking(THD *thd, tidesdb_iter_t *it)
+{
+    return tdb_retry_locked(thd, [&] { return tidesdb_iter_seek_to_last(it); });
 }
 
 static inline int tdb_iter_new_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,

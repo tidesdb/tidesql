@@ -473,9 +473,9 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
     if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return HA_ERR_GENERIC;
     for (auto &r : records)
     {
-        if (tidesdb_txn_put(txn, cf, (const uint8_t *)r.first.data(), r.first.size(),
-                            (const uint8_t *)r.second.data(), r.second.size(),
-                            TIDESDB_TTL_NONE) != TDB_SUCCESS)
+        if (tdb_txn_put_blocking(thd, txn, cf, (const uint8_t *)r.first.data(), r.first.size(),
+                                 (const uint8_t *)r.second.data(), r.second.size(),
+                                 TIDESDB_TTL_NONE) != TDB_SUCCESS)
         {
             tidesdb_txn_rollback(txn);
             tidesdb_txn_free(txn);
@@ -503,32 +503,59 @@ int ha_tidesdb::fk_purge_catalog(const char *child_cf_name)
        full scan is fine because the catalog holds one small record per
        constraint and this only runs on DROP TABLE. */
     std::vector<std::string> to_delete;
+    THD *thd = current_thd;
     tidesdb_iter_t *it = NULL;
-    if (tidesdb_iter_new(txn, cf, &it) == TDB_SUCCESS && it)
+    int lrc = tdb_iter_new_blocking(thd, txn, cf, &it);
+    if (lrc == TDB_SUCCESS && it)
     {
         const uint8_t lo0 = 0;
-        tidesdb_iter_seek(it, &lo0, 1);
-        while (tidesdb_iter_valid(it))
+        lrc = tdb_iter_seek_blocking(thd, it, &lo0, 1);
+        while (!tdb_iter_failed(lrc) && tidesdb_iter_valid(it))
         {
             uint8_t *k = NULL, *v = NULL;
             size_t ks = 0, vs = 0;
-            if (tidesdb_iter_key(it, &k, &ks) == TDB_SUCCESS &&
-                tidesdb_iter_value(it, &v, &vs) == TDB_SUCCESS)
+            lrc = tidesdb_iter_key(it, &k, &ks);
+            if (lrc == TDB_SUCCESS) lrc = tidesdb_iter_value(it, &v, &vs);
+            if (lrc != TDB_SUCCESS)
             {
-                fk_catalog_entry e;
-                if (fk_deserialize(v, vs, e) && (e.child_cf == cfn || e.parent_cf == cfn))
-                    to_delete.emplace_back((const char *)k, ks);
-                tidesdb_free(k);
-                tidesdb_free(v);
+                if (k) tidesdb_free(k);
+                if (lrc == TDB_ERR_NOT_FOUND) lrc = TDB_ERR_IO;
+                break;
             }
-            tidesdb_iter_next(it);
+            fk_catalog_entry e;
+            if (fk_deserialize(v, vs, e) && (e.child_cf == cfn || e.parent_cf == cfn))
+                to_delete.emplace_back((const char *)k, ks);
+            tidesdb_free(k);
+            tidesdb_free(v);
+            lrc = tidesdb_iter_next(it);
         }
         tidesdb_iter_free(it);
     }
+    /* A catalog that could not be read whole is left as it is rather than purged in part. */
+    if (tdb_iter_failed(lrc))
+    {
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        sql_print_warning("[TIDESDB] could not read the foreign key catalog to purge '%s' (err=%d)",
+                          child_cf_name, lrc);
+        return 0;
+    }
 
-    for (auto &k : to_delete) tidesdb_txn_delete(txn, cf, (const uint8_t *)k.data(), k.size());
-
-    if (tidesdb_txn_commit(txn) != TDB_SUCCESS) tidesdb_txn_rollback(txn);
+    int drc = TDB_SUCCESS;
+    for (auto &k : to_delete)
+    {
+        drc = tdb_txn_delete_cf_blocking(thd, txn, cf, (const uint8_t *)k.data(), k.size(), false);
+        if (drc != TDB_SUCCESS) break;
+    }
+    if (drc == TDB_SUCCESS) drc = tidesdb_txn_commit(txn);
+    if (drc != TDB_SUCCESS)
+    {
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        sql_print_warning("[TIDESDB] could not purge the foreign key catalog of '%s' (err=%d)",
+                          child_cf_name, drc);
+        return 0;
+    }
     tidesdb_txn_free(txn);
     if (!to_delete.empty()) tdb_fk_catalog_gen.fetch_add(1, std::memory_order_release);
     return 0;
@@ -547,7 +574,9 @@ std::shared_ptr<const tdb_fk_set> ha_tidesdb::fk_build(uint64_t gen)
     if (!cf) return set;
 
     tidesdb_txn_t *txn = NULL;
-    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return set;
+    if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return nullptr;
+    THD *thd = ha_thd();
+    int lrc = TDB_SUCCESS;
 
     const std::string &self = share->cf_name;
 
@@ -557,17 +586,24 @@ std::shared_ptr<const tdb_fk_set> ha_tidesdb::fk_build(uint64_t gen)
        this table feeds the parent list, and a self-referencing constraint feeds
        both. */
     tidesdb_iter_t *it = NULL;
-    if (tidesdb_iter_new(txn, cf, &it) == TDB_SUCCESS && it)
+    lrc = tdb_iter_new_blocking(thd, txn, cf, &it);
+    if (lrc == TDB_SUCCESS && it)
     {
         /* a fresh iterator is unpositioned, seek to the low end to start */
         const uint8_t lo0 = 0;
-        tidesdb_iter_seek(it, &lo0, 1);
-        while (tidesdb_iter_valid(it))
+        lrc = tdb_iter_seek_blocking(thd, it, &lo0, 1);
+        while (!tdb_iter_failed(lrc) && tidesdb_iter_valid(it))
         {
             uint8_t *k = NULL, *v = NULL;
             size_t ks = 0, vs = 0;
-            if (tidesdb_iter_key(it, &k, &ks) == TDB_SUCCESS &&
-                tidesdb_iter_value(it, &v, &vs) == TDB_SUCCESS)
+            lrc = tidesdb_iter_key(it, &k, &ks);
+            if (lrc == TDB_SUCCESS) lrc = tidesdb_iter_value(it, &v, &vs);
+            if (lrc != TDB_SUCCESS)
+            {
+                if (k) tidesdb_free(k);
+                if (lrc == TDB_ERR_NOT_FOUND) lrc = TDB_ERR_IO;
+                break;
+            }
             {
                 /* only the child-side record is materialized, so each constraint
                    is considered once even though it is stored on both sides */
@@ -628,13 +664,21 @@ std::shared_ptr<const tdb_fk_set> ha_tidesdb::fk_build(uint64_t gen)
             }
             if (k) tidesdb_free(k);
             if (v) tidesdb_free(v);
-            tidesdb_iter_next(it);
+            lrc = tidesdb_iter_next(it);
         }
         tidesdb_iter_free(it);
     }
 
     tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
+    /* A catalog that could not be read whole yields no set, rather than one missing constraints
+       that would then go unenforced. */
+    if (tdb_iter_failed(lrc))
+    {
+        sql_print_error("[TIDESDB] could not read the foreign key catalog for '%s' (err=%d)",
+                        share->cf_name.c_str(), lrc);
+        return nullptr;
+    }
     return set;
 }
 
@@ -647,7 +691,8 @@ std::shared_ptr<const tdb_fk_set> ha_tidesdb::fk_current()
     std::shared_ptr<const tdb_fk_set> cur = std::atomic_load(&share->fk);
     if (cur && cur->gen == gen) return cur;
     std::shared_ptr<const tdb_fk_set> fresh = fk_build(gen);
-    std::atomic_store(&share->fk, fresh);
+    /* A failed build is not cached, so the next statement tries again; this one gets no set. */
+    if (fresh) std::atomic_store(&share->fk, fresh);
     return fresh;
 }
 
@@ -840,6 +885,45 @@ static bool fk_checks_off(THD *thd)
     return thd && thd_test_options(thd, OPTION_NO_FOREIGN_KEY_CHECKS);
 }
 
+/* Whether any key of cf begins with prefix, read through txn.  Returns 1 when one does, 0 when
+   none does, or the negative library code when the probe itself failed, which the caller must not
+   read as "no row", since that would let an orphan in or a referenced parent go. */
+static int fk_prefix_present(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
+                             const uchar *prefix, uint prefix_len)
+{
+    std::string hi((const char *)prefix, prefix_len);
+    hi.push_back((char)0xff);
+    tidesdb_iter_t *it = NULL;
+    int rc = tdb_iter_new_range_blocking(thd, txn, cf, prefix, prefix_len,
+                                         (const uint8_t *)hi.data(), hi.size(), &it);
+    if (rc != TDB_SUCCESS) return rc;
+    if (!it) return TDB_ERR_MEMORY;
+    rc = tdb_iter_seek_blocking(thd, it, prefix, prefix_len);
+    int found = 0;
+    while (!tdb_iter_failed(rc) && tidesdb_iter_valid(it))
+    {
+        uint8_t *k = NULL;
+        size_t ks = 0;
+        rc = tidesdb_iter_key(it, &k, &ks);
+        if (rc != TDB_SUCCESS)
+        {
+            if (rc == TDB_ERR_NOT_FOUND) rc = TDB_ERR_IO;
+            break;
+        }
+        const bool match = ks >= prefix_len && memcmp(k, prefix, prefix_len) == 0;
+        tidesdb_free(k);
+        if (match)
+        {
+            found = 1;
+            break;
+        }
+        rc = tidesdb_iter_next(it);
+    }
+    tidesdb_iter_free(it);
+    if (tdb_iter_failed(rc)) return rc;
+    return found;
+}
+
 int ha_tidesdb::fk_check_child(const uchar *new_row)
 {
     if (!share || fks().child.empty()) return 0;
@@ -881,7 +965,7 @@ int ha_tidesdb::fk_check_child(const uchar *new_row)
             if (!pcf) continue;
             uchar dk[DATA_KEY_BUF_LEN];
             uint dk_len = build_data_key(comp, comp_len, dk);
-            int rc = tidesdb_txn_contains(txn, pcf, dk, dk_len);
+            int rc = tdb_txn_contains_blocking(thd, txn, pcf, dk, dk_len);
             if (rc == TDB_SUCCESS)
                 present = true;
             else if (rc != TDB_ERR_NOT_FOUND)
@@ -895,28 +979,9 @@ int ha_tidesdb::fk_check_child(const uchar *new_row)
             std::string picf = d.parent_cf + CF_INDEX_INFIX + d.parent_index_name;
             tidesdb_column_family_t *pcf = tidesdb_get_column_family(tdb_global, picf.c_str());
             if (!pcf) continue;
-            std::string hi((const char *)comp, comp_len);
-            hi.push_back((char)0xff);
-            tidesdb_iter_t *it = NULL;
-            if (tidesdb_iter_new_range(txn, pcf, comp, comp_len, (const uint8_t *)hi.data(),
-                                       hi.size(), &it) == TDB_SUCCESS &&
-                it)
-            {
-                tidesdb_iter_seek(it, comp, comp_len);
-                while (tidesdb_iter_valid(it))
-                {
-                    uint8_t *k = NULL;
-                    size_t ks = 0;
-                    if (tidesdb_iter_key(it, &k, &ks) == TDB_SUCCESS)
-                    {
-                        if (ks >= comp_len && memcmp(k, comp, comp_len) == 0) present = true;
-                        tidesdb_free(k);
-                    }
-                    if (present) break;
-                    tidesdb_iter_next(it);
-                }
-                tidesdb_iter_free(it);
-            }
+            int prc = fk_prefix_present(thd, txn, pcf, comp, comp_len);
+            if (prc < 0) return tdb_rc_to_ha(prc, "fk_check_child");
+            present = prc > 0;
         }
 
         if (!present)
@@ -971,30 +1036,10 @@ int ha_tidesdb::fk_child_ref_exists(const tdb_fk_def &d, const uchar *old_row)
     tidesdb_column_family_t *icf = tidesdb_get_column_family(tdb_global, idx_cf_name.c_str());
     if (!icf) return 0;
 
-    std::string hi((const char *)comp, comp_len);
-    hi.push_back((char)0xff);
-    tidesdb_iter_t *it = NULL;
-    if (tidesdb_iter_new_range(txn, icf, comp, comp_len, (const uint8_t *)hi.data(), hi.size(),
-                               &it) != TDB_SUCCESS ||
-        !it)
-        return 0;
-    tidesdb_iter_seek(it, comp, comp_len);
-
-    bool referenced = false;
-    while (tidesdb_iter_valid(it))
-    {
-        uint8_t *k = NULL;
-        size_t ks = 0;
-        if (tidesdb_iter_key(it, &k, &ks) == TDB_SUCCESS)
-        {
-            if (ks >= comp_len && memcmp(k, comp, comp_len) == 0) referenced = true;
-            tidesdb_free(k);
-        }
-        if (referenced) break;
-        tidesdb_iter_next(it);
-    }
-    tidesdb_iter_free(it);
-    return referenced ? 1 : 0;
+    THD *thd = cached_thd_ ? cached_thd_ : ha_thd();
+    int prc = fk_prefix_present(thd, txn, icf, comp, comp_len);
+    if (prc < 0) return -tdb_rc_to_ha(prc, "fk_child_ref_exists");
+    return prc;
 }
 
 /* Find an already-open table by database and name in this statement's global

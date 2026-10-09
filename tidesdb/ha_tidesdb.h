@@ -484,6 +484,26 @@ class ha_tidesdb : public handler
     /* Scan / index-scan state (iterator lives on stmt_txn when available) */
     tidesdb_txn_t *scan_txn;
     tidesdb_iter_t *scan_iter;
+    /* The first real error a seek or step on scan_iter returned, kept until the iterator is
+       replaced.  A failed call leaves the iterator invalid, which every read would otherwise take
+       for the end of the data, so a scan cut short by an I/O error or descriptor pressure would
+       return too few rows with no error.  scan_end_rc reports it instead. */
+    int scan_iter_err_{0};
+    /* Position or step scan_iter, recording a real error in scan_iter_err_.  The seeks retry a
+       transient TDB_ERR_LOCKED, since a seek repositions from scratch; a step is not retried,
+       because a failed next or prev does not promise where it left the iterator. */
+    void scan_seek(const void *key, size_t len);
+    void scan_seek_for_prev(const void *key, size_t len);
+    void scan_seek_to_first();
+    void scan_seek_to_last();
+    void scan_next();
+    void scan_prev();
+    void scan_note(int rc);
+    /* Read scan_iter's current key or value, recording a failure like the seeks and steps do. */
+    int scan_key(uint8_t **key, size_t *key_size);
+    int scan_value(uint8_t **value, size_t *value_size);
+    /* The handler error a read that found no entry should return, eof unless scan_iter failed. */
+    int scan_end_rc(int eof);
     tidesdb_column_family_t *scan_cf_;      /* CF for lazy iterator creation */
     tidesdb_column_family_t *scan_iter_cf_; /* CF the cached scan_iter was created for */
     tidesdb_txn_t *scan_iter_txn_;          /* txn the cached scan_iter was created on */
@@ -806,13 +826,13 @@ class ha_tidesdb : public handler
     int maybe_bulk_commit(tidesdb_trx_t *trx);
 
     /* Recover hidden-PK counter by scanning the CF */
-    void recover_counters();
+    int recover_counters();
 
     /* When the auto-increment column is not the leftmost primary-key part, seed its counter from
        the last entry of the index whose first part is that column (that entry holds the maximum),
        so a restart does not restart the counter low and hand out colliding ids.  No-op otherwise.
      */
-    void recover_auto_inc_secondary();
+    int recover_auto_inc_secondary();
 
     /* Persist the CREATE/ALTER ... AUTO_INCREMENT=N start value (next_value) as a meta key in the
        given column family so an empty table's counter still begins at N after a restart, when there
@@ -824,7 +844,7 @@ class ha_tidesdb : public handler
     /* Read the persisted AUTO_INCREMENT=N start value under the txn and raise the counter to it
        when it exceeds the value already recovered from the rows.  No-op when the table has no
        auto-inc column or no meta key. */
-    void apply_auto_inc_start_meta(tidesdb_txn_t *txn);
+    int apply_auto_inc_start_meta(tidesdb_txn_t *txn);
 
     /* First-open share initialization, split from open() so each phase stays small.  These run once
        per share under lock_shared_ha_data(), populating the shared per-table metadata the hot paths
@@ -841,7 +861,7 @@ class ha_tidesdb : public handler
 
     /* build the per-index metadata: comparable key lengths, index-type flags, coverage bitmaps,
        resolved secondary column families, and the full-cost cache, then recover counters. */
-    void open_build_index_meta(const char *name);
+    int open_build_index_meta(const char *name);
 
     /* info() helpers, split so each stays small.  refresh recomputes the cached row-count, data
        size, and mean record length from the column-family stats behind a time-gated CAS; fill
@@ -1205,8 +1225,9 @@ class ha_tidesdb : public handler
        NULL part (which exempts a UNIQUE index).  returns the key length written to ik. */
     uint inplace_build_index_key(KEY *ki, my_ptrdiff_t ptdiff, uchar *ik, bool &row_has_null);
     /* commit the current index-build batch and reopen the scan cursor positioned just past the last
-       processed data key.  txn and iter are updated in place.  returns 0 to continue the scan, 1 to
-       abort the ALTER, or 2 to end the scan gracefully. */
+       processed data key.  txn and iter are updated in place.  returns 0 to continue the scan, or 1
+       to abort the ALTER, which any read failure does since a shortened scan would build a partial
+       index. */
     int inplace_batch_commit_reseek(tidesdb_txn_t *&txn, tidesdb_iter_t *&iter,
                                     const uchar *last_data_key, size_t last_data_key_len);
     /* scan the base table and populate every newly added secondary index, committing in batches.

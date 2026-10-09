@@ -80,12 +80,13 @@ int ha_tidesdb::rnd_init(bool scan)
             DBUG_RETURN(tdb_rc_to_ha(rc, "rnd_init txn_begin"));
         }
         scan_iter_cf_ = share->cf;
+        scan_iter_err_ = 0; /* a fresh iterator carries no failure */
         scan_iter_txn_ = scan_txn;
         scan_iter_txn_gen_ = cur_gen;
     }
 
     uint8_t data_prefix = KEY_NS_DATA;
-    tidesdb_iter_seek(scan_iter, &data_prefix, 1);
+    scan_seek(&data_prefix, 1);
 
     DBUG_RETURN(0);
 }
@@ -110,7 +111,7 @@ int ha_tidesdb::rnd_next(uchar *buf)
     /* We advance past the last-read entry.  on the first call after rnd_init
      * the iterator is already positioned at the first data key by the seek
      * in rnd_init, so we skip the advance (scan_dir_ == DIR_NONE). */
-    if (scan_dir_ != DIR_NONE) tidesdb_iter_next(scan_iter);
+    if (scan_dir_ != DIR_NONE) scan_next();
 
     int ret = iter_read_current(buf);
     if (ret == 0) scan_dir_ = DIR_FORWARD;
@@ -252,6 +253,7 @@ int ha_tidesdb::ensure_scan_iter()
     if (rc == TDB_SUCCESS)
     {
         scan_iter_cf_ = scan_cf_;
+        scan_iter_err_ = 0; /* a fresh iterator carries no failure */
         scan_iter_txn_ = scan_txn;
         scan_iter_txn_gen_ = cached_trx_ ? cached_trx_->txn_generation : 0;
         scan_iter_last_err_ = 0;
@@ -349,12 +351,12 @@ int ha_tidesdb::spatial_scan_next(uchar *buf)
 
             uint8_t *ik = NULL;
             size_t iks = 0;
-            if (tidesdb_iter_key(scan_iter, &ik, &iks) != TDB_SUCCESS) break;
+            if (scan_key(&ik, &iks) != TDB_SUCCESS) break;
             tdb_owned_buf ik_g(ik);
 
             if (iks <= SPATIAL_HILBERT_KEY_LEN)
             {
-                tidesdb_iter_next(scan_iter);
+                scan_next();
                 continue;
             }
 
@@ -363,10 +365,9 @@ int ha_tidesdb::spatial_scan_next(uchar *buf)
 
             uint8_t *val = NULL;
             size_t vlen = 0;
-            if (tidesdb_iter_value(scan_iter, &val, &vlen) != TDB_SUCCESS ||
-                vlen < SPATIAL_MBR_VALUE_LEN)
+            if (scan_value(&val, &vlen) != TDB_SUCCESS || vlen < SPATIAL_MBR_VALUE_LEN)
             {
-                tidesdb_iter_next(scan_iter);
+                scan_next();
                 continue;
             }
             tdb_owned_buf val_g(val);
@@ -391,7 +392,7 @@ int ha_tidesdb::spatial_scan_next(uchar *buf)
             /* We apply MBR predicate */
             if (!spatial_mbr_predicate(spatial_mode_, &query_mbr, &entry_mbr))
             {
-                tidesdb_iter_next(scan_iter);
+                scan_next();
                 continue;
             }
 
@@ -402,7 +403,7 @@ int ha_tidesdb::spatial_scan_next(uchar *buf)
             int ret = fetch_row_by_pk(scan_txn, pk, pk_len, buf);
             if (ret == HA_ERR_KEY_NOT_FOUND)
             {
-                tidesdb_iter_next(scan_iter);
+                scan_next();
                 continue;
             }
             if (ret)
@@ -422,7 +423,7 @@ int ha_tidesdb::spatial_scan_next(uchar *buf)
         {
             uchar seek_key[SPATIAL_HILBERT_KEY_LEN];
             encode_hilbert_be(spatial_ranges_[spatial_range_idx_].first, seek_key);
-            tidesdb_iter_seek(scan_iter, seek_key, SPATIAL_HILBERT_KEY_LEN);
+            scan_seek(seek_key, SPATIAL_HILBERT_KEY_LEN);
         }
     }
 
@@ -440,5 +441,5 @@ int ha_tidesdb::spatial_scan_next(uchar *buf)
         }
     }
     table->status = STATUS_NOT_FOUND;
-    DBUG_RETURN(HA_ERR_END_OF_FILE);
+    DBUG_RETURN(scan_end_rc(HA_ERR_END_OF_FILE));
 }
