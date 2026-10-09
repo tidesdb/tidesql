@@ -462,7 +462,13 @@ FT_INFO *ha_tidesdb::ft_init_ext(uint flags, uint inx, String *key)
     if (query_terms.empty()) DBUG_RETURN(reinterpret_cast<FT_INFO *>(ft_new_info(this, inx)));
 
     int64_t total_docs = 0, total_words = 0;
-    fts_load_meta(stmt_txn, share->cf, inx, &total_docs, &total_words);
+    int mrc = fts_load_meta(stmt_txn, share->cf, inx, &total_docs, &total_words);
+    if (mrc != TDB_SUCCESS && mrc != TDB_ERR_NOT_FOUND)
+    {
+        /* Ranking without the index's document counts would score every match wrongly. */
+        print_error(tdb_rc_to_ha(mrc, "ft_init_ext meta"), MYF(0));
+        DBUG_RETURN(NULL);
+    }
     double avgdl = tidesdb::fts_score::avgdl(total_words, total_docs);
     if (total_docs == 0) total_docs = BM25_MIN_TOTAL_DOCS; /* avoid division by zero */
     /* We precompute 1/avgdl so the per-posting BM25 loop multiplies instead of

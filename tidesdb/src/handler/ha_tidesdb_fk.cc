@@ -473,9 +473,9 @@ int ha_tidesdb::fk_persist_defs(const char *path, TABLE *table_arg, HA_CREATE_IN
     if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return HA_ERR_GENERIC;
     for (auto &r : records)
     {
-        if (tidesdb_txn_put(txn, cf, (const uint8_t *)r.first.data(), r.first.size(),
-                            (const uint8_t *)r.second.data(), r.second.size(),
-                            TIDESDB_TTL_NONE) != TDB_SUCCESS)
+        if (tdb_txn_put_blocking(thd, txn, cf, (const uint8_t *)r.first.data(), r.first.size(),
+                                 (const uint8_t *)r.second.data(), r.second.size(),
+                                 TIDESDB_TTL_NONE) != TDB_SUCCESS)
         {
             tidesdb_txn_rollback(txn);
             tidesdb_txn_free(txn);
@@ -541,9 +541,21 @@ int ha_tidesdb::fk_purge_catalog(const char *child_cf_name)
         return 0;
     }
 
-    for (auto &k : to_delete) tidesdb_txn_delete(txn, cf, (const uint8_t *)k.data(), k.size());
-
-    if (tidesdb_txn_commit(txn) != TDB_SUCCESS) tidesdb_txn_rollback(txn);
+    int drc = TDB_SUCCESS;
+    for (auto &k : to_delete)
+    {
+        drc = tdb_txn_delete_cf_blocking(thd, txn, cf, (const uint8_t *)k.data(), k.size(), false);
+        if (drc != TDB_SUCCESS) break;
+    }
+    if (drc == TDB_SUCCESS) drc = tidesdb_txn_commit(txn);
+    if (drc != TDB_SUCCESS)
+    {
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        sql_print_warning("[TIDESDB] could not purge the foreign key catalog of '%s' (err=%d)",
+                          child_cf_name, drc);
+        return 0;
+    }
     tidesdb_txn_free(txn);
     if (!to_delete.empty()) tdb_fk_catalog_gen.fetch_add(1, std::memory_order_release);
     return 0;
@@ -953,7 +965,7 @@ int ha_tidesdb::fk_check_child(const uchar *new_row)
             if (!pcf) continue;
             uchar dk[DATA_KEY_BUF_LEN];
             uint dk_len = build_data_key(comp, comp_len, dk);
-            int rc = tidesdb_txn_contains(txn, pcf, dk, dk_len);
+            int rc = tdb_txn_contains_blocking(thd, txn, pcf, dk, dk_len);
             if (rc == TDB_SUCCESS)
                 present = true;
             else if (rc != TDB_ERR_NOT_FOUND)

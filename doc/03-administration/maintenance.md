@@ -31,7 +31,8 @@ figures are database-level in TidesDB 10 and appear in `SHOW ENGINE TIDESDB STAT
 CF. Below the summary come the average key and value sizes and a per-level breakdown of SSTable
 count, size, and keys. Each secondary index then gets a line with its column family's key count,
 data size, and levels, and each non-unique index a line with the entries sampled (up to 100,000),
-the distinct index prefixes seen, and the resulting `rec_per_key`.
+the distinct index prefixes seen, and the resulting `rec_per_key`. An index whose sample hits a read
+error keeps the statistics it had and gets a `could not sample index` note instead.
 
 When a column family holds B+tree nodes, an extra note reports the tree shape:
 

@@ -1033,9 +1033,14 @@ int ha_tidesdb::end_bulk_delete()
                     cached_thd_, txn, share->cf, (const uchar *)bulk_delete_min_pk_.data(),
                     (uint)bulk_delete_min_pk_.size(), hi, hi_len, &range_live) == TDB_SUCCESS &&
                 range_live == bulk_delete_keys_.size() &&
-                tidesdb_txn_delete_range(txn, share->cf,
+                tdb_retry_locked(cached_thd_,
+                                 [&]
+                                 {
+                                     return tidesdb_txn_delete_range(
+                                         txn, share->cf,
                                          (const uint8_t *)bulk_delete_min_pk_.data(),
-                                         bulk_delete_min_pk_.size(), hi, hi_len) == TDB_SUCCESS)
+                                         bulk_delete_min_pk_.size(), hi, hi_len);
+                                 }) == TDB_SUCCESS)
             {
                 did_range_tombstone = true;
                 ranged = true;

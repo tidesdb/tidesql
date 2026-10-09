@@ -397,9 +397,9 @@ static int tidesdb_wsrep_set_checkpoint(handlerton *, const XID *xid)
 
     tidesdb_txn_t *txn = nullptr;
     if (tidesdb_txn_begin(tdb_global, &txn) != TDB_SUCCESS) return 1;
-    int rc = tidesdb_txn_put(txn, cf, (const uint8_t *)WSREP_POSITION_KEY,
-                             sizeof(WSREP_POSITION_KEY) - 1, (const uint8_t *)blob.data(),
-                             blob.size(), TIDESDB_TTL_NONE);
+    int rc = tdb_txn_put_blocking(current_thd, txn, cf, (const uint8_t *)WSREP_POSITION_KEY,
+                                  sizeof(WSREP_POSITION_KEY) - 1, (const uint8_t *)blob.data(),
+                                  blob.size(), TIDESDB_TTL_NONE);
     if (rc != TDB_SUCCESS)
     {
         tidesdb_txn_rollback(txn);
@@ -427,8 +427,8 @@ static int tidesdb_wsrep_get_checkpoint(handlerton *, XID *xid)
 
     uint8_t *val = nullptr;
     size_t val_len = 0;
-    int rc = tidesdb_txn_get_notrack(txn, cf, (const uint8_t *)WSREP_POSITION_KEY,
-                                     sizeof(WSREP_POSITION_KEY) - 1, &val, &val_len);
+    int rc = tdb_txn_get_notrack_blocking(current_thd, txn, cf, (const uint8_t *)WSREP_POSITION_KEY,
+                                          sizeof(WSREP_POSITION_KEY) - 1, &val, &val_len);
     if (rc == TDB_SUCCESS && val && val_len >= 24)
     {
         long formatID = (long)get_i64(val);

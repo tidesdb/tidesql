@@ -78,7 +78,7 @@ int fts_load_meta(tidesdb_txn_t *txn, tidesdb_column_family_t *data_cf, uint key
     *total_docs = 0;
     *total_words = 0;
 
-    int rc = tidesdb_txn_get(txn, data_cf, mk, FTS_META_KEY_LEN, &val, &vlen);
+    int rc = tdb_txn_get_blocking(current_thd, txn, data_cf, mk, FTS_META_KEY_LEN, &val, &vlen);
     if (rc == TDB_SUCCESS && tidesdb::fts::decode_meta_value(val, vlen, total_docs, total_words))
     {
         tidesdb_free(val);

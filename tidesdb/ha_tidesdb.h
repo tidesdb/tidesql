@@ -844,7 +844,7 @@ class ha_tidesdb : public handler
     /* Read the persisted AUTO_INCREMENT=N start value under the txn and raise the counter to it
        when it exceeds the value already recovered from the rows.  No-op when the table has no
        auto-inc column or no meta key. */
-    void apply_auto_inc_start_meta(tidesdb_txn_t *txn);
+    int apply_auto_inc_start_meta(tidesdb_txn_t *txn);
 
     /* First-open share initialization, split from open() so each phase stays small.  These run once
        per share under lock_shared_ha_data(), populating the shared per-table metadata the hot paths

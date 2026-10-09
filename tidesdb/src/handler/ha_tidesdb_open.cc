@@ -239,33 +239,52 @@ int ha_tidesdb::recover_counters()
         tidesdb_txn_free(txn);
         return arc;
     }
-    apply_auto_inc_start_meta(txn);
+    int mrc = apply_auto_inc_start_meta(txn);
 
-    /* A table a session TTL has written to keeps refreshing its index entries on update. */
-    if (!share->has_ttl && tidesdb_txn_contains(txn, share->cf, SESSION_TTL_META_KEY,
-                                                SESSION_TTL_META_KEY_LEN) == TDB_SUCCESS)
-        share->session_ttl_seen.store(true, std::memory_order_relaxed);
+    /* A table a session TTL has written to keeps refreshing its index entries on update.  Like the
+       counters, a marker that cannot be read fails the open, since reading it as absent would let
+       index entries expire before their rows. */
+    if (mrc == TDB_SUCCESS && !share->has_ttl)
+    {
+        mrc = tdb_txn_contains_blocking(ha_thd(), txn, share->cf, SESSION_TTL_META_KEY,
+                                        SESSION_TTL_META_KEY_LEN);
+        if (mrc == TDB_SUCCESS)
+            share->session_ttl_seen.store(true, std::memory_order_relaxed);
+        else if (mrc == TDB_ERR_NOT_FOUND)
+            mrc = TDB_SUCCESS;
+    }
+    if (mrc != TDB_SUCCESS)
+    {
+        tidesdb_txn_rollback(txn);
+        tidesdb_txn_free(txn);
+        sql_print_error("[TIDESDB] could not read the metadata of '%s' (err=%d)",
+                        share->cf_name.c_str(), mrc);
+        return tdb_rc_to_ha(mrc, "recover_counters meta");
+    }
 
     tidesdb_txn_rollback(txn);
     tidesdb_txn_free(txn);
     return 0;
 }
 
-void ha_tidesdb::apply_auto_inc_start_meta(tidesdb_txn_t *txn)
+int ha_tidesdb::apply_auto_inc_start_meta(tidesdb_txn_t *txn)
 {
-    if (!table->found_next_number_field) return;
+    if (!table->found_next_number_field) return TDB_SUCCESS;
 
     uint8_t *mv = NULL;
     size_t mvlen = 0;
-    if (tidesdb_txn_get(txn, share->cf, AUTOINC_META_KEY, AUTOINC_META_KEY_LEN, &mv, &mvlen) !=
-            TDB_SUCCESS ||
-        mvlen != AUTOINC_META_VALUE_LEN)
-        return;
+    int rc = tdb_txn_get_blocking(ha_thd(), txn, share->cf, AUTOINC_META_KEY, AUTOINC_META_KEY_LEN,
+                                  &mv, &mvlen);
+    if (rc == TDB_ERR_NOT_FOUND) return TDB_SUCCESS; /* no start value was ever set */
+    if (rc != TDB_SUCCESS) return rc;
+    tdb_owned_buf mv_g(mv);
+    if (mvlen != AUTOINC_META_VALUE_LEN) return TDB_SUCCESS;
 
     uint64_t start = decode_be64(mv);
     ulonglong cur = share->auto_inc_val.load(std::memory_order_relaxed);
     if (start > 1 && start - 1 > cur)
         share->auto_inc_val.store(start - 1, std::memory_order_relaxed);
+    return TDB_SUCCESS;
 }
 
 int ha_tidesdb::note_session_ttl_row()
@@ -302,11 +321,16 @@ void ha_tidesdb::write_auto_inc_meta(tidesdb_column_family_t *cf, ulonglong next
 
     uint8_t mv[AUTOINC_META_VALUE_LEN];
     encode_be64((uint64_t)next_value, mv);
-    if (tidesdb_txn_put(txn, cf, AUTOINC_META_KEY, AUTOINC_META_KEY_LEN, mv, AUTOINC_META_VALUE_LEN,
-                        TIDESDB_TTL_NONE) == TDB_SUCCESS)
-        tidesdb_txn_commit(txn);
-    else
+    int rc = tdb_txn_put_blocking(current_thd, txn, cf, AUTOINC_META_KEY, AUTOINC_META_KEY_LEN, mv,
+                                  AUTOINC_META_VALUE_LEN, TIDESDB_TTL_NONE);
+    if (rc == TDB_SUCCESS) rc = tidesdb_txn_commit(txn);
+    if (rc != TDB_SUCCESS)
+    {
+        /* The table keeps working, but the raised start value will not survive a restart. */
         tidesdb_txn_rollback(txn);
+        sql_print_warning(
+            "[TIDESDB] could not persist the AUTO_INCREMENT start of a table (err=%d)", rc);
+    }
     tidesdb_txn_free(txn);
 }
 

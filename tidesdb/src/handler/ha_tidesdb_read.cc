@@ -254,7 +254,7 @@ int ha_tidesdb::iter_read_current(uchar *buf)
 int ha_tidesdb::probe_pk_exists(tidesdb_trx_t *trx, const uchar *dk, uint dk_len)
 {
     tidesdb_txn_t *probe_txn = (trx && trx->txn) ? trx->txn : stmt_txn;
-    int g = tidesdb_txn_contains(probe_txn, share->cf, dk, dk_len);
+    int g = tdb_txn_contains_blocking(cached_thd_, probe_txn, share->cf, dk, dk_len);
     if (g == TDB_SUCCESS) return 1;
     if (g == TDB_ERR_NOT_FOUND) return 0;
     return -tdb_rc_to_ha(g, "probe_pk_exists contains");

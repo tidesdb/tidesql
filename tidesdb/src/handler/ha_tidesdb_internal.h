@@ -145,7 +145,11 @@ static inline void tdb_unique_sentinel_purge(const std::string &cf_name)
             TDB_SUCCESS ||
         !txn)
         return;
-    int rc = tidesdb_txn_delete_prefix(txn, ucf, (const uint8_t *)prefix.data(), prefix.size());
+    int rc = tdb_retry_locked(current_thd,
+                              [&] {
+                                  return tidesdb_txn_delete_prefix(
+                                      txn, ucf, (const uint8_t *)prefix.data(), prefix.size());
+                              });
     if (rc == TDB_SUCCESS) rc = tidesdb_txn_commit(txn);
     if (rc != TDB_SUCCESS)
     {
@@ -196,6 +200,21 @@ static inline int tdb_txn_put_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_col
 {
     return tdb_retry_locked(
         thd, [&] { return tidesdb_txn_put(txn, cf, key, key_size, value, value_size, ttl); });
+}
+
+static inline int tdb_txn_contains_blocking(THD *thd, tidesdb_txn_t *txn,
+                                            tidesdb_column_family_t *cf, const uint8_t *key,
+                                            size_t key_size)
+{
+    return tdb_retry_locked(thd, [&] { return tidesdb_txn_contains(txn, cf, key, key_size); });
+}
+
+static inline int tdb_txn_get_notrack_blocking(THD *thd, tidesdb_txn_t *txn,
+                                               tidesdb_column_family_t *cf, const uint8_t *key,
+                                               size_t key_size, uint8_t **value, size_t *value_size)
+{
+    return tdb_retry_locked(
+        thd, [&] { return tidesdb_txn_get_notrack(txn, cf, key, key_size, value, value_size); });
 }
 
 static inline int tdb_txn_commit_blocking(THD *thd, tidesdb_txn_t *txn)

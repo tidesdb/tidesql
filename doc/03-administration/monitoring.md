@@ -124,7 +124,8 @@ Errors raised inside a statement are counted by cause instead. `Tidesdb_stmt_con
 write-write conflicts, which reach the client as a deadlock (1213). `Tidesdb_stmt_bf_aborted` counts
 local transactions a Galera applier aborted, also a deadlock. `Tidesdb_stmt_locked` counts transient
 library contention that reached a statement, after the engine has retried a locked read, write,
-delete, or iterator open up to 16 times with a short growing backoff (a commit is never retried).
+delete, iterator open, or iterator seek up to 16 times with a short growing backoff (a commit, and an
+iterator step, is never retried).
 `Tidesdb_stmt_memory_limit` counts memtable backpressure that outlasted the library's admission
 policy, and `Tidesdb_stmt_txn_expired` counts transactions that outlived their timeout. All three
 reach the client as a lock wait timeout (1205). A rising `stmt_conflicts` or `commit_conflicts` is
