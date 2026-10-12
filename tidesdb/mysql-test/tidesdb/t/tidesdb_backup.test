@@ -31,7 +31,8 @@ eval SET GLOBAL tidesdb_backup_dir = '$backup_dir';
 --enable_query_log
 
 --echo # Backup should have created the directory
---exec test -d $backup_dir && echo "Backup directory exists: YES" || echo "Backup directory exists: NO"
+--file_exists $backup_dir
+--echo Backup directory exists: YES
 
 --echo # Check that SHOW VARIABLES reflects the backup path
 --replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR

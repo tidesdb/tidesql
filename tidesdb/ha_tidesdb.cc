@@ -910,13 +910,17 @@ static int tidesdb_init_func(void *p)
     if (srv_data_home_dir && srv_data_home_dir[0])
     {
         tdb_path = srv_data_home_dir;
-        while (!tdb_path.empty() && tdb_path.back() == '/') tdb_path.pop_back();
+        while (!tdb_path.empty() && (tdb_path.back() == '/' || tdb_path.back() == FN_LIBCHAR))
+            tdb_path.pop_back();
     }
     else
     {
+        /* The data home ends in the platform separator, a backslash on Windows, so both are
+           trimmed and searched for, or the store would land inside the data directory there. */
         std::string data_home(mysql_real_data_home);
-        while (!data_home.empty() && data_home.back() == '/') data_home.pop_back();
-        size_t slash_pos = data_home.rfind('/');
+        while (!data_home.empty() && (data_home.back() == '/' || data_home.back() == FN_LIBCHAR))
+            data_home.pop_back();
+        size_t slash_pos = data_home.find_last_of("/\\");
         if (slash_pos != std::string::npos)
             tdb_path = data_home.substr(0, slash_pos + 1) + "tidesdb_data";
         else

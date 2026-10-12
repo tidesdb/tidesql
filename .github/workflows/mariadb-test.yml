@@ -10,9 +10,11 @@ on:
 # Pinned build versions, the single place to move from one release to the next.
 # TideSQL plugin 5.2.0 targets TidesDB library v10.2.0 on MariaDB 13.  Bump these
 # two constants together to retarget the whole matrix.  TIDESDB_VERSION is a tag
-# on tidesdb/tidesdb, MARIADB_VERSION a tag on MariaDB/server.
+# on tidesdb/tidesdb, or a pull request head such as pull/698/head to test an
+# unreleased library fix, and MARIADB_VERSION a tag on MariaDB/server.
 env:
-  TIDESDB_VERSION: "v10.2.0"
+  # Temporarily the Windows unload fix in tidesdb/tidesdb#698, back to a release tag once it ships.
+  TIDESDB_VERSION: "pull/698/head"
   MARIADB_VERSION: "mariadb-13.0.1"
 
 jobs:
@@ -182,7 +184,9 @@ jobs:
       run: |
         rm -rf tidesdb-lib
         for i in 1 2 3; do
-          if git clone --depth 1 --branch "$TIDESDB_VERSION" https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+          if git init -q tidesdb-lib &&
+             git -C tidesdb-lib fetch --depth 1 https://github.com/tidesdb/tidesdb.git "$TIDESDB_VERSION" &&
+             git -C tidesdb-lib checkout -q FETCH_HEAD; then
             break
           fi
           echo "Clone failed (attempt $i), retrying in 10s..."
@@ -205,7 +209,9 @@ jobs:
         
         rm -rf tidesdb-lib
         for i in 1 2 3; do
-          if git clone --depth 1 --branch "$TIDESDB_VERSION" https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+          if git init -q tidesdb-lib &&
+             git -C tidesdb-lib fetch --depth 1 https://github.com/tidesdb/tidesdb.git "$TIDESDB_VERSION" &&
+             git -C tidesdb-lib checkout -q FETCH_HEAD; then
             break
           fi
           echo "Clone failed (attempt $i), retrying in 10s..."
@@ -226,7 +232,9 @@ jobs:
       run: |
         rm -rf tidesdb-lib
         for i in 1 2 3; do
-          if git clone --depth 1 --branch "$TIDESDB_VERSION" https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+          if git init -q tidesdb-lib &&
+             git -C tidesdb-lib fetch --depth 1 https://github.com/tidesdb/tidesdb.git "$TIDESDB_VERSION" &&
+             git -C tidesdb-lib checkout -q FETCH_HEAD; then
             break
           fi
           echo "Clone failed (attempt $i), retrying in 10s..."

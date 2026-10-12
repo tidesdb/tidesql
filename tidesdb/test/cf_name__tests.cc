@@ -36,6 +36,23 @@ void test_split_datadir_prefix_and_leading_slash(void)
     ASSERT_TRUE(b.has_dir && b.db.empty() && b.table == "foo");
 }
 
+void test_split_windows_separators(void)
+{
+    /* the windows server joins a table path with backslashes, and it has to name the same
+     * column family the forward-slash path does, or a lookup built from "./db/table" misses it. */
+    table_path a = split_table_path(".\\test\\foo");
+    ASSERT_TRUE(a.has_dir && a.db == "test" && a.table == "foo");
+
+    table_path b = split_table_path("D:\\data\\test\\foo");
+    ASSERT_TRUE(b.has_dir && b.db == "test" && b.table == "foo");
+
+    table_path c = split_table_path(".\\test/foo");
+    ASSERT_TRUE(c.has_dir && c.db == "test" && c.table == "foo");
+
+    ASSERT_TRUE(to_cf_name(".\\test\\foo") == to_cf_name("./test/foo"));
+    ASSERT_TRUE(to_cf_name(".\\test\\#sql-1_2") == "test___sql-1_2");
+}
+
 void test_split_no_directory(void)
 {
     table_path a = split_table_path("foo");
@@ -57,6 +74,7 @@ int main(int argc, char **argv)
 
     RUN_TEST(test_split_relative_and_plain, tests_passed);
     RUN_TEST(test_split_datadir_prefix_and_leading_slash, tests_passed);
+    RUN_TEST(test_split_windows_separators, tests_passed);
     RUN_TEST(test_split_no_directory, tests_passed);
     RUN_TEST(test_cf_name_basic_and_temp, tests_passed);
 

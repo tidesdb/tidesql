@@ -24,9 +24,13 @@ namespace tidesdb
 namespace cf_name
 {
 
-/* a table path arrives relative, as "./db/table". */
+/* a table path arrives relative, as "./db/table", and on windows the server joins it with a
+ * backslash, as ".\db\table".  the server encodes both separators inside a database or table
+ * file name, so a path splits the same way on every platform. */
 static constexpr const char REL_PATH_PREFIX[] = "./";
+static constexpr const char REL_PATH_PREFIX_WIN[] = ".\\";
 static constexpr size_t REL_PATH_PREFIX_LEN = 2;
+static constexpr const char PATH_SEPARATORS[] = "/\\";
 
 /* a column-family name joins the database and table with this infix. */
 static constexpr const char DB_TABLE_SEP[] = "__";
@@ -54,9 +58,9 @@ struct table_path
 /**
  * split_table_path
  * parse a server table path into its database and table, stripping the relative prefix
- * @param path the server path, such as "./db/table"
+ * @param path the server path, such as "./db/table" or ".\db\table"
  * @return the parsed components, with has_dir false and table set to the whole remainder when
- *         the path holds no slash
+ *         the path holds no separator
  */
 table_path split_table_path(const char *path);
 
