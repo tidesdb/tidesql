@@ -1,4 +1,7 @@
 --source include/have_tidesdb.inc
+# The workers are client processes run from a bash loop over the server socket, which Windows has
+# neither of.
+--source include/not_windows.inc
 
 #
 # Concurrent same-row update test for TidesDB optimistic MVCC.
