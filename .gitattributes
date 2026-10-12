@@ -1,9 +1,11 @@
 * text=auto
-mysql-test/**/*.result text eol=lf
-mysql-test/**/*.test text eol=lf
-mysql-test/**/*.inc text eol=lf
-mysql-test/**/*.opt text eol=lf
-mysql-test/**/*.require text eol=lf
+**/mysql-test/**/*.result text eol=lf
+**/mysql-test/**/*.test text eol=lf
+**/mysql-test/**/*.inc text eol=lf
+**/mysql-test/**/*.opt text eol=lf
+**/mysql-test/**/*.cnf text eol=lf
+**/mysql-test/**/*.pm text eol=lf
+**/mysql-test/**/*.require text eol=lf
 *.c text eol=lf
 *.cc text eol=lf
 *.cpp text eol=lf
