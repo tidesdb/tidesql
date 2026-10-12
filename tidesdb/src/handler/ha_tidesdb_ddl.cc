@@ -339,7 +339,8 @@ int ha_tidesdb::inplace_add_row_entries(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
                                         const uint8_t *val_data, size_t val_size,
                                         tidesdb_txn_t *txn,
                                         std::vector<std::unordered_set<std::string>> &idx_seen,
-                                        const std::vector<bool> &idx_is_unique, uint &fail_key_num)
+                                        const std::vector<bool> &idx_is_unique, uint &fail_key_num,
+                                        time_t row_ttl)
 {
     const uchar *pk = key_data + KEY_NAMESPACE_LEN;
     uint pk_len = (uint)(key_size - KEY_NAMESPACE_LEN);
@@ -392,8 +393,9 @@ int ha_tidesdb::inplace_add_row_entries(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
         memcpy(ik + pos, pk, pk_len);
         pos += pk_len;
 
+        /* The entry expires with its row, as one written by an insert does. */
         int rc = tdb_txn_put_blocking(ha_thd(), txn, ctx->add_cfs[a], ik, pos, &tdb_empty_val,
-                                      sizeof(tdb_empty_val), TIDESDB_TTL_NONE);
+                                      sizeof(tdb_empty_val), row_ttl);
         if (rc != TDB_SUCCESS)
         {
             /* A per-row put failure leaves a hole in the new index, which
@@ -579,6 +581,12 @@ bool ha_tidesdb::inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
             return inplace_abort_build(iter, txn, altered_table, old_map);
         }
         tdb_owned_buf key_data_g(key_data), val_data_g(val_data);
+        time_t row_expiry = -1;
+        if (tidesdb_iter_ttl(iter, &row_expiry) != TDB_SUCCESS)
+        {
+            my_error(ER_INTERNAL_ERROR, MYF(0), "[TIDESDB] a table read failed during index build");
+            return inplace_abort_build(iter, txn, altered_table, old_map);
+        }
 
         if (key_size < KEY_NAMESPACE_LEN || key_data[0] != KEY_NS_DATA)
         {
@@ -599,7 +607,8 @@ bool ha_tidesdb::inplace_scan_and_build(ha_tidesdb_inplace_ctx *ctx, TABLE *alte
 
         uint fail_key_num = 0;
         int prc = inplace_add_row_entries(ctx, altered_table, key_data, key_size, val_data,
-                                          val_size, txn, idx_seen, idx_is_unique, fail_key_num);
+                                          val_size, txn, idx_seen, idx_is_unique, fail_key_num,
+                                          tdb_ttl_from_expiry(row_expiry));
         if (prc != 0)
         {
             if (prc == 1)

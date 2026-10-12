@@ -18,13 +18,14 @@ The backup flushes the memtable, holds off compaction and value-log reclaim whil
 manifest, the value log, and every SSTable the manifest references, and syncs those files first. It
 takes no lock that writers wait on, so reads and writes continue while it runs. The directory is
 created if it does not exist, though only the last path component is created, so its parent must
-already exist. A backup into a directory that already holds an earlier one succeeds, but files the
-earlier run left there are not removed, so use a new or empty directory each time. The same applies
-to `tidesdb_checkpoint_dir` below. The engine rolls back and frees the calling connection's own open
-transaction before starting, so run the backup from a connection with no uncommitted work. After it
-completes, the variable reflects the path of the last successful backup. If the memtable cannot
-drain, or a compaction or value-log reclaim does not release in time, the statement fails with an
-error and the variable keeps its previous value. Clear it with an empty string:
+already exist. The directory must be new or empty. One that already holds files, such as an earlier
+backup, is refused before anything is flushed or copied, so a backup never mixes with another, and
+the statement fails naming the directory. The same applies to `tidesdb_checkpoint_dir` below. The
+engine rolls back and frees the calling connection's own open transaction before starting, so run
+the backup from a connection with no uncommitted work. After it completes, the variable reflects the
+path of the last successful backup. If the memtable cannot drain, or a compaction or value-log
+reclaim does not release in time, the statement fails with an error and the variable keeps its
+previous value. Clear it with an empty string:
 
 ```sql
 SET GLOBAL tidesdb_backup_dir = '';

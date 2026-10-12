@@ -78,6 +78,18 @@ int ha_tidesdb::fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len
     memcpy(current_pk_buf_, pk, pk_len);
     current_pk_len_ = pk_len;
 
+    /* An ALTER TABLE copy hands the row's expiry to the write that copies it. */
+    if (unlikely(stmt_is_table_copy()))
+    {
+        time_t expiry = -1;
+        int trc = tdb_retry_locked(
+            cached_thd_, [&] { return tidesdb_txn_get_ttl(txn, share->cf, dk, dk_len, &expiry); });
+        if (trc != TDB_SUCCESS)
+            return tdb_rc_to_ha(trc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : trc, "fetch_row_by_pk ttl");
+        cached_trx_->copy_row_expiry = expiry;
+        cached_trx_->copy_row_expiry_set = true;
+    }
+
     return 0;
 }
 
@@ -132,6 +144,11 @@ time_t ha_tidesdb::compute_row_ttl(const uchar *buf)
 }
 
 /* ******************** iter_read_current ******************** */
+
+bool ha_tidesdb::stmt_is_table_copy() const
+{
+    return cached_stmt_shape_valid_ && cached_sql_cmd_ == SQLCOM_ALTER_TABLE && cached_trx_;
+}
 
 void ha_tidesdb::scan_note(int rc)
 {
@@ -230,6 +247,20 @@ int ha_tidesdb::iter_read_current(uchar *buf)
             std::string &backing = is_rec1 ? last_row2 : last_row;
             backing.assign((const char *)value, value_size);
             if (int drc = deserialize_row(buf, backing)) return drc;
+        }
+        /* An ALTER TABLE copy hands the row's expiry to the write that copies it; the iterator
+           already holds it, so this costs no lookup. */
+        if (unlikely(stmt_is_table_copy()))
+        {
+            time_t expiry = -1;
+            int trc = tidesdb_iter_ttl(scan_iter, &expiry);
+            if (trc != TDB_SUCCESS)
+            {
+                scan_note(trc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : trc);
+                return scan_end_rc(HA_ERR_END_OF_FILE);
+            }
+            cached_trx_->copy_row_expiry = expiry;
+            cached_trx_->copy_row_expiry_set = true;
         }
         return 0;
     }

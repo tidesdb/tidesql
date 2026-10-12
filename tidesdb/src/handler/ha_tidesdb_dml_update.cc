@@ -170,8 +170,7 @@ int ha_tidesdb::update_fts_index(uint i, const uchar *old_data, const uchar *new
        refreshed on every update, so both rewrite the entries. */
     /* A table that can carry expiries rewrites unchanged entries too, so each takes the row's new
        deadline, or loses its old one when the update leaves the row with none. */
-    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0 ||
-                             share->session_ttl_seen.load(std::memory_order_relaxed);
+    const bool ttl_refresh = upd_ttl_refresh_;
     bool fts_changed = false;
     for (uint p = 0; p < ki->user_defined_key_parts; p++)
     {
@@ -300,8 +299,7 @@ int ha_tidesdb::update_spatial_index(uint i, const uchar *old_data, const uchar 
     const bool geom_changed = bitmap_is_set(table->write_set, fieldnr);
     /* A table that can carry expiries rewrites unchanged entries too, so each takes the row's new
        deadline, or loses its old one when the update leaves the row with none. */
-    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0 ||
-                             share->session_ttl_seen.load(std::memory_order_relaxed);
+    const bool ttl_refresh = upd_ttl_refresh_;
     if (!geom_changed && !pk_changed && !ttl_refresh) return TDB_SUCCESS;
     /* With the geometry and PK unchanged the entry keeps its key, and it is only rewritten. */
     const bool same_entry = !geom_changed && !pk_changed;
@@ -367,8 +365,7 @@ int ha_tidesdb::update_regular_index(uint i, const uchar *old_data, const uchar 
        updates that touch only unrelated columns. */
     /* A table that can carry expiries rewrites unchanged entries too, so each takes the row's new
        deadline, or loses its old one when the update leaves the row with none. */
-    const bool ttl_refresh = share->has_ttl || cached_sess_ttl_ > 0 ||
-                             share->session_ttl_seen.load(std::memory_order_relaxed);
+    const bool ttl_refresh = upd_ttl_refresh_;
     if (!pk_changed && !ttl_refresh)
     {
         bool idx_changed = false;
@@ -504,6 +501,28 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
             tmp_restore_column_map(&table->read_set, old_map);
             DBUG_RETURN(nrc);
         }
+    }
+
+    /* Whether the row's unchanged index entries must be rewritten so they carry its new expiry,
+       or lose an old one.  A table with a TTL, or a session that sets one, always does.  On a table
+       a session TTL once wrote to, the row's current expiry is read, and only a row that has one
+       needs its entries rewritten; every other table has no expiries to keep in step. */
+    upd_ttl_refresh_ = share->has_ttl || cached_sess_ttl_ > 0;
+    if (!upd_ttl_refresh_ && share->session_ttl_seen.load(std::memory_order_relaxed))
+    {
+        uchar odk[DATA_KEY_BUF_LEN];
+        uint odk_len = build_data_key(old_pk, old_pk_len, odk);
+        time_t expiry = -1;
+        int trc = tdb_retry_locked(
+            cached_thd_,
+            [&] { return tidesdb_txn_get_ttl(stmt_txn, share->cf, odk, odk_len, &expiry); });
+        if (trc != TDB_SUCCESS)
+        {
+            tmp_restore_column_map(&table->read_set, old_map);
+            DBUG_RETURN(
+                tdb_rc_to_ha(trc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : trc, "update_row ttl"));
+        }
+        upd_ttl_refresh_ = expiry >= 0;
     }
 
     if (!cached_skip_unique_)

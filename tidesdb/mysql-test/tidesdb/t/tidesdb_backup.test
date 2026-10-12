@@ -45,12 +45,17 @@ DROP TABLE t_backup;
 
 --echo #
 --echo # ============================================
---echo # TEST 2: Backup into an existing directory succeeds
+--echo # TEST 2: A backup needs a new or empty directory
 --echo # ============================================
 --echo #
 
---echo # TidesDB 10 writes a fresh consistent snapshot into the directory, so
---echo # re-running a backup into a directory that already holds one succeeds.
+--echo # The library refuses a destination that already holds files, so a backup can
+--echo # never mix with an earlier one, and the engine says so before it starts.
+--replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
+--error ER_UNKNOWN_ERROR
+eval SET GLOBAL tidesdb_backup_dir = '$backup_dir';
+--echo # once the directory is emptied the same path works again
+--exec rm -rf $backup_dir
 --replace_result $MYSQLTEST_VARDIR MYSQLTEST_VARDIR
 eval SET GLOBAL tidesdb_backup_dir = '$backup_dir';
 SELECT @@GLOBAL.tidesdb_backup_dir IS NOT NULL AS backup_dir_set;

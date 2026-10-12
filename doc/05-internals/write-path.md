@@ -31,7 +31,7 @@ Every secondary index entry, `(col_values, pk)` for a regular index, `(term, pk)
 `(hilbert, pk)` for SPATIAL, is written exactly once per row lifetime and deleted exactly once,
 across INSERT, UPDATE, DELETE, `REPLACE INTO`, and `INSERT ... ON DUPLICATE KEY UPDATE`. Two
 UPDATE paths write an entry again in place, one that refreshes the expiry of a row in a table with a
-TTL and one that rewrites a FULLTEXT term whose frequency or document length changed. With TidesDB
+TTL and one that rewrites a FULLTEXT term whose frequency or document length changed. From TidesDB
 10.1.1 a later single-delete of such an entry still leaves it gone, because a single-delete never
 exposes an older put of the same key, which `tidesdb_single_delete_rewrite` checks through flush
 and compaction. The engine therefore uses single-delete for every secondary-index delete with
