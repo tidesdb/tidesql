@@ -79,7 +79,7 @@ After it finishes, start the server and connect over the socket:
 The zstd, lz4, and snappy compression backends are optional. `install.sh` installs their development
 packages as part of the dependency step, and the plugin build links each backend only when it finds
 that library, so a missing one is not a reason for the plugin build to fail. When the plugin build
-finds no installed TidesDB library or headers, it fetches and builds TidesDB v10.2.0 from source and
+finds no installed TidesDB library or headers, it fetches and builds TidesDB v10.2.1 from source and
 links it statically. That fallback build enables a backend only when both its library and its header
 are present on the machine, and a machine without any of them gets a library that stores data
 uncompressed. An installed TidesDB older than 10.2.0 stops the build with a message naming the
