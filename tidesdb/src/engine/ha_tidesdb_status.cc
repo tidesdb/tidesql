@@ -148,8 +148,8 @@ static long long srv_stat_stall_manifest_commit;
 /* Codec-chain encoding aggregates from tidesdb_get_klog_encoding_stats and its vlog
    counterpart, summed across every chain.  logical is the size before encoding and
    stored the size after, so logical divided by stored is the realized compression
-   ratio for the key log and the value log.  The per-chain codec breakdown prints in
-   the free-text status. */
+   ratio for the key log and the value log.  The free-text status prints the same
+   totals with the chain count, one line per log. */
 static long long srv_stat_klog_logical_bytes;
 static long long srv_stat_klog_stored_bytes;
 static long long srv_stat_vlog_encoded_logical_bytes;

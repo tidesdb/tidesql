@@ -23,8 +23,8 @@ materializes the row from the index bytes without a point-get into the data CF.
 
 **Data CF** - the column family that holds a table's row data, as opposed to the secondary-index CFs.
 
-**Dividing level** - the LSM level, placed relative to the largest level by `DIVIDING_LEVEL_OFFSET`,
-where a merge writes its output partitioned to the largest level's file boundaries, so later merges
+**Dividing level** - the LSM level, placed relative to the largest level by the
+`DIVIDING_LEVEL_OFFSET` table option, where a merge writes its output partitioned to the largest level's file boundaries, so later merges
 can take one group of overlapping files at a time.
 
 **First-committer-wins** - the write-write conflict rule, where the first transaction to commit a
@@ -33,13 +33,14 @@ applies from `SNAPSHOT` isolation upward, and `SERIALIZABLE` keeps it while addi
 for full serializable isolation.
 
 **Foreign key** - a referential constraint TideSQL enforces in the engine, checked on every write
-and persisted in a reserved catalog column family, with `CASCADE`, `SET NULL`, and `RESTRICT`
-referential actions. See [Foreign Keys](/reference/foreign-keys).
+and persisted in the reserved `__tidesdb_fk_catalog` column family. The supported referential
+actions are `CASCADE`, `SET NULL`, `RESTRICT`, and `NO ACTION`, and `SET DEFAULT` is checked the
+same way as `RESTRICT`. See [Foreign Keys](/reference/foreign-keys).
 
 **Klog and vlog** - the key log of an SSTable and the database's shared value log. Values smaller
-than the database `value_separation_threshold` are stored inline in the klog, and values at or
-above it go to the vlog with a reference in the klog. A table set `KEEP_VALUES_INLINE` keeps every value in the klog whatever its
-size.
+than the database's `tidesdb_value_separation_threshold` are stored inline in the klog, and values
+at or above it go to the vlog with a reference in the klog. A table created with
+`KEEP_VALUES_INLINE` keeps every value in the klog whatever its size.
 
 **Memtable** - the in-memory skip list that absorbs writes before they flush to an SSTable. It is
 shared across the database in TidesDB 10, so its sizing and WAL durability are set by the
@@ -57,8 +58,9 @@ library and used by the cost model.
 
 **Single-delete** - a delete primitive that lets compaction cancel a put and its matching
 tombstone together the first time they meet, at any level, written automatically for
-secondary-index entries and opt-in for the primary CF. Cancelling at any level needs TidesDB 10.1.1
-or later, since earlier releases turned a single-delete into a plain tombstone at its first merge.
+secondary-index entries and opt-in for the primary CF through `tidesdb_single_delete_primary`.
+Cancelling at any level needs TidesDB 10.1.1 or later, since earlier releases turned a single-delete
+into a plain tombstone at its first merge.
 
 **Tombstone** - the marker a delete writes to hide an older value until compaction reclaims it. A
 high tombstone density slows range scans, which the tombstone-density trigger acts on.

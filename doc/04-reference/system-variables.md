@@ -23,7 +23,7 @@ is the default new sessions inherit).
 | `tidesdb_log_truncation_at` | 24 MB | Log file truncation size in bytes. 0 disables truncation |
 | `tidesdb_memtable_write_buffer_size` | 256 MB | Write buffer size in bytes for the shared memtable. 0 uses the library default of 64 MB |
 | `tidesdb_memtable_sync_mode` | FULL | WAL durability for every commit, one of NONE, INTERVAL, FULL. See [Durability](/concepts/durability) |
-| `tidesdb_memtable_sync_interval` | 128000 | WAL sync interval in microseconds, used only when the sync mode is INTERVAL |
+| `tidesdb_memtable_sync_interval` | 128000 | WAL sync interval in microseconds, used only when the sync mode is INTERVAL. 0 uses the library default of one second |
 | `tidesdb_memtable_skip_list_max_level` | 0 | Skip-list max level for the memtable, up to 32. 0 keeps the library default of 12 |
 | `tidesdb_memtable_skip_list_probability` | 0.0 | Skip-list level-promotion probability for the memtable. 0.0 keeps the library default of 0.25 |
 | `tidesdb_vlog_segment_size` | 0 | Size in bytes at which the value log seals a segment and opens a fresh one. 0 keeps the library default of 256 MB |
@@ -55,21 +55,21 @@ when `CREATE TABLE` does not set it.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `tidesdb_ttl` | 0 | Per-session TTL in seconds applied to INSERT and UPDATE. 0 uses the table default. Works with `SET SESSION` and `SET STATEMENT`. See [Time-To-Live](/reference/ttl) |
-| `tidesdb_skip_unique_check` | OFF | Skip uniqueness checks on the primary key and unique secondary indexes during INSERT and UPDATE. It also skips the sentinel key each UNIQUE secondary value writes to the reserved `__tidesdb_uniq` column family, which is what makes two concurrent transactions writing the same UNIQUE value collide at commit, so the second to commit gets a deadlock error. Safe only when the application guarantees no duplicates |
-| `tidesdb_single_delete_primary` | OFF | Use single-delete semantics on the primary row CF for this session's DELETEs, so compaction can drop a deleted row and its tombstone together. Only safe for a session that never overwrites a row in place, see [Write-Path Optimizations](/internals/write-path) |
+| `tidesdb_skip_unique_check` | OFF | Skip uniqueness checks on the primary key and unique secondary indexes during INSERT and UPDATE. It also skips the sentinel key each UNIQUE secondary value writes to the reserved `__tidesdb_uniq` column family, which is what makes two concurrent transactions writing the same UNIQUE value collide at commit, so the second to commit fails its COMMIT with `ER_ERROR_DURING_COMMIT` (1180) wrapping handler error 149. Because the sentinel is skipped, rows written with this on are not protected from a concurrent duplicate later either. Safe only when the application guarantees no duplicates |
+| `tidesdb_single_delete_primary` | OFF | Use single-delete semantics on the primary row CF for this session's DELETEs, so compaction can drop a deleted row and its tombstone together. Enabling it is a promise that the session runs no UPDATE of non-key columns, no REPLACE INTO, and no INSERT ... ON DUPLICATE KEY UPDATE on tables without secondary indexes, so leave it OFF unless the session only inserts and deletes. See [Write-Path Optimizations](/internals/write-path) |
 | `tidesdb_compact_after_range_delete_min_rows` | 0 | After a multi-row DELETE touching at least this many rows, flush and compact the touched primary-key range once its transaction commits. A rolled back DELETE compacts nothing. 0 disables it |
 | `tidesdb_default_compression` | LZ4 | Default `COMPRESSION` for new tables |
 | `tidesdb_default_bloom_filter` | ON | Default `BLOOM_FILTER` for new tables |
 | `tidesdb_default_bloom_fpr` | 100 | Default `BLOOM_FPR` in parts per 10,000, 100 is 1% |
-| `tidesdb_default_keep_values_inline` | OFF | Default `KEEP_VALUES_INLINE` for new tables |
+| `tidesdb_default_keep_values_inline` | OFF | Default `KEEP_VALUES_INLINE` for new tables. When ON, a table holds every value in its klog whatever its size, ignoring `tidesdb_value_separation_threshold` |
 | `tidesdb_default_btree_klog_block_size` | 4096 | Default `BTREE_KLOG_BLOCK_SIZE` in bytes for new tables. Sizing a node to the block manager first-read window avoids a second read per access |
 | `tidesdb_default_l1_file_count_trigger` | 4 | Default `L1_FILE_COUNT_TRIGGER` |
 | `tidesdb_default_level_size_ratio` | 10 | Default `LEVEL_SIZE_RATIO` |
 | `tidesdb_default_min_levels` | 1 | Default `MIN_LEVELS` |
 | `tidesdb_default_dividing_level_offset` | 1 | Default `DIVIDING_LEVEL_OFFSET` |
 | `tidesdb_default_isolation_level` | REPEATABLE_READ | Default `ISOLATION_LEVEL` |
-| `tidesdb_default_tombstone_density_trigger` | 0 | Default `TOMBSTONE_DENSITY_TRIGGER` in parts per 10,000, 0 disables it |
-| `tidesdb_default_tombstone_density_min_entries` | 1024 | Default `TOMBSTONE_DENSITY_MIN_ENTRIES` |
+| `tidesdb_default_tombstone_density_trigger` | 0 | Default `TOMBSTONE_DENSITY_TRIGGER` in parts per 10,000, 0 disables it. When set, compaction is escalated when any SSTable at any level has a tombstone count divided by entry count at or above the ratio |
+| `tidesdb_default_tombstone_density_min_entries` | 1024 | Default `TOMBSTONE_DENSITY_MIN_ENTRIES`, the minimum entry count for an SSTable to be judged by the tombstone-density trigger |
 
 ## Setting defaults in my.cnf
 

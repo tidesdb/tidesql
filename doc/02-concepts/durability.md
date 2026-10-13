@@ -22,7 +22,8 @@ The mode that is easy to misread is `NONE`. Under `NONE` the library does nothin
 an acknowledged commit sits in an in-process buffer until a later batch writes it out. If the process
 stops before that happens, a kill, an abort, an OOM, the commit is gone, and a machine crash loses it
 too. `NONE` is the fastest mode and the least durable. Reach for it only when the data can be rebuilt,
-never when an acknowledged commit has to stay acknowledged.
+never when an acknowledged commit has to stay acknowledged, since a process crash discards commits
+that have already returned success.
 
 `INTERVAL` and `FULL` both hand each commit to the operating system before returning, so neither
 loses an acknowledged commit to a process crash. They differ only in the machine-crash guarantee,
@@ -37,10 +38,10 @@ rebuild rather than correctness.
 ## What FULL costs and how INTERVAL sits between
 
 `FULL` costs commit throughput, because every commit waits for the device instead of returning once
-the bytes reach the operating system. How much depends entirely on the storage. The write-ahead log
-softens the cost by writing the records of every commit waiting at the same moment together, so
-concurrent commits share a single device write and the more concurrent the workload the better
-`FULL` amortizes.
+the bytes reach the operating system. How much depends entirely on the storage. Commits whose log
+writes reach the write-ahead log at the same time are written out together by the WAL flush thread
+and wait on the same flush, which softens the cost for concurrent writers, so the more concurrent
+the workload the better `FULL` amortizes.
 
 `INTERVAL` forces the log on a timer, so the exposure to a machine crash is bounded by
 `tidesdb_memtable_sync_interval` microseconds rather than being unbounded, without paying a device

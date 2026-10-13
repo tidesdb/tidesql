@@ -20,7 +20,7 @@ statement costs a single stats pass.
 |----------|-------------|
 | `Tidesdb_version` | TideSQL plugin version string, for example `5.2.0` |
 | `Tidesdb_version_hex` | Plugin version as an integer, for example `328192` for `0x50200` |
-| `Tidesdb_library_version` | Linked TidesDB library version string |
+| `Tidesdb_library_version` | Version string of the TidesDB library the plugin was built against, for example `10.2.1` |
 
 ## Sequence and transactions
 
@@ -29,7 +29,7 @@ statement costs a single stats pass.
 | `Tidesdb_column_families` | Number of active column families |
 | `Tidesdb_global_sequence` | Global MVCC sequence number |
 | `Tidesdb_min_snapshot_sequence` | Oldest pinned snapshot, the floor compaction cannot reclaim past |
-| `Tidesdb_active_transactions` | Transactions currently joined to the MVCC registry |
+| `Tidesdb_active_transactions` | Transactions currently joined to the MVCC registry. `READ UNCOMMITTED` transactions do not join it and are not counted |
 | `Tidesdb_txn_memory_bytes` | Memory held by in-flight transactions in bytes |
 
 ## Transaction errors
@@ -41,8 +41,8 @@ refresh window.
 
 | Variable | Description |
 |----------|-------------|
-| `Tidesdb_commit_conflicts` | COMMIT statements that failed with a deadlock or lock wait timeout error. The server counts a failed COMMIT in `Com_commit` too, so subtract this to get successful commits |
-| `Tidesdb_stmt_conflicts` | Statements that failed on a write conflict, returned as a deadlock error |
+| `Tidesdb_commit_conflicts` | COMMIT statements that failed with a deadlock or lock wait timeout error. A failure in the prepare phase, which the server runs when the binary log is on, counts here too. The server counts a failed COMMIT in `Com_commit` too, so subtract this to get successful commits |
+| `Tidesdb_stmt_conflicts` | Statements that failed on a write conflict, or because the library ran out of retries under heavy memtable rotation, returned as a deadlock error |
 | `Tidesdb_stmt_locked` | Statements that failed on transient contention the library reports as locked, returned as a lock wait timeout after a short bounded retry |
 | `Tidesdb_stmt_memory_limit` | Statements that failed on memtable backpressure, returned as a lock wait timeout |
 | `Tidesdb_stmt_txn_expired` | Statements that failed because the transaction outlived `tidesdb_txn_timeout_seconds`, returned as a lock wait timeout |
@@ -52,10 +52,10 @@ refresh window.
 
 | Variable | Description |
 |----------|-------------|
-| `Tidesdb_memtable_bytes` | Memory the active memtable occupies, skip-list nodes and version structs included |
+| `Tidesdb_memtable_bytes` | Memory the active memtable occupies in bytes, skip-list nodes and version structs included alongside key and value bytes. This is the figure compared against `tidesdb_memtable_write_buffer_size` |
 | `Tidesdb_total_sstables` | Total SSTable count across all column families |
 | `Tidesdb_open_sstables` | Open SSTable file handles |
-| `Tidesdb_data_size_bytes` | On-disk key-log bytes summed across every column family and level. The value log is reported separately in `Tidesdb_vlog_file_size` |
+| `Tidesdb_data_size_bytes` | On-disk key-log bytes summed across every column family and level. The value log is reported separately in `Tidesdb_vlog_file_size`, and the WAL is not included |
 | `Tidesdb_immutable_memtables` | Sealed memtables waiting to be flushed |
 | `Tidesdb_flush_pending` | Flushes pending (the immutable memtable queue depth) |
 | `Tidesdb_compaction_queue` | Compaction jobs queued for the worker pool |
@@ -84,7 +84,7 @@ Aggregate codec-chain totals summed across every chain, so `logical` divided by 
 
 ## Device IO
 
-Write accounting from the library, which meters SSTable, WAL, and value-log writes. These counters surface the SSTable and WAL classes, the value log's write volume is in `Tidesdb_vlog_bytes_written` above, and all three classes print with their write timing in `SHOW ENGINE TIDESDB STATUS`. These counters are writes only, there is no read-side figure.
+Write accounting from the library's file-descriptor manager, which meters SSTable, WAL, and value-log writes. These counters surface the SSTable and WAL classes, the value log's write volume is in `Tidesdb_vlog_bytes_written` above, and all three classes print with their write timing in `SHOW ENGINE TIDESDB STATUS`. These counters are writes only, there is no read-side figure.
 
 | Variable | Description |
 |----------|-------------|
@@ -101,15 +101,15 @@ Write accounting from the library, which meters SSTable, WAL, and value-log writ
 | `Tidesdb_flush_bytes_written` | Bytes written to SSTables by flush jobs |
 | `Tidesdb_compaction_bytes_written` | Bytes written by compaction jobs |
 | `Tidesdb_compaction_bytes_read` | Bytes compaction read as input |
-| `Tidesdb_flush_count` | SSTables written by flushes across all column families |
-| `Tidesdb_compaction_count` | Compactions completed across all column families |
+| `Tidesdb_flush_count` | SSTables written by flushes, one per column family per flush |
+| `Tidesdb_compaction_count` | Compaction jobs completed across all column families. It counts jobs, not the SSTables they write |
 
 ## Write stalls
 
 | Variable | Description |
 |----------|-------------|
 | `Tidesdb_writes_throttled` | Commits the L0 admission policy made dwell before admitting |
-| `Tidesdb_writes_blocked` | Commits it made wait for the flush queue to drain |
+| `Tidesdb_writes_blocked` | Commits it made wait for the flush queue or the level-1 backlog to drain |
 | `Tidesdb_write_stall_us` | Total microseconds commits spent held in admission |
 | `Tidesdb_write_stall_ceiling_hits` | Commits admitted only because the wait ceiling expired. Any sustained increase means flush is not keeping up with ingest |
 
@@ -141,4 +141,4 @@ The aggregate counters above sum admission stall time. These per-reason counts s
 | `Tidesdb_total_tombstones` | Total tombstones summed across every column family |
 | `Tidesdb_tombstone_ratio` | Database-wide tombstone count divided by entry count, 0.0 to 1.0 |
 | `Tidesdb_max_sst_tombstone_density` | Worst single-SSTable tombstone density observed |
-| `Tidesdb_max_sst_tombstone_density_level` | 1-based LSM level where the worst SSTable sits |
+| `Tidesdb_max_sst_tombstone_density_level` | 1-based LSM level where the worst SSTable sits, `0` if none was observed |
