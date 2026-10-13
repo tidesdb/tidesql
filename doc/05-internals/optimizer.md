@@ -5,8 +5,8 @@ description: The cached statistics the engine keeps, how they feed the cost mode
 
 # Statistics and the Optimizer
 
-The engine keeps cached statistics refreshed at most every two seconds, the total key count, the
-total data size of the data and index column families, the mean record length from the average key
+The engine keeps cached statistics refreshed at most every two seconds, the total key count (the
+SSTable entries plus the keys still in the memtable), the total data size of the data and index column families, the mean record length from the average key
 and value sizes, and the LSM-tree read amplification factor, alongside a sampled per-index
 `rec_per_key` selectivity for each secondary index. They are atomic variables on the shared
 table descriptor and feed MariaDB's cost-based optimizer through `info()`, `scan_time()`,
@@ -15,11 +15,13 @@ table descriptor and feed MariaDB's cost-based optimizer through `info()`, `scan
 Secondary-index `rec_per_key` is measured automatically. The first time a populated table, one that
 has reached 1,024 rows, is asked for constant statistics, the engine samples the distinct index
 prefixes of each non-unique secondary index, reading up to 100,000 entries per index on its own
-short READ COMMITTED transaction, and caches the result, once per table share. A workload never has
-to run `ANALYZE TABLE` to get real selectivity; until the sample lands a high-cardinality index
-falls back to a coarse fraction of the row count, which is what would otherwise steer the optimizer
-into scanning an IN-list or a range rather than using the index. An explicit `ANALYZE TABLE` still
-refreshes the same figures.
+short READ COMMITTED transaction, and caches the result, once per table share. Concurrent first
+queries produce a single sampling scan. A table below 1,024 rows is not sampled, and is sampled the
+first time it is planned against after it reaches 1,024 rows. A workload never has to run
+`ANALYZE TABLE` to get real selectivity. Until the sample lands a non-unique index falls back to
+the row count divided by 10, which overestimates a high-cardinality index and would otherwise steer
+the optimizer into scanning an IN-list or a range rather than using the index. An explicit
+`ANALYZE TABLE` still refreshes the same figures.
 
 The cost model accounts for an LSM read consulting several levels. The read amplification factor,
 from the library's statistics, scales the cost of point lookups and random-position reads. A higher
@@ -32,7 +34,8 @@ and the amplification is low, index lookups are cheap.
   for the SSTable overlap the scan has to merge across. The surcharge is the count of overlapping
   SSTables weighted 90% as I/O and 10% as CPU, so the same row count costs more to scan when it is
   spread across many overlapping SSTables than when it sits in a compacted shape. The surcharge
-  reflects overlap only, not compression or merge policy.
+  reflects overlap only, not compression or merge policy, and the overlap count is cached on the
+  same two-second interval as the other statistics.
 - `keyread_time()` models index reads as `rows * 0.00003 * read_amp + ranges * 0.0001`, since each
   point lookup touches `read_amp` levels and a range scan amortizes the merge-heap setup across rows.
 - `rnd_pos_time()` models random-position lookups as `rows * 0.00005 * read_amp`, reflecting that

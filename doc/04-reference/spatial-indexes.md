@@ -62,5 +62,6 @@ and filters.
 
 INSERT, UPDATE, and DELETE maintain the spatial index transactionally alongside the row, the same as
 secondary and full-text indexes. An UPDATE that changes the primary key re-keys the row's spatial
-entry, and an UPDATE on a table with a TTL rewrites the entry so it carries the row's new expiry, or
-none when the update leaves the row without one.
+entry, and an UPDATE on a table with a `TTL` option or `TTL` column, in a session with a non-zero
+`tidesdb_ttl`, or of a row that already carries an expiry from an earlier session TTL, rewrites the
+entry so it carries the row's new expiry, or none when the update leaves the row without one.

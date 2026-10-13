@@ -101,9 +101,9 @@ Can't open shared library 'ha_tidesdb.so' (errno: 2, libjemalloc.so.2: cannot al
 ```
 
 The fix is to put the allocator in the process image at startup so its TLS is reserved up front.
-For any allocator other than `system`, `install.sh` resolves the allocator's shared library and
-writes it into the generated `my.cnf` as `malloc-lib` under `[mysqld_safe]`, so `mariadbd-safe`
-preloads it before it starts mariadbd:
+For any allocator other than `system`, `install.sh` looks up the allocator's shared library with
+`ldconfig` and, when it finds it, writes it into the generated `my.cnf` as `malloc-lib` under
+`[mysqld_safe]`, so `mariadbd-safe` preloads it before it starts mariadbd:
 
 ```ini
 [mysqld_safe]
@@ -128,3 +128,31 @@ ldd /usr/local/lib/libtidesdb.so | grep -E 'jemalloc|mimalloc|tcmalloc'
 Because `--rebuild-plugin` does not rebuild the library, changing `--allocator` needs a full
 install run to take effect. `install.sh` writes `my.cnf` only when the file does not exist yet, so
 check that the `[mysqld_safe]` line matches the new allocator after such a run.
+
+## Installing with MariaDB Foundry
+
+[MariaDB Foundry](https://github.com/MariaDB/foundry) is a build and packaging tool that produces
+distributable plugin packages in `tar.gz`, `rpm`, and `deb` formats for an existing MariaDB server,
+and its repository includes a `tidesql` target. Use it when a MariaDB server is already installed
+and you want a packaged TideSQL plugin for it, rather than building the whole server from source
+with `install.sh`. Foundry builds the plugin out of tree against the server's development files and
+packages it, so it does not build MariaDB itself.
+
+Foundry needs the MariaDB development files, either the `MariaDB-devel` package on RPM systems or
+`libmariadb-dev` on DEB systems, or the `CMAKE_PREFIX_PATH` and `LIBRARY_PATH` environment
+variables pointing at them. From an empty build directory, build the packages by pointing CMake at
+Foundry's `run.cmake`:
+
+```bash
+cmake -P /path/to/foundry/run.cmake /path/to/foundry/tidesql
+```
+
+To build an RPM package specifically:
+
+```bash
+cmake -DRPM=1 -P run.cmake tidesql
+```
+
+Install the resulting package with the system package manager, then load the plugin as shown above
+with `plugin-load-add=ha_tidesdb.so` and `plugin-maturity=beta`, or with
+`INSTALL SONAME 'ha_tidesdb'`.

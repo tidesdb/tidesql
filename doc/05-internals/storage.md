@@ -18,9 +18,12 @@ higher levels while keeping the sorted invariant.
 ## Keys
 
 Row keys inside a column family carry a namespace prefix byte, `0x01` for data rows and `0x00` for
-metadata. The metadata namespace holds the auto-increment start value set by `AUTO_INCREMENT=N`,
-under an `AINC` key as an 8-byte big-endian value so it survives a restart, and the FTS aggregate counters (document count and word count for BM25 scoring),
-so a data scan that seeks to `0x01` naturally skips them.
+metadata. The metadata namespace holds the auto-increment start value set by `AUTO_INCREMENT=N` in
+`CREATE TABLE` or `ALTER TABLE`, under an `AINC` key as an 8-byte big-endian value so it survives a
+restart even when the table has no rows to recover the counter from (the running counter itself
+lives in memory and is seeded at open from the last row), and the FTS aggregate counters (document
+count and word count for BM25 scoring). Metadata sorts before data, so a data scan that seeks to
+`0x01` naturally skips them.
 
 Primary-key bytes are encoded in a memcmp-comparable form. For a signed 32-bit integer the encoding
 flips the sign bit and stores the result big-endian, so `-1` sorts before `0` and `0` before `1`
@@ -51,7 +54,8 @@ splits off the trailing PK bytes, and does a point-get into the data CF. When th
 indexed columns and each is of a reconstructable type, integers, `YEAR`, `DATE`, `DATETIME` or
 `TIMESTAMP` without fractional seconds, or fixed
 `CHAR`/`BINARY` in binary or latin1, the row is decoded straight from the index key bytes and the
-data-CF point-get is skipped. This covering read applies to tables with an explicit primary key.
+data-CF point-get is skipped. `TIME` is not reconstructable. This covering read applies only to
+tables with an explicit primary key.
 
 Because the key carries the primary key as its suffix, two rows with the same value in a `UNIQUE`
 secondary index store two different keys. So every write that creates a non-NULL value in a

@@ -7,8 +7,10 @@ description: What TideSQL is, how it relates to the TidesDB library, who this ma
 
 TideSQL is a pluggable storage engine for [MariaDB](https://mariadb.org/), built on the TidesDB
 library. It lets a MariaDB table keep its data in a TidesDB log-structured merge tree instead of
-InnoDB, reachable through ordinary SQL. Switching a table from InnoDB to TidesDB is a change to
-the `ENGINE` clause and nothing more.
+InnoDB, reachable through ordinary SQL. Switching a table from InnoDB to TidesDB is usually a
+change to the `ENGINE` clause and nothing more, and [Limitations](/appendix/limitations) lists the
+cases that need more care. The plugin ships at Beta maturity, and
+[MariaDB Compatibility](/appendix/compatibility) names the library release each version pins.
 
 This is the TideSQL 5.x manual, the storage engine for TidesDB v10.x.x, and the companion to the
 [TidesDB library manual](/preface). It tracks the 5.x line as a whole, so a minor or patch release

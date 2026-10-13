@@ -66,8 +66,9 @@ alphanumeric, and every multi-byte character counts as a word character, so a sc
 spaces, such as CJK, indexes one token per unbroken run. Tokens are lowercased with the charset's
 case-folding rules. Words shorter than `tidesdb_fts_min_word_len` (default 3) or longer than
 `tidesdb_fts_max_word_len` (default 84) characters are excluded from the index, from
-natural-language queries, and from phrases. A plain boolean-mode term is looked up as typed, so a
-required term outside those bounds, or on the stop-word list, matches no row.
+natural-language queries, and from phrases. A plain boolean-mode term is only lowercased, with no
+length or stop-word filtering, so a required term outside those bounds or on the stop-word list,
+such as `+db` or `+the`, matches no indexed entry and the query returns no rows.
 
 ## Stop words
 
@@ -111,8 +112,10 @@ elision and apostrophe names searchable by any component or the whole form. With
 SET GLOBAL tidesdb_fts_blend_chars = "'";
 ```
 
-The default is empty. The setting is global and applies to subsequent indexing and queries, so
-rebuild existing indexes after changing it.
+The default is empty. The setting is global and applies to subsequent indexing, natural-language
+queries, and quoted phrases in boolean mode, so rebuild existing indexes after changing it. A plain
+boolean-mode term still splits on a blend character, so `+dell'aria` is parsed as the required term
+`dell` followed by the optional term `aria`.
 
 ## Multi-column indexes and maintenance
 
@@ -129,6 +132,7 @@ CREATE TABLE docs (
 Index entries are maintained inside the same transaction as the row change. An insert tokenizes the
 document and writes one entry per unique term, a delete removes the entries, and an update that
 changes the indexed columns or the primary key removes the old entries and writes new ones. An
-update on a table with a TTL also rewrites the row's entries with its new expiry, or with none. The
-document count and total word count behind BM25's average document length are maintained atomically
-in the data column family.
+update on a table with a `TTL` option or `TTL` column, in a session with a non-zero `tidesdb_ttl`,
+or of a row that already carries an expiry from an earlier session TTL, also rewrites the row's
+entries with its new expiry, or with none. The document count and total word count behind BM25's
+average document length are maintained atomically in the data column family.

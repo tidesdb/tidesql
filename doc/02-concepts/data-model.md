@@ -13,7 +13,8 @@ to the column family `test__events`, and a secondary index `idx_ts` on it maps t
 `test__events__idx_idx_ts`.
 
 The separation is meaningful. Because each column family is its own LSM-tree, a secondary index has
-its own memtable presence, its own SSTables, and its own compaction and flush schedule. When a
+its own SSTables and its own compaction schedule. The memtable and write-ahead log belong to the
+whole database and are shared by every column family, so a flush is not per index. When a
 table is renamed with `RENAME TABLE` or `ALTER TABLE ... RENAME`, the engine renames every
 associated column family, the main data CF and every secondary index CF together.
 
@@ -78,7 +79,9 @@ conflict.
 On insert, update, or delete the engine maintains every secondary index inside the same
 transaction. For an update, it builds the old and new comparable index key for each index and
 compares them with `memcmp`. If the indexed columns and PK bytes are identical the index is skipped,
-unless the row carries a TTL expiry, in which case the entry is rewritten in place, which avoids a redundant delete-and-reinsert when an update touches only non-indexed columns.
+unless the row carries a TTL expiry, in which case the entry is rewritten in place so it expires with
+the row. Either way this avoids a redundant delete-and-reinsert when an update touches only
+non-indexed columns.
 
 Duplicate key violations on primary keys and unique indexes are detected. Inserting a duplicate
 primary key returns `ER_DUP_ENTRY`, and the same holds for unique secondary indexes. `REPLACE INTO`
@@ -103,7 +106,7 @@ That data-CF point-get is skipped when the read is covering. When every column a
 carried by the index key, the indexed columns plus the appended primary-key columns, and each is of
 a type the engine can rebuild from its comparable bytes (integers, `YEAR`, `DATE`,
 `DATETIME`/`TIMESTAMP` without fractional seconds, and fixed `CHAR`/`BINARY` in a binary or latin1
-charset), the row is
+charset, but not `TIME`), the row is
 materialized straight from the index bytes with no data-CF fetch. The capability is advertised to
 the optimizer per key part, so an index that also carries a non-invertible column such as
 `VARCHAR`, `DECIMAL`, or a float still gets an index-only plan for the queries that read only its
@@ -114,12 +117,13 @@ reconstructable columns.
 The engine supports Index Condition Pushdown for secondary-index scans. When the optimizer pushes a
 `WHERE` condition down, the engine evaluates it on the index key columns before the primary-key
 point lookup, by decoding those columns into the record buffer and calling MariaDB's
-`handler_index_cond_check()`. When every index and primary-key column is of a reconstructable type
-(integers, `YEAR`, `DATE`, `DATETIME`, `TIMESTAMP`, fixed `CHAR`/`BINARY` in binary or latin1), an
-entry that fails the condition is skipped without touching the data CF. When any of them cannot be
-rebuilt from its comparable bytes, such as `DECIMAL`, `VARCHAR`, float, or a multi-byte-charset
-`CHAR`, the engine fetches the full row first and then applies the condition, so ICP still filters
-but does not save the fetch for that index.
+`handler_index_cond_check()`. When every index key part and every primary-key part is of a
+reconstructable type (integers, `YEAR`, `DATE`, `DATETIME`/`TIMESTAMP` without fractional seconds,
+fixed `CHAR`/`BINARY` in binary or latin1), an entry that fails the condition is skipped without
+touching the data CF. When any part cannot be rebuilt from its comparable bytes, such as `DECIMAL`,
+`VARCHAR`, float, `TIME`, or a multi-byte-charset `CHAR`, the engine fetches the full row first and
+then applies the condition, whichever columns the condition references, so ICP still filters but
+does not save the fetch for that index.
 
 ### Multi-Range Read
 
@@ -141,14 +145,16 @@ Auto-increment follows MariaDB's built-in `update_auto_increment()` during `writ
 than calling `index_last()` on every insert, which would build and tear down an iterator each time,
 the engine keeps an in-memory atomic counter on the shared table descriptor. It seeds the counter
 once at table open. When the auto-increment column is the leftmost part of the primary key, it seeds
-by seeking that CF's last key. When the auto-increment column instead lives in a separate index, the
-engine seeds by seeking that index's last entry, so the counter is correct at open in both cases.
-Each insert increments it with a compare-and-swap, making assignment constant-time, and an explicit
-insert larger than the current value bumps the counter to match.
+by seeking that CF's last key. When the auto-increment column is instead the leading column of
+another index, the engine seeds by seeking that index's last entry, so the counter is correct at
+open in both cases. Each insert increments it with a compare-and-swap, making assignment
+constant-time, and an explicit insert larger than the current value bumps the counter to match.
 
-`TRUNCATE TABLE` and `ALTER TABLE ... AUTO_INCREMENT=N` both reset the counter through the engine's
-`reset_auto_increment` hook, so the next generated id is `N`, or `1` after a bare `TRUNCATE`. This
-applies to user-defined auto-increment columns and to hidden-PK tables.
+`TRUNCATE TABLE` resets the counter through the engine's `reset_auto_increment` hook, so the next
+generated id is `1`, for user-defined auto-increment columns and for the hidden row id alike.
+`ALTER TABLE ... AUTO_INCREMENT=N` only raises the counter. When `N` is above the current maximum the
+next generated id is `N`, and a lower `N` is ignored. The raised value is saved so it survives a
+restart.
 
 ```sql
 CREATE TABLE tickets (

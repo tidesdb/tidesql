@@ -7,11 +7,11 @@ description: The optimistic MVCC model, how MariaDB isolation levels map to the 
 
 TidesDB uses the library's multi-version concurrency control. Each statement runs inside a library
 transaction, and the engine keeps a per-connection transaction context through MariaDB's
-handlerton interface, the same shape InnoDB uses. The transaction object is allocated lazily on the
-first data access and registered with the transaction coordinator. After commit or rollback it is
-kept and reused with `tidesdb_txn_reset()` on the next statement, which takes a fresh MVCC snapshot
-while preserving the internal buffers, so an autocommit statement does not pay a malloc and free
-each time.
+handlerton interface, the same shape InnoDB uses. The transaction object is created when the first
+statement locks a TidesDB table and is registered with the transaction coordinator. After commit or
+rollback it is kept and reused with `tidesdb_txn_reset()` on the next statement, which takes a fresh
+MVCC snapshot while preserving the internal buffers, so an autocommit statement does not pay a
+malloc and free each time.
 
 Autocommit single-statement DML runs at `READ_COMMITTED`, because a single statement has no
 concurrent modification of its own to track and conflict tracking would be wasted work.
@@ -105,9 +105,9 @@ single counter row, will see conflicts and depends on efficient retry.
 ## Consistent snapshots
 
 `START TRANSACTION WITH CONSISTENT SNAPSHOT` is supported. It eagerly creates the transaction and
-captures the snapshot sequence immediately rather than at the first data access, and it forces the
-isolation to at least `SNAPSHOT`, since a lower level would refresh the snapshot on each read and
-break the consistent-snapshot contract. Rows committed by other connections after the snapshot are
+captures the snapshot sequence immediately rather than when the first statement locks a table, and
+it forces the isolation to at least `SNAPSHOT`, since a lower level would refresh the snapshot on
+each read and break the consistent-snapshot contract. Rows committed by other connections after the snapshot are
 invisible. This is useful for cross-engine consistency when TidesDB and InnoDB tables share a
 transaction:
 
@@ -133,11 +133,15 @@ copy step of DDL such as `ALTER TABLE`. Inside `BEGIN`, or with `autocommit=0`, 
 the transaction, so `COMMIT` or `ROLLBACK` covers all of it. The engine hooks `start_bulk_insert`
 and `start_bulk_delete`, counts row operations (the data write plus secondary-index maintenance)
 against a batch size of 500 operations, and at each threshold commits the current transaction and
-carries on in a fresh transaction at `READ_COMMITTED` for the next batch. A `DELETE` that is
-gathering its rows into one range tombstone holds these commits back while it buffers, as
-[Write-Path Optimizations](/internals/write-path) describes. Statement memory stays bounded regardless of statement size, a failure rolls back only the current
-batch, and the statement reports the first error it hit. An `UPDATE` does not batch, because the
-engine does not advertise `HA_CAN_FORCE_BULK_UPDATE`.
+carries on in a fresh transaction at `READ_COMMITTED` for the next batch. Statement memory stays
+bounded regardless of statement size, a failure rolls back only the current batch, and the
+statement reports the first error it hit. Rows committed by an earlier batch stay committed, so a
+later failure in the same statement cannot roll them back. An `UPDATE` does not batch, because the
+engine does not advertise `HA_CAN_FORCE_BULK_UPDATE`. One exception is a range `DELETE` on a table
+with an explicit primary key, no triggers, and no Galera. The engine defers its primary-row
+tombstones so the whole range can become one range tombstone, holds back the mid-statement commits
+while it buffers, and bounds memory with a key cap instead, as
+[Write-Path Optimizations](/internals/write-path) describes.
 
 A `DELETE` with no `WHERE` clause runs row by row inside its transaction like any other `DELETE`,
 since the engine declines `delete_all_rows`. Only `TRUNCATE TABLE`, which commits implicitly and
@@ -147,24 +151,27 @@ holds an exclusive lock, drops and recreates the table's column families.
 
 The engine participates in binlog group commit. When a batch of transactions commits together, the
 durable commit runs in binlog order through the `commit_ordered` hook, which lets the server run the
-rest of commit outside the commit-order lock. The ordered phase runs one transaction at a time, so
-each commit of a binlog group waits for its own log write. Commits that reach the library's
-write-ahead log concurrently share one durable write instead, since the log writes out the records
-staged by every waiting committer together. This is what keeps `FULL` sync affordable under
-concurrent load, as covered in [Durability and Sync Modes](/concepts/durability).
+rest of commit outside the commit-order lock. Each commit's durable write is issued in that order,
+and since the ordered phase runs one transaction at a time, each commit of a binlog group waits for
+its own log write. Commits whose log writes reach the library's write-ahead log at the same time,
+such as concurrent prepares with the binlog enabled, are written out together by the WAL flush
+thread and wait on the same flush. For what `FULL` sync costs, see
+[Durability and Sync Modes](/concepts/durability).
 
 ## Crash recovery and two-phase commit
 
 TideSQL is a full two-phase commit participant, so it recovers to a consistent point after a crash
-and coordinates with the binlog and with external XA. In the prepare phase the engine durably logs
-the transaction's write batch under its XID, so a crash after prepare but before commit leaves an
-in-doubt transaction that recovery resolves rather than loses.
+and coordinates with the binlog and with external XA. In the prepare phase the engine logs the
+transaction's write batch under its XID, durably under the default `FULL` sync mode (see
+`tidesdb_memtable_sync_mode`), so a crash after prepare but before commit leaves an in-doubt
+transaction that recovery resolves rather than loses.
 
 When the server restarts it asks the engine to recover, and the engine reports every in-doubt
 prepared transaction the library recovered and holds each one in a process-wide registry, so the
-coordinator can commit or roll it back to match the binlog. An external `XA PREPARE` also publishes
-the transaction to that registry, so its commit or rollback decision can arrive from another
-connection, and a distributed transaction survives the client disconnecting between `XA PREPARE`
+coordinator can commit or roll it back to match the binlog. An external `XA PREPARE` keeps the
+transaction attached to its connection and also registers it in the same registry, so its commit or
+rollback decision can arrive from another connection, and the registry takes ownership if the client
+disconnects, so a distributed transaction survives the client disconnecting between `XA PREPARE`
 and `XA COMMIT`:
 
 ```sql
@@ -172,6 +179,6 @@ XA START 'txn1';
 UPDATE accounts SET balance = balance - 100 WHERE id = 1;
 XA END 'txn1';
 XA PREPARE 'txn1';
--- the prepared transaction is durable and can be committed from any connection
+-- the prepared transaction can be committed from any connection (durable under FULL sync)
 XA COMMIT 'txn1';
 ```

@@ -19,9 +19,7 @@ at whatever level the merge writes, instead of carrying the tombstone down to th
 drops the pair only when the put lies directly beneath the single-delete, no reader can still see
 that put, and no table outside the merge holds the key, and a single-delete it keeps is written back
 still a single-delete so a later merge can drop it. Its contract is at most one put between
-single-deletes on the same key. For reads a single-delete behaves like a regular tombstone. This
-needs TidesDB 10.1.1 or later, and an earlier library compacts a single-delete as an ordinary
-tombstone.
+single-deletes on the same key. For reads a single-delete behaves like a regular tombstone.
 
 The engine applies this in two ways.
 
@@ -31,10 +29,10 @@ Every secondary index entry, `(col_values, pk)` for a regular index, `(term, pk)
 `(hilbert, pk)` for SPATIAL, is written exactly once per row lifetime and deleted exactly once,
 across INSERT, UPDATE, DELETE, `REPLACE INTO`, and `INSERT ... ON DUPLICATE KEY UPDATE`. Two
 UPDATE paths write an entry again in place, one that refreshes the expiry of a row in a table with a
-TTL and one that rewrites a FULLTEXT term whose frequency or document length changed. From TidesDB
-10.1.1 a later single-delete of such an entry still leaves it gone, because a single-delete never
-exposes an older put of the same key, which `tidesdb_single_delete_rewrite` checks through flush
-and compaction. The engine therefore uses single-delete for every secondary-index delete with
+TTL and one that rewrites a FULLTEXT term whose frequency or document length changed. A later
+single-delete of such an entry still leaves it gone, because the library keeps a single-delete
+while any SSTable outside the merge holds the key, and a merge that drops it drops every older
+version of the key with it. The engine therefore uses single-delete for every secondary-index delete with
 no configuration, which covers three of the four tombstones per deleted row on a table with three
 secondary indexes. The uniqueness sentinel a UNIQUE secondary index keeps in the shared
 `__tidesdb_uniq` column family is the exception. The same value can be written and removed any
@@ -97,11 +95,12 @@ the statement, a comparison against each bound per `delete_row` with no extra sc
 deleted key. Secondary-index tombstones are not compacted this way, because a PK range does not
 bound a secondary-index range, and are left to the tombstone-density trigger. After the transaction
 commits, the engine flushes the memtable once so the tombstones reach SSTables, then compacts each
-queued range synchronously on the committing thread, so the commit returns only after it finishes,
-and the threshold should be high enough that the compaction time is small relative to the DELETE
-that triggered it. A transaction that rolls back compacts nothing. A compaction already running over the
-column family absorbs the request, so `TDB_ERR_LOCKED` is ignored quietly, and any other failure is
-logged as a warning.
+queued range on the primary row CF synchronously on the committing thread, so the commit returns
+only after it finishes. Under autocommit that is the DELETE itself. The threshold should be high
+enough that the compaction time is small relative to the DELETE that triggered it. A transaction
+that rolls back compacts nothing. A compaction already running over the column family absorbs the
+request, so `TDB_ERR_LOCKED` is ignored quietly, and any other flush or compaction failure is logged
+as a warning in the error log and does not fail the commit.
 
 ## Range tombstone for a whole-range delete
 
@@ -175,7 +174,7 @@ retried once flush has caught up.
 Transient contention the library reports as `TDB_ERR_LOCKED`, typically a memtable rotation that
 outran a single call's own retries, is absorbed in the engine as well. Its read, write, delete,
 iterator-open, and iterator-seek wrappers ask again up to 16 times with a short growing backoff,
-stopping early if the session is killed, and only then surface a lock wait timeout. A commit is never
+about 60 milliseconds in total, stopping early if the session is killed, and only then surface a lock wait timeout. A commit is never
 retried, because a failed commit leaves the transaction aborted, and neither is a step to the next or
 previous entry, because a failed step does not say where it left the iterator. In a query or a
 write, an iterator call that still fails ends the statement with an error rather than as the end

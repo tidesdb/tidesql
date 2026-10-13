@@ -46,23 +46,28 @@ ALTER TABLE events COMPRESSION='ZSTD', ALGORITHM=INSTANT;
 
 ## Inplace
 
-Adding or dropping a non-FULLTEXT, non-SPATIAL secondary index runs inplace. The engine creates a
-new column family for the index, then scans the table to populate its entries. Adding an index runs
-under a shared lock (`HA_ALTER_INPLACE_SHARED_LOCK`), so reads continue while writes wait for the
-build. The new index is filled from a table scan and the engine keeps no log of concurrent writes to
-replay, so `LOCK=NONE` is refused with the reason "TidesDB fills a new index from a table scan and
-keeps no log of concurrent writes". Dropping an index needs no lock.
-Adding a `UNIQUE` index checks for duplicates during the scan, ignoring rows whose indexed value is
-NULL in any part, and aborts with `ER_DUP_ENTRY` if any are found. If any row's index put or batch
-commit fails the whole `ALTER` rolls back and drops the new column family rather than shipping a
-partial index. The population runs at READ COMMITTED and commits every 100 rows to keep the
-transaction's write buffer bounded, checking for `KILL` at the same interval.
+Adding or dropping a secondary index runs inplace, except that adding a `FULLTEXT` or `SPATIAL`
+index needs a table copy. Dropping one is inplace. The engine creates a new column family for the
+index, then scans the table to populate its entries. Adding an index runs under a shared lock
+(`HA_ALTER_INPLACE_SHARED_LOCK`), so reads continue while writes wait for the build. The new index
+is filled from a table scan and the engine keeps no log of concurrent writes to replay, so
+`LOCK=NONE` is refused with the reason "TidesDB fills a new index from a table scan and keeps no log
+of concurrent writes". Dropping an index needs no lock. Adding a `UNIQUE` index checks for
+duplicates during the scan, ignoring rows whose indexed value is NULL in any part, and aborts with
+`ER_DUP_ENTRY` if any are found. If any row's index put or batch commit fails the whole `ALTER`
+rolls back and drops the new column family rather than shipping a partial index. The population runs
+at READ COMMITTED and commits every 100 rows to keep the transaction's write buffer bounded,
+checking for `KILL` at the same interval.
 
 ```sql
 ALTER TABLE events ADD INDEX idx_ts (ts), ALGORITHM=INPLACE;
 ALTER TABLE events DROP INDEX idx_ts, ALGORITHM=INPLACE;
 ALTER TABLE events ADD INDEX idx_kind (event_kind), DROP INDEX idx_ts, ALGORITHM=INPLACE;
 ```
+
+On a table whose rows carry a TTL expiry, an inplace `ADD INDEX` gives each new index entry its
+row's expiry, so the entry expires with its row and a query answered from that index alone never
+returns an expired row.
 
 `ADD FULLTEXT` and `ADD SPATIAL` are not eligible for `ALGORITHM=INPLACE`, because the FTS tokenizer
 and the spatial Hilbert-curve writer only run inside `write_row` and cannot be driven from a
@@ -86,3 +91,8 @@ ALTER TABLE events ADD COLUMN source INT AFTER id;
 The engine reports these as not supported inplace, so an explicit `ALGORITHM=INPLACE` or
 `ALGORITHM=INSTANT` fails with an error and a slow copy never happens where an instant change was
 expected.
+
+A table copy writes every row into the new table with the TTL expiry it already had, so the copy
+does not start a row's clock again. A TTL that the `ALTER` sets or changes, on the table or on a
+`TTL` column, applies to rows written after it. A table converted to TidesDB from another engine has
+no expiries to keep, so its rows take their TTL from the time of the conversion.

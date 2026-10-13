@@ -19,14 +19,30 @@ that server version.
 | 12.3.1  | 4.2.6    | Yes |
 | 13.0.2  | 4.5.4    | Yes |
 
-This is the TideSQL 5.x manual and it pairs with TidesDB v10. The current pinned release is 5.2.0
-(hex `0x50200`), linking TidesDB v10.2.1. It still writes on-disk format 10, the same as 5.0.0, so
-a database moves between any 5.x releases in either direction without a dump. A 5.x minor or patch
-links a TidesDB v10 release and extends this same manual, so only a new major opens a new manual. See
-[Versioning](https://github.com/tidesdb/tidesql/blob/master/VERSIONING.md) for how the plugin and
-the library versions relate.
-
 As versions are tested and confirmed working this table is updated.
+
+TideSQL 5.x targets the MariaDB 13 line. When `install.sh` runs without `--mariadb-version` it
+builds the latest MariaDB release, falling back to `mariadb-13.0.1` when it cannot look that up.
+Without `--tidesdb-version` it builds the latest TidesDB release, falling back to `v10.2.1`, the
+release TideSQL 5.2.0 pins.
+
+## TideSQL and TidesDB versions
+
+A TideSQL major pairs with a single TidesDB library major.
+
+| TideSQL version | TidesDB library | Status |
+|-----------------|-----------------|--------|
+| 5.x | v10.x | Current |
+| Earlier releases | Pre-v10 TidesDB | Archived |
+
+This is the TideSQL 5.x manual and it pairs with TidesDB v10. The current pinned release is 5.2.0
+(hex `0x50200`), linking TidesDB v10.2.1. It builds against TidesDB v10.2.0 or later, which added
+the transaction and iterator expiry reads it uses. TideSQL 5.1.1 paired with TidesDB v10.1.1, and
+5.1.0 with v10.1.0. TideSQL 5.2.0 still writes on-disk format 10, the same as 5.0.0, which opened
+the v10 line, so a database moves between any 5.x releases in either direction without a dump. A
+5.x minor or patch links a TidesDB v10 release and extends this same manual, so only a new major
+opens a new manual. See [Versioning](https://github.com/tidesdb/tidesql/blob/master/VERSIONING.md)
+for how the plugin and the library versions relate.
 
 Beyond standalone and replicated servers, TideSQL participates in Galera clustering through the
 server's wsrep interface, with engine-level write-set certification and cross-node conflict

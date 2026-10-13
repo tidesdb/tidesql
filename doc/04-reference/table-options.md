@@ -112,7 +112,16 @@ covers how this fits with the single-delete optimization.
 
 - `TTL` at the table level and `` `TTL` `` on a column set row expiration. See [Time-To-Live](/reference/ttl).
 - `ENCRYPTED` and `ENCRYPTION_KEY_ID` turn on data-at-rest encryption. See [Data-at-Rest Encryption](/reference/encryption).
-- `ISOLATION_LEVEL` pins the per-table isolation level, default `REPEATABLE_READ`, session default `tidesdb_default_isolation_level`. See [Transactions and Isolation](/concepts/transactions).
+- `ISOLATION_LEVEL` sets the per-table isolation level that a session at the SQL default `REPEATABLE READ` uses, default `REPEATABLE_READ`, which maps to the library's `SNAPSHOT`, session default `tidesdb_default_isolation_level`. A session that asks for `READ UNCOMMITTED`, `READ COMMITTED`, or `SERIALIZABLE` uses its own level instead. See [Transactions and Isolation](/concepts/transactions).
+
+## Changing options with ALTER TABLE
+
+`ALTER TABLE ... option=value` changes any of these options instantly, with no table copy, and
+applies the new configuration to the table's live column families, so it takes effect without a
+restart. The exceptions are `ENCRYPTED` and, on an encrypted table, `ENCRYPTION_KEY_ID`. Changing
+either one rewrites every row, so it runs as a table copy, and `ALGORITHM=INSTANT` or
+`ALGORITHM=INPLACE` is refused. An unencrypted table can change its `ENCRYPTION_KEY_ID` instantly,
+since nothing is encrypted with it. See [Online DDL](/administration/online-ddl).
 
 ## Combining options
 

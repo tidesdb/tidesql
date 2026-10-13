@@ -42,14 +42,14 @@ The report is organized into sections:
   which covers key logs, the write-ahead log, and value-log segments. The manifest is not metered,
   and these are write-side figures only.
 - **Write Stalls By Reason** - the stall count with total and worst time for each cause a commit can
-  stall on, splitting the aggregate stall time above across WAL append, memtable rotation, admission
-  backlog, and manifest commit.
+  stall on, which are WAL append, memtable rotation lock, rotation work, admission backlog, and
+  manifest commit. Only the admission reason corresponds to the aggregate Write Stalls figures above.
 - **Key Log Encoding** and **Value Log Encoding** - the chain count with the logical and stored byte
   totals and the realized compression ratio for each log.
 - **Tombstones** - total tombstones, the database-wide tombstone ratio, and the worst per-SSTable
-  density with the level it sits at. These aggregates are computed when the tombstone status
-  variables below are read, and this block prints the last values computed, so read
-  `SHOW GLOBAL STATUS LIKE 'tidesdb%tombstone%'` first when you need them current.
+  density with the level it sits at. These aggregates take a stats pass over every column family,
+  so they are computed on demand, when this block is printed or the tombstone status variables
+  are read, and a result less than half a second old is reused.
 - **Column Families** - a per-family breakdown after the aggregate sections, with each family's
   level count, keys and unflushed keys, bytes, read amplification, average key and value size,
   B-tree shape, and tombstone ratio, followed by a per-level line of SSTable count, keys,

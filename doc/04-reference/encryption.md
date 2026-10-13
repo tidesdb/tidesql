@@ -36,6 +36,10 @@ the current rows are stored as ciphertext:
 ALTER TABLE existing_table `ENCRYPTED`=YES;
 ```
 
+Because an encryption change re-encrypts every row, the engine runs it as a table copy rather than
+an instant or inplace operation. An `ALTER TABLE ... ENCRYPTED=YES` with `ALGORITHM=INSTANT` or
+`ALGORITHM=INPLACE` is refused for this reason, and so is turning encryption off.
+
 Changing `ENCRYPTION_KEY_ID` on an encrypted table also copies the table and re-encrypts every row
 under the new key, and `ALGORITHM=INSTANT` or `INPLACE` is refused for it. A row carries its key
 version but not its key id, and is decrypted with the table's key id, so the existing rows cannot be
@@ -50,16 +54,17 @@ compress, the engine forces the data column family's compression to `NONE` regar
 `COMPRESSION` option, and the index CFs are unaffected. See [Table Options](/reference/table-options)
 for the compression interaction.
 
-Opening an encrypted table fails if the key management plugin has no current version of the
-table's key id, and the error log records `encryption key N not available`. If
-`encryption_key_get()` cannot return the requested key for a single row, a rotation hole, a keyring
-plugin that is not loaded, or a version that never existed, the encrypt or decrypt call fails closed
-and logs the failure rather than feeding uninitialized bytes into the cipher. On the write path the
-INSERT or UPDATE then fails with an error, so the engine never stores a row it could not encrypt. On
-the read path the statement fails with handler error 192, decryption failed, so a row written with a
-key version no longer in the keyring cannot be read until the key is restored, and no statement ever
-returns it with wrong contents. An in-place ADD INDEX that meets such a row stops and leaves the table
-unchanged. Watch the error log for `encryption_key_get failed` after a key rotation.
+Opening an encrypted table fails if the key management plugin has no current version of the table's
+key id. The client sees the table as missing (`HA_ERR_NO_SUCH_TABLE`), and the error log records
+`encryption key N not available`. If `encryption_key_get()` cannot return the requested key for a
+single row, a rotation hole, a keyring plugin that is not loaded, or a version that never existed,
+the encrypt or decrypt call fails closed and logs the failure rather than feeding uninitialized
+bytes into the cipher. On the write path the INSERT or UPDATE then fails with an error, so the
+engine never stores a row it could not encrypt. On the read path the statement fails with handler
+error 192, decryption failed, so a row written with a key version no longer in the keyring cannot be
+read until the key is restored, and no statement ever returns it with wrong contents. An in-place
+ADD INDEX that meets such a row stops and leaves the table unchanged. Watch the error log for
+`encryption_key_get failed` after a key rotation.
 
 The envelope carries no integrity check, so encryption keeps row data confidential but does not
 authenticate it. If the keyring returns different bytes for a key id and version than the rows were

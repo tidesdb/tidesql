@@ -117,9 +117,11 @@ These constraint shapes are rejected at `CREATE TABLE` and `ALTER TABLE`:
 - A foreign key that references parent columns covered only by a plain index, or by no index.
   InnoDB accepts a plain index there, and TidesDB requires the primary key or a `NOT NULL` unique key.
 - A foreign key that references only the leading columns of a composite primary or unique key. The
-  referenced columns must be every column of that key.
+  referenced columns must be every column of that key, in the key's column order.
 - `SET NULL` on a child column declared `NOT NULL`.
 - A reference to a parent table that does not exist, unless `foreign_key_checks` is 0, as in InnoDB.
+- A foreign key whose columns are not the leading columns of an index on the child table. MariaDB
+  normally creates that index automatically, so this is rarely hit.
 
 All of these fail the statement with `ER_CANT_CREATE_TABLE` (ERROR 1005) and a message naming the
 constraint, rather than being silently dropped.
