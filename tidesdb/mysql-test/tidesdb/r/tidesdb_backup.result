@@ -29,11 +29,14 @@ rows_after
 DROP TABLE t_backup;
 #
 # ============================================
-# TEST 2: Backup into an existing directory succeeds
+# TEST 2: A backup needs a new or empty directory
 # ============================================
 #
-# TidesDB 10 writes a fresh consistent snapshot into the directory, so
-# re-running a backup into a directory that already holds one succeeds.
+# The library refuses a destination that already holds files, so a backup can
+# never mix with an earlier one, and the engine says so before it starts.
+SET GLOBAL tidesdb_backup_dir = 'MYSQLTEST_VARDIR/tmp/tidesdb_backup_test';
+ERROR HY000: [TIDESDB] Backup directory 'MYSQLTEST_VARDIR/tmp/tidesdb_backup_test' is not empty, a backup needs a new or empty directory
+# once the directory is emptied the same path works again
 SET GLOBAL tidesdb_backup_dir = 'MYSQLTEST_VARDIR/tmp/tidesdb_backup_test';
 SELECT @@GLOBAL.tidesdb_backup_dir IS NOT NULL AS backup_dir_set;
 backup_dir_set

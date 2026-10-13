@@ -231,6 +231,17 @@ static inline int tdb_txn_delete_cf_blocking(THD *thd, tidesdb_txn_t *txn,
         thd, [&] { return tidesdb_txn_delete_cf(txn, cf, key, key_size, use_single_delete); });
 }
 
+/* The library reports an expiry as an absolute deadline in unix seconds, -1 for none, while a put
+   takes a lifetime in seconds from now.  This turns the one into the other so a row or index entry
+   can be written again with the expiry it already has.  A row read while alive has at least a
+   moment left, so a deadline at or before now still gets one second rather than none. */
+static inline time_t tdb_ttl_from_expiry(time_t expiry)
+{
+    if (expiry < 0) return TIDESDB_TTL_NONE;
+    const time_t now = time(NULL);
+    return expiry > now ? expiry - now : 1;
+}
+
 /* Whether an iterator call failed outright.  TDB_ERR_NOT_FOUND only means the stream has no entry
    at the position asked for, which a caller handles as the end of the data. */
 static inline bool tdb_iter_failed(int rc)

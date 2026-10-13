@@ -37,8 +37,8 @@ is the default new sessions inherit).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `tidesdb_backup_dir` | (empty) | Set to a path to trigger an online backup. The directory is created if missing, and files an earlier run left there are not removed, so use a new or empty one. Clear with an empty string. See [Backup](/administration/backup) |
-| `tidesdb_checkpoint_dir` | (empty) | Set to a path to write a consistent checkpoint copy of the database to. The memtable is flushed and the WAL, value log, and manifest are forced to disk, then the manifest, the value log, and every SSTable the manifest references are copied. The directory is created if missing, and files an earlier run left there are not removed, so use a new or empty one. Clear with an empty string |
+| `tidesdb_backup_dir` | (empty) | Set to a path to trigger an online backup. The last directory of the path is created if missing and its parent must exist. The directory must be new or empty, and one that already holds files is refused. Clear with an empty string. See [Backup](/administration/backup) |
+| `tidesdb_checkpoint_dir` | (empty) | Set to a path to write a consistent checkpoint copy of the database to. The memtable is flushed and the WAL, value log, and manifest are forced to disk, then the manifest, the value log, and every SSTable the manifest references are copied. The last directory of the path is created if missing and its parent must exist. The directory must be new or empty, and one that already holds files is refused. Clear with an empty string |
 | `tidesdb_fts_min_word_len` | 3 | Minimum word length in characters for full-text indexing |
 | `tidesdb_fts_max_word_len` | 84 | Maximum word length in characters for full-text indexing |
 | `tidesdb_fts_bm25_k1` | 1.2 | BM25 k1 parameter, term-frequency saturation |

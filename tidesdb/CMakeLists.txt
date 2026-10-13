@@ -97,6 +97,27 @@ FIND_PATH(TIDESDB_INCLUDE_DIR
         PATH_SUFFIXES include
 )
 
+# The plugin calls library APIs that first appeared in TidesDB 10.2.0, so an older library found on
+# the system cannot build it.  Read the version the headers declare and stop with that reason here,
+# rather than leave it to a compile error about a missing function.
+SET(TIDESDB_MIN_VERSION "10.2.0")
+IF(TIDESDB_LIB AND TIDESDB_INCLUDE_DIR)
+  SET(TIDESDB_VERSION_HEADER "${TIDESDB_INCLUDE_DIR}/tidesdb/tidesdb_version.h")
+  SET(TIDESDB_FOUND_VERSION "")
+  IF(EXISTS "${TIDESDB_VERSION_HEADER}")
+    FILE(STRINGS "${TIDESDB_VERSION_HEADER}" TIDESDB_VERSION_LINE
+         REGEX "^#define TIDESDB_VERSION \"[0-9]+\\.[0-9]+\\.[0-9]+\"")
+    STRING(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" TIDESDB_FOUND_VERSION "${TIDESDB_VERSION_LINE}")
+  ENDIF()
+  IF(NOT TIDESDB_FOUND_VERSION OR TIDESDB_FOUND_VERSION VERSION_LESS TIDESDB_MIN_VERSION)
+    MESSAGE(FATAL_ERROR
+      "TideSQL needs TidesDB ${TIDESDB_MIN_VERSION} or later, but the library found at "
+      "${TIDESDB_INCLUDE_DIR} is version '${TIDESDB_FOUND_VERSION}'. Install TidesDB "
+      "${TIDESDB_MIN_VERSION}, or point TIDESDB_ROOT at one.")
+  ENDIF()
+  MESSAGE(STATUS "TidesDB: using library ${TIDESDB_FOUND_VERSION} from ${TIDESDB_INCLUDE_DIR}")
+ENDIF()
+
 # When no system library or headers are found, build the library from source and link it
 # statically, so the plugin has no run-time dynamic dependency.  TidesQL 5.x.x is pinned to TidesDB
 # library v10.x.x, so the fallback fetches exactly that release.  When a system library is present
@@ -137,7 +158,7 @@ IF(NOT TIDESDB_LIB OR NOT TIDESDB_INCLUDE_DIR)
 
   ExternalProject_Add(
     tidesdblib_ext
-    URL "https://github.com/tidesdb/tidesdb/archive/refs/tags/v10.1.1.tar.gz"
+    URL "https://github.com/tidesdb/tidesdb/archive/refs/tags/v10.2.1.tar.gz"
     INSTALL_COMMAND ""
     CMAKE_ARGS ${TIDESDB_FETCH_ARGS}
     BUILD_BYPRODUCTS ${file}
@@ -219,7 +240,7 @@ SET(TIDESDB_HANDLER_SOURCES
 IF(COMMAND MARIADB_ADD_PLUGIN)
   MARIADB_ADD_PLUGIN(tidesdb ha_tidesdb.cc ${TIDESDB_CORE_SOURCES} ${TIDESDB_HANDLER_SOURCES}
           STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS}
-          VERSION "5.1.1"
+          VERSION "5.2.0"
           AUTHOR "TidesDB Corp"
           DESCRIPTION "LSM B-tree engine with ACID transactions, MVCC concurrency, replication, and secondary, spatial, full-text and vector indexes")
 ELSE()

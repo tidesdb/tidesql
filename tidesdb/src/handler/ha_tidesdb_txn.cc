@@ -751,6 +751,7 @@ int ha_tidesdb::external_lock_acquire(THD *thd)
        hash lookup on every row operation. */
     cached_thd_ = thd;
     cached_trx_ = trx;
+    trx->copy_row_expiry_set = false;
     /* The table's foreign keys as of this statement, rebuilt if a constraint was added or dropped
        since the last one.  A catalog that could not be read fails the statement rather than run it
        with constraints unenforced. */

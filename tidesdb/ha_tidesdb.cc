@@ -42,6 +42,7 @@ extern "C"
 #include <vector>
 
 #include "key.h"
+#include "my_dir.h"
 #include "sql_class.h"
 #include "sql_priv.h"
 
@@ -569,6 +570,19 @@ static MYSQL_SYSVAR_STR(data_home_dir, srv_data_home_dir, PLUGIN_VAR_RQCMDARG | 
 
 static char *srv_backup_dir = NULL;
 
+/* Whether path is a directory that already holds files.  The library refuses such a directory as
+   a backup or checkpoint destination, so a copy can never mix with files left by another; checking
+   first gives the client that reason instead of a bare I/O error.  A path that does not exist is
+   fine, the library creates its last directory. */
+static bool tdb_dir_has_entries(const char *path)
+{
+    MY_DIR *d = my_dir(path, MYF(0));
+    if (!d) return false;
+    const bool has_entries = d->number_of_files > 0;
+    my_dirend(d);
+    return has_entries;
+}
+
 static void tidesdb_backup_dir_update(THD *thd, struct st_mysql_sys_var *, void *var_ptr,
                                       const void *save)
 {
@@ -584,6 +598,15 @@ static void tidesdb_backup_dir_update(THD *thd, struct st_mysql_sys_var *, void 
     if (!tdb_global)
     {
         my_error(ER_UNKNOWN_ERROR, MYF(0), "TidesDB is not open");
+        return;
+    }
+
+    if (tdb_dir_has_entries(new_dir))
+    {
+        my_printf_error(ER_UNKNOWN_ERROR,
+                        "[TIDESDB] Backup directory '%s' is not empty, a backup needs a new or "
+                        "empty directory",
+                        MYF(0), new_dir);
         return;
     }
 
@@ -642,8 +665,8 @@ static void tidesdb_backup_dir_update(THD *thd, struct st_mysql_sys_var *, void 
 static MYSQL_SYSVAR_STR(backup_dir, srv_backup_dir, PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_MEMALLOC,
                         "Set to a directory path to trigger an online TidesDB backup. "
                         "The last directory of the path is created if missing and its parent must "
-                        "exist.  Use a new or empty one, since files an earlier backup left there "
-                        "are not removed. "
+                        "exist.  It must be new or empty, a directory that already holds files is "
+                        "refused. "
                         "Example: SET GLOBAL tidesdb_backup_dir = '/path/to/backup'",
                         NULL, tidesdb_backup_dir_update, NULL);
 
@@ -666,6 +689,15 @@ static void tidesdb_checkpoint_dir_update(THD *thd, struct st_mysql_sys_var *, v
     if (!tdb_global)
     {
         my_error(ER_UNKNOWN_ERROR, MYF(0), "TidesDB is not open");
+        return;
+    }
+
+    if (tdb_dir_has_entries(new_dir))
+    {
+        my_printf_error(ER_UNKNOWN_ERROR,
+                        "[TIDESDB] Checkpoint directory '%s' is not empty, a checkpoint needs a "
+                        "new or empty directory",
+                        MYF(0), new_dir);
         return;
     }
 
@@ -723,8 +755,7 @@ static MYSQL_SYSVAR_STR(checkpoint_dir, srv_checkpoint_dir,
                         "memtable is flushed and the WAL, value log and manifest are synced, then "
                         "the manifest, value log and referenced SSTables are copied.  The last "
                         "directory of the path is created if missing and its parent must exist.  "
-                        "Use a new or empty one, since files an earlier checkpoint left there are "
-                        "not removed. "
+                        "It must be new or empty, a directory that already holds files is refused. "
                         "Example: SET GLOBAL tidesdb_checkpoint_dir = '/path/to/checkpoint'",
                         NULL, tidesdb_checkpoint_dir_update, NULL);
 
@@ -879,13 +910,17 @@ static int tidesdb_init_func(void *p)
     if (srv_data_home_dir && srv_data_home_dir[0])
     {
         tdb_path = srv_data_home_dir;
-        while (!tdb_path.empty() && tdb_path.back() == '/') tdb_path.pop_back();
+        while (!tdb_path.empty() && (tdb_path.back() == '/' || tdb_path.back() == FN_LIBCHAR))
+            tdb_path.pop_back();
     }
     else
     {
+        /* The data home ends in the platform separator, a backslash on Windows, so both are
+           trimmed and searched for, or the store would land inside the data directory there. */
         std::string data_home(mysql_real_data_home);
-        while (!data_home.empty() && data_home.back() == '/') data_home.pop_back();
-        size_t slash_pos = data_home.rfind('/');
+        while (!data_home.empty() && (data_home.back() == '/' || data_home.back() == FN_LIBCHAR))
+            data_home.pop_back();
+        size_t slash_pos = data_home.find_last_of("/\\");
         if (slash_pos != std::string::npos)
             tdb_path = data_home.substr(0, slash_pos + 1) + "tidesdb_data";
         else

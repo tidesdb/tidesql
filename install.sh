@@ -71,7 +71,7 @@
 #
 # Examples:
 #  ./install.sh
-#  ./install.sh --tidesdb-version v10.1.1 --mariadb-version mariadb-13.0.1
+#  ./install.sh --tidesdb-version v10.2.1 --mariadb-version mariadb-13.0.1
 #  ./install.sh --tidesdb-prefix /opt/tidesdb --mariadb-prefix /opt/mariadb
 #  ./install.sh --mariadb-version mariadb-13.0.1
 #  ./install.sh --skip-deps --skip-tidesdb
@@ -147,7 +147,7 @@ get_latest_tidesdb_version() {
     version=$(_fetch_url "https://api.github.com/repos/tidesdb/tidesdb/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "v10.1.1"  # fallback, the TidesDB release TideSQL 5.1.1 pins
+        echo "v10.2.1"  # fallback, the TidesDB release TideSQL 5.2.0 pins
     else
         echo "$version"
     fi
@@ -158,7 +158,7 @@ get_latest_mariadb_version() {
     version=$(_fetch_url "https://api.github.com/repos/MariaDB/server/releases/latest" \
         | grep '"tag_name":' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
     if [[ -z "$version" ]]; then
-        echo "mariadb-13.0.1"  # fallback, the version-13 tag TideSQL 5.1.1 targets
+        echo "mariadb-13.0.1"  # fallback, the version-13 tag TideSQL 5.2.0 targets
     else
         echo "$version"
     fi

@@ -1,0 +1,61 @@
+CREATE TABLE written_at (t BIGINT) ENGINE=Aria;
+#
+# ============================================
+# A table copy keeps each row's deadline
+# ============================================
+#
+CREATE TABLE t (id INT PRIMARY KEY, v INT, KEY kv (v)) ENGINE=TIDESDB TTL=6;
+INSERT INTO written_at VALUES (UNIX_TIMESTAMP());
+INSERT INTO t VALUES (1, 10), (2, 20);
+# halfway to the deadline, a copy that reorders columns, then one forced with an index
+SELECT SLEEP(GREATEST(0, t + 3 - UNIX_TIMESTAMP())) FROM written_at;
+ALTER TABLE t ADD COLUMN w INT FIRST;
+ALTER TABLE t ADD INDEX kw (w), FORCE;
+# a row written after the copies gets the table TTL from its own write
+INSERT INTO t (w, id, v) VALUES (0, 3, 30);
+SELECT SLEEP(GREATEST(0, t + 7 - UNIX_TIMESTAMP())) FROM written_at;
+# the first two rows expired on their original schedule, the third has not
+SELECT id FROM t ORDER BY id;
+id
+3
+SELECT id FROM t FORCE INDEX (kv) WHERE v > 0 ORDER BY id;
+id
+3
+DROP TABLE t;
+DELETE FROM written_at;
+#
+# ============================================
+# A TTL an ALTER sets applies to rows written after it
+# ============================================
+#
+CREATE TABLE n (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB;
+INSERT INTO n VALUES (1, 10);
+ALTER TABLE n TTL=2, FORCE;
+INSERT INTO written_at VALUES (UNIX_TIMESTAMP());
+INSERT INTO n VALUES (2, 20);
+SELECT SLEEP(GREATEST(0, t + 4 - UNIX_TIMESTAMP())) FROM written_at;
+SELECT id FROM n ORDER BY id;
+id
+1
+DROP TABLE n;
+DELETE FROM written_at;
+#
+# ============================================
+# An inplace ADD INDEX gives each entry its row's deadline
+# ============================================
+#
+CREATE TABLE x (id INT PRIMARY KEY, v INT) ENGINE=TIDESDB TTL=4;
+INSERT INTO written_at VALUES (UNIX_TIMESTAMP());
+INSERT INTO x VALUES (1, 10), (2, 20);
+ALTER TABLE x ADD INDEX kv (v), ALGORITHM=INPLACE;
+SELECT SLEEP(GREATEST(0, t + 6 - UNIX_TIMESTAMP())) FROM written_at;
+# answered from the index alone, the expired rows must not appear
+EXPLAIN SELECT v FROM x FORCE INDEX (kv) WHERE v > 0;
+id	select_type	table	type	possible_keys	key	key_len	ref	rows	Extra
+1	SIMPLE	x	range	kv	kv	5	NULL	#	Using where; Using index
+SELECT v FROM x FORCE INDEX (kv) WHERE v > 0;
+v
+SELECT COUNT(*) FROM x;
+COUNT(*)
+0
+DROP TABLE x, written_at;

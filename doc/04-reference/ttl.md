@@ -72,4 +72,16 @@ the row owns, regular, `FULLTEXT`, and `SPATIAL`, with the row's new expiry, or 
 update leaves the row without one. A row kept alive by updates therefore stays reachable through its
 indexes as well as by primary key, and a row whose expiry is cleared never loses its index entries. A
 table without a TTL of its own that has had a row written under a session TTL is marked, and from
-then on every UPDATE on it rewrites the row's index entries the same way, also after a restart.
+then on an UPDATE there reads the row's current expiry and rewrites its index entries the same way
+when the row has one, also after a restart.
+
+## Rebuilding a table keeps each row's expiry
+
+An `ALTER TABLE` that copies the table writes every row into the new table with the expiry it
+already had, so a copy does not start a row's clock again. A TTL the `ALTER` sets or changes, on the
+table or on a `TTL` column, applies to rows written after it, the same as a TTL changed in place. A
+table converted to TidesDB from another engine has no expiries to keep, so its rows take their TTL
+from the time of the conversion.
+An `ALTER TABLE ... ADD INDEX` built in place gives each new index entry its row's expiry, so the
+entry expires with its row, and a query answered from that index alone never returns an expired
+row.

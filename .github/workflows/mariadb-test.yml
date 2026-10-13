@@ -8,11 +8,12 @@ on:
   workflow_dispatch:
 
 # Pinned build versions, the single place to move from one release to the next.
-# TideSQL plugin 5.1.1 targets TidesDB library v10.1.1 on MariaDB 13.  Bump these
+# TideSQL plugin 5.2.0 targets TidesDB library v10.2.1 on MariaDB 13.  Bump these
 # two constants together to retarget the whole matrix.  TIDESDB_VERSION is a tag
-# on tidesdb/tidesdb, MARIADB_VERSION a tag on MariaDB/server.
+# on tidesdb/tidesdb, or a pull request head such as pull/698/head to test an
+# unreleased library fix, and MARIADB_VERSION a tag on MariaDB/server.
 env:
-  TIDESDB_VERSION: "v10.1.1"
+  TIDESDB_VERSION: "v10.2.1"
   MARIADB_VERSION: "mariadb-13.0.1"
 
 jobs:
@@ -53,7 +54,9 @@ jobs:
           libpcre2-dev \
           libpmem-dev \
           libjemalloc-dev \
-          ccache
+          ccache \
+          galera-4 \
+          rsync
 
     - name: Install dependencies (macOS)
       if: runner.os == 'macOS'
@@ -180,7 +183,9 @@ jobs:
       run: |
         rm -rf tidesdb-lib
         for i in 1 2 3; do
-          if git clone --depth 1 --branch "$TIDESDB_VERSION" https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+          if git init -q tidesdb-lib &&
+             git -C tidesdb-lib fetch --depth 1 https://github.com/tidesdb/tidesdb.git "$TIDESDB_VERSION" &&
+             git -C tidesdb-lib checkout -q FETCH_HEAD; then
             break
           fi
           echo "Clone failed (attempt $i), retrying in 10s..."
@@ -203,7 +208,9 @@ jobs:
         
         rm -rf tidesdb-lib
         for i in 1 2 3; do
-          if git clone --depth 1 --branch "$TIDESDB_VERSION" https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+          if git init -q tidesdb-lib &&
+             git -C tidesdb-lib fetch --depth 1 https://github.com/tidesdb/tidesdb.git "$TIDESDB_VERSION" &&
+             git -C tidesdb-lib checkout -q FETCH_HEAD; then
             break
           fi
           echo "Clone failed (attempt $i), retrying in 10s..."
@@ -224,7 +231,9 @@ jobs:
       run: |
         rm -rf tidesdb-lib
         for i in 1 2 3; do
-          if git clone --depth 1 --branch "$TIDESDB_VERSION" https://github.com/tidesdb/tidesdb.git tidesdb-lib; then
+          if git init -q tidesdb-lib &&
+             git -C tidesdb-lib fetch --depth 1 https://github.com/tidesdb/tidesdb.git "$TIDESDB_VERSION" &&
+             git -C tidesdb-lib checkout -q FETCH_HEAD; then
             break
           fi
           echo "Clone failed (attempt $i), retrying in 10s..."
@@ -346,11 +355,40 @@ jobs:
       run: |
         ./mysql-test/mtr --suite=tidesdb --parallel=4 --force --retry=1
 
+    - name: Run TidesDB replication suite (Linux)
+      if: runner.os == 'Linux'
+      working-directory: mariadb-server/build
+      run: |
+        ./mysql-test/mtr --suite=tidesdb_rpl --force --retry=1
+
+    # Galera runs on Linux, the one runner with a provider package.  MTR skips a galera test
+    # rather than fail it when the provider or wsrep support is missing, so a skip fails the step
+    # instead of passing as green.
+    - name: Run TidesDB Galera suite (Linux)
+      if: runner.os == 'Linux'
+      working-directory: mariadb-server/build
+      env:
+        WSREP_PROVIDER: /usr/lib/galera/libgalera_smm.so
+      run: |
+        set -o pipefail
+        test -f "$WSREP_PROVIDER"
+        ./mysql-test/mtr --suite=tidesdb_galera --force --retry=1 2>&1 | tee galera.log
+        if grep -q "\[ skipped \]" galera.log; then
+          echo "a galera test was skipped, the suite did not really run"
+          exit 1
+        fi
+
     - name: Run TidesDB test suite (macOS)
       if: runner.os == 'macOS'
       working-directory: mariadb-server/mariadb-build
       run: |
         ./mysql-test/mtr --suite=tidesdb --parallel=4 --force --retry=1
+
+    - name: Run TidesDB replication suite (macOS)
+      if: runner.os == 'macOS'
+      working-directory: mariadb-server/mariadb-build
+      run: |
+        ./mysql-test/mtr --suite=tidesdb_rpl --force --retry=1
 
     - name: Run TidesDB test suite (Windows)
       if: runner.os == 'Windows'
@@ -367,4 +405,35 @@ jobs:
             echo === %%f ===
             type "%%f"
           )
+          rem the logs above end with a command that succeeds, so fail the step explicitly
+          exit /b 1
         )
+
+    - name: Run TidesDB replication suite (Windows)
+      if: runner.os == 'Windows'
+      shell: cmd
+      working-directory: mariadb-server/build
+      run: |
+        set PATH=%VCPKG_INSTALLATION_ROOT%\installed\x64-windows\bin;C:\tidesdb\bin;%PATH%
+        perl mysql-test\mysql-test-run.pl --suite=tidesdb_rpl --parallel=1 --force --retry=1
+
+  # The server-free core under src/core, built and run with ASAN and UBSAN on its own, without a
+  # MariaDB tree.  Its CMake uses GCC and Clang flags, so it runs on Linux and macOS.
+  core-tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+    - name: Checkout TideSQL
+      uses: actions/checkout@v4
+      with:
+        path: tidesql
+
+    - name: Build and run the core unit tests
+      run: |
+        cmake -S tidesql/tidesdb/test -B build-coretests -DCMAKE_BUILD_TYPE=Debug
+        cmake --build build-coretests --parallel
+        ctest --test-dir build-coretests --output-on-failure

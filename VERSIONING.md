@@ -15,7 +15,7 @@ only by editing plugin source carries no compatibility guarantee.
 
 Each TideSQL release links exactly one TidesDB release and stores data in that
 library's on-disk format. TideSQL 5.x links TidesDB v10.x.x and writes the v10
-format line; 5.1.1 is pinned to TidesDB v10.1.1. The plugin version and the library version keep their own
+format line; 5.2.0 is pinned to TidesDB v10.2.1. The plugin version and the library version keep their own
 cadence, so the pairing is recorded here and surfaced at runtime through the
 `tidesdb_version` status variable for the plugin and `tidesdb_library_version`
 for the linked library.
@@ -58,6 +58,7 @@ format line.
 | 5.0.0   | 10.x.x          | 10             | any TideSQL linking format 10 |
 | 5.1.0   | 10.1.0          | 10             | any TideSQL linking format 10 |
 | 5.1.1   | 10.1.1          | 10             | any TideSQL linking format 10 |
+| 5.2.0   | 10.2.1          | 10             | any TideSQL linking format 10 |
 
 - **TideSQL 5.0.0 opens the v10 format line** by linking TidesDB v10.x.x. It
   reads only the v10 format, so a database created by an earlier release line
@@ -78,6 +79,12 @@ format line.
   It needs v10.1.1, which serializes concurrent creation of one column family
   so a store whose first table opens raced still reopens, and which lets
   compaction drop a single-delete together with its put.
+- **TideSQL 5.2.0 is pinned to TidesDB v10.2.1.** It keeps format 10, so a
+  database moves between any 5.x release in either direction without a dump.
+  It builds against v10.2.0 or later for the transaction and iterator expiry
+  reads, which let a table copy and an inplace index build keep each row's
+  expiry, and pins v10.2.1, which keeps the library mapped when a Windows
+  server unloads the plugin at shutdown.
 
 Add a row per release. A release that moves none of the columns still gets a
 row, because "unchanged" is the answer an operator is looking for.

@@ -421,6 +421,14 @@ int ha_tidesdb::write_row(const uchar *buf)
        Uses cached_sess_ttl_ to avoid THDVAR + ha_thd() per row. */
     time_t row_ttl =
         (share->has_ttl || cached_sess_ttl_ > 0) ? compute_row_ttl(buf) : TIDESDB_TTL_NONE;
+    /* An ALTER TABLE copy writes each row with the expiry it had, read from the source table just
+       before, rather than starting its clock again.  A TTL the ALTER sets or changes applies to
+       rows written after it. */
+    if (unlikely(stmt_is_table_copy()) && cached_trx_->copy_row_expiry_set)
+    {
+        row_ttl = tdb_ttl_from_expiry(cached_trx_->copy_row_expiry);
+        cached_trx_->copy_row_expiry_set = false;
+    }
     if (row_ttl != TIDESDB_TTL_NONE && !share->has_ttl)
     {
         if (int nrc = note_session_ttl_row())

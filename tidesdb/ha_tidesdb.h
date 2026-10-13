@@ -79,8 +79,8 @@ static inline void tdb_memalloc_sysvar_set(void *var_ptr, const char *value)
 
 /* The TideSQL plugin's own version, reported through tidesdb_version / _version_hex and the
    maria_declare_plugin block.  Distinct from the vendored library version (TIDESDB_VERSION). */
-#define TIDESQL_VERSION_STR "5.1.1"
-#define TIDESQL_VERSION_HEX 0x50101
+#define TIDESQL_VERSION_STR "5.2.0"
+#define TIDESQL_VERSION_HEX 0x50200
 
 /* shared compile-time constants (key/row format, spatial, fts, cost model, library defaults) */
 #include "ha_tidesdb_constants.h"
@@ -377,6 +377,13 @@ struct tidesdb_trx_t
        ALTER copy, is usually still scanning through one.  Freed once the transaction ends. */
     std::vector<tidesdb_txn_t *> retired_txns;
 
+    /* The expiry of the row an ALTER TABLE copy last read from its source table, an absolute
+       deadline or -1 for none, handed to the write of that row into the new table so the copy keeps
+       each row's deadline instead of starting its clock again.  The copy reads one row and writes
+       it before reading the next, and the write consumes the value. */
+    time_t copy_row_expiry{-1};
+    bool copy_row_expiry_set{false};
+
     /* Range compactions a large DELETE asked for, run once the transaction has committed, since
        before then the tombstones they are meant to reclaim are still in the transaction and not
        in any SSTable a compaction could merge.  Dropped on rollback, which leaves nothing to
@@ -504,6 +511,8 @@ class ha_tidesdb : public handler
     int scan_value(uint8_t **value, size_t *value_size);
     /* The handler error a read that found no entry should return, eof unless scan_iter failed. */
     int scan_end_rc(int eof);
+    /* Whether this statement is an ALTER TABLE, whose table copy keeps each row's expiry. */
+    bool stmt_is_table_copy() const;
     tidesdb_column_family_t *scan_cf_;      /* CF for lazy iterator creation */
     tidesdb_column_family_t *scan_iter_cf_; /* CF the cached scan_iter was created for */
     tidesdb_txn_t *scan_iter_txn_;          /* txn the cached scan_iter was created on */
@@ -537,6 +546,9 @@ class ha_tidesdb : public handler
     double spatial_qmbr_[SPATIAL_MBR_DIMS]{}; /* query MBR (xmin, ymin, xmax, ymax) */
     /* Set while a whole-index scan is also learning the index's extents, with the largest half
        width and half height it has read so far. */
+    /* Set by update_row for the row it is updating, whether its unchanged index entries are
+       rewritten with the row's new expiry. */
+    bool upd_ttl_refresh_{false};
     bool spatial_learning_{false};
     double spatial_seen_half_w_{0.0};
     double spatial_seen_half_h_{0.0};
@@ -1219,7 +1231,8 @@ class ha_tidesdb : public handler
                                 const uint8_t *key_data, size_t key_size, const uint8_t *val_data,
                                 size_t val_size, tidesdb_txn_t *txn,
                                 std::vector<std::unordered_set<std::string>> &idx_seen,
-                                const std::vector<bool> &idx_is_unique, uint &fail_key_num);
+                                const std::vector<bool> &idx_is_unique, uint &fail_key_num,
+                                time_t row_ttl);
     /* build the comparable sort key for one index of the row currently in table->record[0] during
        an inplace ADD INDEX; ptdiff rebases the altered-table field pointers, row_has_null reports a
        NULL part (which exempts a UNIQUE index).  returns the key length written to ik. */
