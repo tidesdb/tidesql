@@ -82,8 +82,7 @@ int ha_tidesdb::fetch_row_by_pk(tidesdb_txn_t *txn, const uchar *pk, uint pk_len
     if (unlikely(stmt_is_table_copy()))
     {
         time_t expiry = -1;
-        int trc = tdb_retry_locked(
-            cached_thd_, [&] { return tidesdb_txn_get_ttl(txn, share->cf, dk, dk_len, &expiry); });
+        int trc = tdb_txn_get_ttl_blocking(cached_thd_, txn, share->cf, dk, dk_len, &expiry);
         if (trc != TDB_SUCCESS)
             return tdb_rc_to_ha(trc == TDB_ERR_NOT_FOUND ? TDB_ERR_IO : trc, "fetch_row_by_pk ttl");
         cached_trx_->copy_row_expiry = expiry;

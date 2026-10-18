@@ -1,0 +1,42 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_1;
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t SELECT seq, seq FROM seq_1_to_100;
+CREATE PROCEDURE load_rows(n INT)
+BEGIN
+DECLARE i INT DEFAULT 1000;
+WHILE i < 1000 + n DO
+INSERT INTO t VALUES (i, i);
+SET i = i + 1;
+END WHILE;
+END|
+connection node_2;
+# node 2 leaves and loses its saved position, so it must rejoin by a full transfer
+connection node_1;
+# node 1 commits row by row while node 2 rejoins
+connect  loader, 127.0.0.1, root, , test, $NODE_MYPORT_1;
+CALL load_rows(20000);
+connection node_2;
+# restart
+connection loader;
+disconnect loader;
+# node 2 is synced and holds every row
+connection node_2;
+SELECT COUNT(*), SUM(v) FROM t;
+COUNT(*)	SUM(v)
+20100	219995050
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+Variable_name	Value
+wsrep_local_state_comment	Synced
+connection node_1;
+SELECT COUNT(*), SUM(v) FROM t;
+COUNT(*)	SUM(v)
+20100	219995050
+DROP PROCEDURE load_rows;
+DROP TABLE t;
+disconnect node_2;
+disconnect node_1;

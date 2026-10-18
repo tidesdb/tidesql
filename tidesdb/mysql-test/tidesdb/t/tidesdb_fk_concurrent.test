@@ -1,0 +1,136 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# Foreign keys under concurrent transactions.  A child row is only valid while its parent row
+# exists, but the two writes land in different rows, so under snapshot isolation a transaction
+# deleting the parent and one inserting a child never touch the same key, and each one's check
+# reads a snapshot that cannot see the other's uncommitted write.  Both used to commit, leaving
+# an orphan.  InnoDB closes this with a shared lock the child check takes on the parent row.
+#
+# The engine now records a child write's reference to its parent and a parent write's claim on
+# its own key, and the second of two that meet is refused with a deadlock for the application
+# to retry.  A parent removed, or a child added, after the transaction's snapshot is refused the
+# same way, and the retry with a fresh snapshot then sees it.
+#
+
+CREATE TABLE p (id INT PRIMARY KEY, code INT NOT NULL UNIQUE) ENGINE=TIDESDB;
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES p (id)) ENGINE=TIDESDB;
+CREATE TABLE cc (id INT PRIMARY KEY, pid INT, KEY (pid),
+                 FOREIGN KEY (pid) REFERENCES p (id) ON DELETE CASCADE) ENGINE=TIDESDB;
+INSERT INTO p VALUES (1, 100), (2, 200), (3, 300), (4, 400), (5, 500);
+
+--connect (con2, localhost, root,,)
+
+--echo #
+--echo # 1. The parent is being deleted when a child is inserted
+--echo #
+--connection default
+START TRANSACTION;
+DELETE FROM p WHERE id = 1;
+--connection con2
+START TRANSACTION;
+--error ER_LOCK_DEADLOCK
+INSERT INTO c VALUES (10, 1);
+ROLLBACK;
+--connection default
+COMMIT;
+--echo # retried after the delete, the parent is gone
+--connection con2
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO c VALUES (10, 1);
+
+--echo #
+--echo # 2. A child is being inserted when its parent is deleted
+--echo #
+--connection con2
+START TRANSACTION;
+INSERT INTO c VALUES (20, 2);
+--connection default
+START TRANSACTION;
+--error ER_LOCK_DEADLOCK
+DELETE FROM p WHERE id = 2;
+ROLLBACK;
+--connection con2
+COMMIT;
+--echo # retried after the insert, the parent is referenced
+--connection default
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM p WHERE id = 2;
+
+--echo #
+--echo # 3. The parent was deleted after the child's snapshot was taken
+--echo #
+--connection con2
+START TRANSACTION;
+SELECT COUNT(*) FROM p;
+--connection default
+DELETE FROM p WHERE id = 3;
+--connection con2
+--error ER_LOCK_DEADLOCK
+INSERT INTO c VALUES (30, 3);
+ROLLBACK;
+--echo # retried with a fresh snapshot, the parent is gone
+START TRANSACTION;
+--error ER_NO_REFERENCED_ROW_2
+INSERT INTO c VALUES (30, 3);
+ROLLBACK;
+
+--echo #
+--echo # 4. A child was added after the deleting transaction's snapshot was taken
+--echo #
+--connection default
+START TRANSACTION;
+SELECT COUNT(*) FROM c;
+--connection con2
+INSERT INTO c VALUES (40, 4);
+--connection default
+--error ER_LOCK_DEADLOCK
+DELETE FROM p WHERE id = 4;
+ROLLBACK;
+--echo # retried with a fresh snapshot, the parent is referenced
+START TRANSACTION;
+--error ER_ROW_IS_REFERENCED_2
+DELETE FROM p WHERE id = 4;
+ROLLBACK;
+
+--echo #
+--echo # 5. A cascading delete meets a child inserted alongside it
+--echo #
+--connection default
+START TRANSACTION;
+DELETE FROM p WHERE id = 5;
+--connection con2
+START TRANSACTION;
+--error ER_LOCK_DEADLOCK
+INSERT INTO cc VALUES (50, 5);
+--connection default
+COMMIT;
+--connection con2
+ROLLBACK;
+
+--echo #
+--echo # 6. Two children of the same parent do not block each other
+--echo #
+--connection default
+START TRANSACTION;
+INSERT INTO c VALUES (60, 4);
+--connection con2
+START TRANSACTION;
+INSERT INTO c VALUES (61, 4);
+COMMIT;
+--connection default
+COMMIT;
+
+--echo #
+--echo # No child is left without its parent
+--echo #
+SELECT c.id, c.pid FROM c LEFT JOIN p ON p.id = c.pid WHERE p.id IS NULL;
+SELECT cc.id, cc.pid FROM cc LEFT JOIN p ON p.id = cc.pid WHERE p.id IS NULL;
+SELECT id, pid FROM c ORDER BY id;
+
+--disconnect con2
+--connection default
+DROP TABLE c, cc, p;
+--source include/cleanup_tidesdb.inc

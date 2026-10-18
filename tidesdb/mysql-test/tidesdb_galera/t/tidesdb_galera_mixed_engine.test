@@ -1,0 +1,88 @@
+# A transaction that writes both TidesDB and InnoDB tables under Galera.  The server certifies a
+# transaction from its commit loop once for every participant that carries the replication flag,
+# and InnoDB's does, so a TidesDB participant carrying it too had the transaction certified twice,
+# which Galera answers by stopping the node.  The engine now commits through a participant without
+# the flag, while its tables keep it so their rows replicate, so the transaction certifies once
+# with the keys and rows of both engines and both commit.  Every order is covered, including an
+# InnoDB table versioned by transaction id, whose own commit hook ends the server's loop early.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connection node_1
+CREATE TABLE ti (id INT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB;
+CREATE TABLE tt (id INT PRIMARY KEY, v INT NOT NULL) ENGINE=TidesDB;
+CREATE TABLE tv (id INT PRIMARY KEY, v INT NOT NULL,
+                 s BIGINT UNSIGNED AS ROW START, e BIGINT UNSIGNED AS ROW END,
+                 PERIOD FOR SYSTEM_TIME (s, e)) ENGINE=InnoDB WITH SYSTEM VERSIONING;
+INSERT INTO ti VALUES (1, 0);
+INSERT INTO tt VALUES (1, 0);
+INSERT INTO tv (id, v) VALUES (1, 0);
+
+--echo # TidesDB written first, then InnoDB
+BEGIN;
+UPDATE tt SET v = 1;
+UPDATE ti SET v = 1;
+COMMIT;
+
+--echo # InnoDB written first, then TidesDB, with an insert and a delete
+BEGIN;
+UPDATE ti SET v = 2;
+UPDATE tt SET v = 2;
+INSERT INTO tt VALUES (2, 2);
+INSERT INTO ti VALUES (2, 2);
+DELETE FROM tt WHERE id = 2;
+COMMIT;
+
+--echo # TidesDB touched first, then an InnoDB table versioned by transaction id
+BEGIN;
+SELECT v FROM tt;
+UPDATE tv SET v = 3;
+UPDATE tt SET v = 3;
+COMMIT;
+
+--echo # one autocommit statement writing both engines, in either order
+CREATE TRIGGER tt_writes_ti AFTER UPDATE ON tt FOR EACH ROW UPDATE ti SET v = NEW.v;
+UPDATE tt SET v = 4;
+DROP TRIGGER tt_writes_ti;
+CREATE TRIGGER ti_writes_tt AFTER UPDATE ON ti FOR EACH ROW UPDATE tt SET v = NEW.v;
+UPDATE ti SET v = 5;
+DROP TRIGGER ti_writes_tt;
+
+--echo # a savepoint rolled back across both engines keeps only what came before it
+BEGIN;
+UPDATE ti SET v = 6;
+SAVEPOINT sp;
+UPDATE tt SET v = 60;
+UPDATE ti SET v = 60;
+ROLLBACK TO SAVEPOINT sp;
+UPDATE tt SET v = 6;
+COMMIT;
+
+--echo # a rolled back mixed transaction leaves nothing on either node
+BEGIN;
+UPDATE tt SET v = 70;
+UPDATE ti SET v = 70;
+ROLLBACK;
+
+SELECT id, v FROM ti ORDER BY id;
+SELECT id, v FROM tt ORDER BY id;
+SELECT id, v FROM tv ORDER BY id;
+
+--echo # node 2 holds the same rows and both nodes are synced
+--connection node_2
+let $wait_condition= SELECT v = 6 FROM tt WHERE id = 1;
+--source include/wait_condition.inc
+SELECT id, v FROM ti ORDER BY id;
+SELECT id, v FROM tt ORDER BY id;
+SELECT id, v FROM tv ORDER BY id;
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+--connection node_1
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+
+DROP TABLE ti, tt, tv;
+
+--source include/galera_end.inc

@@ -1,0 +1,68 @@
+# Foreign key cascades under row-based replication.  The engine runs a cascade through the
+# server's own row calls, so the rows it changes in the child table reach the binary log as
+# row events of their own.  A replica applying the parent row must not cascade a second time,
+# or the child row events that follow find their rows already gone, and replication stops.
+--source include/have_binlog_format_row.inc
+--source include/master-slave.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection slave
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection master
+
+CREATE TABLE p (id INT PRIMARY KEY, code INT NOT NULL UNIQUE) ENGINE=TidesDB;
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, pcode INT, KEY (pid), KEY (pcode),
+                FOREIGN KEY (pid) REFERENCES p (id) ON DELETE CASCADE,
+                FOREIGN KEY (pcode) REFERENCES p (code) ON UPDATE CASCADE ON DELETE SET NULL)
+                ENGINE=TidesDB;
+INSERT INTO p VALUES (1, 100), (2, 200), (3, 300);
+INSERT INTO c VALUES (10, 1, 100), (11, 1, 100), (20, 2, 200), (30, 3, 300);
+
+--echo #
+--echo # 1. ON DELETE CASCADE
+--echo #
+DELETE FROM p WHERE id = 1;
+--sync_slave_with_master
+--connection slave
+SELECT id, pid, pcode FROM c ORDER BY id;
+
+--echo #
+--echo # 2. ON UPDATE CASCADE to a unique key
+--echo #
+--connection master
+UPDATE p SET code = 222 WHERE id = 2;
+--sync_slave_with_master
+--connection slave
+SELECT id, pid, pcode FROM c ORDER BY id;
+
+--echo #
+--echo # 3. ON DELETE SET NULL on one key and CASCADE on another, from the same parent row
+--echo #
+--connection master
+DELETE FROM p WHERE id = 3;
+--sync_slave_with_master
+--connection slave
+SELECT id, pid, pcode FROM c ORDER BY id;
+
+--echo #
+--echo # 4. A self-referencing chain cascades three levels deep
+--echo #
+--connection master
+CREATE TABLE s (id INT PRIMARY KEY, pid INT, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES s (id) ON DELETE CASCADE) ENGINE=TidesDB;
+INSERT INTO s VALUES (1, NULL), (2, 1), (3, 2), (4, NULL);
+DELETE FROM s WHERE id = 1;
+--sync_slave_with_master
+--connection slave
+SELECT id, pid FROM s ORDER BY id;
+
+--echo #
+--echo # Master and replica agree
+--echo #
+--connection master
+SELECT id, pid, pcode FROM c ORDER BY id;
+SELECT id, pid FROM s ORDER BY id;
+DROP TABLE c, p, s;
+--sync_slave_with_master
+
+--source include/rpl_end.inc

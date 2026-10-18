@@ -1,0 +1,45 @@
+# A large autocommit statement under Galera.  Outside a cluster the engine commits a bulk
+# statement in batches as it goes, so a statement that fails late keeps its earlier batches.
+# Under Galera nothing may be committed before the statement's write set is certified, or a
+# statement that then fails leaves rows on this node that no other node ever received.  So
+# the whole statement stays in one transaction and a failure rolls all of it back.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connection node_1
+# the row generator below recurses once per row
+SET SESSION max_recursive_iterations = 10000;
+CREATE TABLE t (id INT PRIMARY KEY) ENGINE=TidesDB;
+INSERT INTO t VALUES (2000);
+
+--echo # the last row collides, after well over one batch of rows
+--error ER_DUP_ENTRY
+INSERT INTO t WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2000)
+  SELECT n FROM s;
+
+--echo # nothing of the failed statement remains, on either node
+SELECT COUNT(*) FROM t;
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 1 FROM t;
+--source include/wait_condition.inc
+SELECT COUNT(*) FROM t;
+
+--echo # the same statement without the collision commits whole and replicates
+--connection node_1
+DELETE FROM t;
+INSERT INTO t WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2000)
+  SELECT n FROM s;
+SELECT COUNT(*) FROM t;
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 2000 FROM t;
+--source include/wait_condition.inc
+SELECT COUNT(*) FROM t;
+
+--connection node_1
+DROP TABLE t;
+
+--source include/galera_end.inc

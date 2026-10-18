@@ -1,0 +1,77 @@
+# A node that crashes rejoins through an incremental state transfer.  The engine used to record
+# the cluster position only where the server checkpointed it, and marked it unknown before the
+# next commit, so after a crash the position was unknown and the node always took a full state
+# transfer.  It now records the position with every commit, so recovery reads exactly where the
+# store's commits stop, and the node fetches only the write sets it missed.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+call mtr.add_suppression("WSREP: gcs_caused\\(\\) returned -(107|1) ");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connection node_1
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 1);
+
+--echo # node 2 commits rows of its own, whose positions it records after each commit, and rows
+--echo # from node 1, whose positions it records with them
+--connection node_2
+--let $wait_condition= SELECT COUNT(*) = 1 FROM t;
+--source include/wait_condition.inc
+INSERT INTO t VALUES (2, 2);
+UPDATE t SET v = 20 WHERE id = 2;
+SET SESSION wsrep_sync_wait = 0;
+
+--echo # node 2 crashes after committing TidesDB rows
+--source include/kill_galera.inc
+
+--echo # node 1 alone has no quorum, so it is bootstrapped as the primary component again
+--connection node_1
+SET SESSION wsrep_sync_wait = 0;
+--let $wait_timeout= 90
+--let $wait_condition= SELECT VARIABLE_VALUE = 'non-Primary' FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME = 'wsrep_cluster_status';
+--source include/wait_condition.inc
+SET GLOBAL wsrep_provider_options = 'pc.bootstrap=YES';
+--source include/galera_wait_ready.inc
+SET SESSION wsrep_sync_wait = DEFAULT;
+INSERT INTO t VALUES (3, 3), (4, 4);
+UPDATE t SET v = 10 WHERE id = 1;
+
+--echo # recovery reads a real position from the store
+--connection node_2
+--let $galera_wsrep_recover_server_id= 2
+--let $wsrep_recover_additional= --plugin-load-add=$HA_TIDESDB_SO --plugin-maturity=unknown
+--source suite/galera/include/galera_wsrep_recover.inc
+--connection node_1
+--let $recovered_seqno= `SELECT SUBSTRING_INDEX('$galera_wsrep_start_position', ':', -1) >= 0`
+--echo recovered a known position: $recovered_seqno
+--connection node_2
+
+--echo # and the node rejoins from it through an incremental transfer
+--let $restart_noprint= 2
+--let $restart_parameters= --wsrep-start-position=$galera_wsrep_start_position
+--source include/start_mysqld.inc
+--source include/galera_wait_ready.inc
+--perl
+  # the log holds every start of the node, so read only what followed the last one
+  open(my $f, '<', "$ENV{MYSQLTEST_VARDIR}/log/mysqld.2.err") or die;
+  my @lines = <$f>;
+  close($f);
+  my $start = 0;
+  for my $i (0 .. $#lines) { $start = $i if $lines[$i] =~ /Starting MariaDB/; }
+  my $since = join('', @lines[$start .. $#lines]);
+  my $full = $since =~ /Installed the store received by state transfer/ ? 1 : 0;
+  my $ist = $since =~ /IST received/ ? 1 : 0;
+  print "state transfer after the crash: ", ($full ? "full" : $ist ? "incremental" : "none"), "\n";
+EOF
+
+--let $wait_condition= SELECT COUNT(*) = 4 FROM t;
+--source include/wait_condition.inc
+SELECT id, v FROM t ORDER BY id;
+--connection node_1
+SELECT id, v FROM t ORDER BY id;
+DROP TABLE t;
+
+--source include/galera_end.inc

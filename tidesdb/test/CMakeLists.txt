@@ -43,6 +43,7 @@ add_library(tidesdb_core STATIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/core/rir.cc
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/core/cf_name.cc
   ${CMAKE_CURRENT_SOURCE_DIR}/../src/core/fts_score.cc
+  ${CMAKE_CURRENT_SOURCE_DIR}/../src/core/autoinc.cc
 )
 target_include_directories(tidesdb_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../src/core)
 
@@ -58,6 +59,7 @@ set(TIDESQL_CORE_TEST_MODULES
   rir
   cf_name
   fts_score
+  autoinc
 )
 
 foreach(mod ${TIDESQL_CORE_TEST_MODULES})

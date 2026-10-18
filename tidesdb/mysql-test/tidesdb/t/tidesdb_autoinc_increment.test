@@ -1,0 +1,75 @@
+--source include/have_tidesdb.inc
+--source include/not_embedded.inc
+
+#
+# auto_increment_increment and auto_increment_offset.  The server places each generated value on
+# the grid the two describe, offset plus a multiple of increment, and spaces a reserved run of
+# values by the increment.  The engine used to reserve consecutive numbers and ignore both, so
+# with an increment above one a second session rounded onto a value the first had already
+# used, and since a generated key skips the duplicate check the second row replaced the first.
+# Galera sets both on every node so the nodes generate disjoint values, which made this the
+# normal case in a cluster.
+#
+
+CREATE TABLE t (id INT AUTO_INCREMENT PRIMARY KEY, who VARCHAR(8)) ENGINE=TIDESDB;
+
+--connect (con2, localhost, root,,)
+--connection default
+SET SESSION auto_increment_increment = 3, auto_increment_offset = 2;
+--connection con2
+SET SESSION auto_increment_increment = 3, auto_increment_offset = 2;
+
+--connection default
+INSERT INTO t (who) VALUES ('a1');
+--connection con2
+INSERT INTO t (who) VALUES ('b1');
+--connection default
+INSERT INTO t (who) VALUES ('a2'), ('a3');
+--connection con2
+INSERT INTO t (who) VALUES ('b2'), ('b3'), ('b4');
+
+--echo # every row is kept, each on the grid, none sharing a value
+SELECT COUNT(*) AS rows_kept, COUNT(DISTINCT id) AS distinct_ids FROM t;
+SELECT COUNT(*) AS off_grid FROM t WHERE (id - 2) % 3 <> 0;
+SELECT id, who FROM t ORDER BY id;
+
+--echo # sessions reserving values at the same time never land on one value
+CREATE TABLE r (id INT AUTO_INCREMENT PRIMARY KEY, who INT) ENGINE=TIDESDB;
+--let $i= 1
+while ($i <= 4)
+{
+  --connect (w$i, localhost, root,,)
+  SET SESSION auto_increment_increment = 3, auto_increment_offset = 2;
+  SET SESSION max_recursive_iterations = 10000;
+  --send_eval INSERT INTO r (who) WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2000) SELECT $i FROM s
+  --inc $i
+}
+--let $i= 1
+while ($i <= 4)
+{
+  --connection w$i
+  --reap
+  --disconnect w$i
+  --inc $i
+}
+--connection default
+SELECT COUNT(*) AS rows_kept, COUNT(DISTINCT id) AS distinct_ids FROM r;
+SELECT who, COUNT(*) AS per_session FROM r GROUP BY who ORDER BY who;
+SELECT COUNT(*) AS off_grid FROM r WHERE (id - 2) % 3 <> 0;
+DROP TABLE r;
+
+--echo # an offset larger than the increment still places values at the offset plus a multiple of it
+--connection default
+SET SESSION auto_increment_increment = 5, auto_increment_offset = 7;
+INSERT INTO t (who) VALUES ('c1'), ('c2');
+SELECT id, who FROM t WHERE who LIKE 'c%' ORDER BY id;
+
+--echo # the default spacing is unchanged
+SET SESSION auto_increment_increment = 1, auto_increment_offset = 1;
+INSERT INTO t (who) VALUES ('d1'), ('d2');
+SELECT id, who FROM t WHERE who LIKE 'd%' ORDER BY id;
+
+--disconnect con2
+--connection default
+DROP TABLE t;
+--source include/cleanup_tidesdb.inc

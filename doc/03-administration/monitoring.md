@@ -117,7 +117,8 @@ error, a deadlock or a lock wait timeout. The client sees these as error 1180 ("
 COMMIT"), wrapping handler error 149 (deadlock) for a write-write conflict. The server increments
 `Com_commit` for a failed COMMIT as well as a successful one, so subtract this counter to get
 committed transactions. When the transaction goes through two-phase commit, as it does with the
-binary log enabled, the conflict check runs in the prepare phase instead, and a conflict found there
+binary log enabled, or under Galera, where the engine prepares a transaction before the cluster
+certifies it, the conflict check runs in the prepare phase instead, and a conflict found there
 reaches the client as the same 1180 and is counted here as well.
 
 Errors raised inside a statement are counted by cause instead. `Tidesdb_stmt_conflicts` counts

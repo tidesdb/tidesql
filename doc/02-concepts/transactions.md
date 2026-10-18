@@ -68,16 +68,17 @@ every key the transaction read still holds the version it read and that no key a
 range it scanned. At `READ_COMMITTED` the library does no write-write checking, which is why every
 autocommit statement, having no concurrent modification of its own, runs there.
 
-The check runs inside `tidesdb_txn_commit()`, so a detected conflict fails the losing transaction's
-`COMMIT`. The engine maps `TDB_ERR_CONFLICT` to `HA_ERR_LOCK_DEADLOCK` (handler error 149), but
-because MariaDB reports any error raised from the commit callback as `ER_ERROR_DURING_COMMIT`
-(ERROR 1180) rather than `ER_LOCK_DEADLOCK` (1213), a commit-time conflict reaches the application
-as 1180 wrapping 149, as in `Got error 149 "Lock deadlock; Retry transaction" during COMMIT`.
-Transient contention or memory backpressure that fails a commit maps instead to
-`HA_ERR_LOCK_WAIT_TIMEOUT`, so it arrives as 1180 wrapping 146. The engine does not retry a failed
-commit. The transaction is rolled back and should be retried by the application, since MariaDB does
-not re-run an explicit `BEGIN ... COMMIT` block, so an application that uses explicit transactions
-at `REPEATABLE READ` or higher needs retry logic for 1180.
+The check runs inside `tidesdb_txn_commit()`, or inside `tidesdb_txn_prepare()` when the commit goes
+through two-phase commit, as it does with the binary log enabled or under Galera, so either way a
+detected conflict fails the losing transaction's `COMMIT`. The engine maps `TDB_ERR_CONFLICT` to
+`HA_ERR_LOCK_DEADLOCK` (handler error 149), but because MariaDB reports any error raised from the
+commit callback as `ER_ERROR_DURING_COMMIT` (ERROR 1180) rather than `ER_LOCK_DEADLOCK` (1213), a
+commit-time conflict reaches the application as 1180 wrapping 149, as in `Got error 149 "Lock
+deadlock; Retry transaction" during COMMIT`. Transient contention or memory backpressure that fails
+a commit maps instead to `HA_ERR_LOCK_WAIT_TIMEOUT`, so it arrives as 1180 wrapping 146. The engine
+does not retry a failed commit. The transaction is rolled back and should be retried by the
+application, since MariaDB does not re-run an explicit `BEGIN ... COMMIT` block, so an application
+that uses explicit transactions at `REPEATABLE READ` or higher needs retry logic for 1180.
 
 An error the library reports inside a statement, before `COMMIT`, reaches the client as the plain
 server error, `ER_LOCK_DEADLOCK` (1213) for a conflict and `ER_LOCK_WAIT_TIMEOUT` (1205) for

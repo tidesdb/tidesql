@@ -1,0 +1,84 @@
+# SERIALIZABLE under Galera.  At SERIALIZABLE the engine validates at commit that nothing the
+# transaction read, and no range it scanned, changed after its snapshot.  Galera certifies only
+# write sets, and before the engine commits, so a read gone stale used to fail the commit after
+# the cluster had accepted the write set, diverging the nodes and leaving the losing node unable
+# to commit anything else.
+#
+# The engine now prepares a transaction, which is that validation, before Galera certifies it.  A
+# serializable transaction whose read went stale is refused at COMMIT, before anything replicates,
+# exactly as without Galera.  A cluster write to what it read aborts it, since its prepared reads
+# would otherwise refuse the write the cluster already committed.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connect (node_1b, 127.0.0.1, root, , test, $NODE_MYPORT_1)
+
+--connection node_1
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 0), (2, 0), (3, 0);
+
+--echo #
+--echo # 1. A local write to a row a serializable transaction read commits, and the reader is refused
+--echo #    at its own COMMIT
+--echo #
+--connection node_1b
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+SELECT v FROM t WHERE id = 2;
+--connection node_1
+UPDATE t SET v = v + 1 WHERE id = 2;
+--connection node_1b
+UPDATE t SET v = v + 10 WHERE id = 1;
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+
+--echo #
+--echo # 2. A row inserted into a range a serializable transaction scanned refuses the reader the
+--echo #    same way
+--echo #
+--connection node_1b
+START TRANSACTION;
+SELECT COUNT(*) FROM t WHERE id BETWEEN 1 AND 10;
+--connection node_1
+INSERT INTO t VALUES (5, 0);
+--connection node_1b
+UPDATE t SET v = v + 10 WHERE id = 3;
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+
+--echo #
+--echo # 3. A write from the other node aborts a local serializable reader instead of waiting
+--echo #
+--connection node_1b
+START TRANSACTION;
+SELECT v FROM t WHERE id = 3;
+--connection node_2
+UPDATE t SET v = 100 WHERE id = 3;
+--connection node_1
+let $wait_condition= SELECT v = 100 FROM t WHERE id = 3;
+--source include/wait_condition.inc
+--connection node_1b
+--error ER_LOCK_DEADLOCK,ER_ERROR_DURING_COMMIT
+COMMIT;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+--echo #
+--echo # Both nodes hold the same rows, and the node still commits
+--echo #
+--connection node_1
+INSERT INTO t VALUES (9, 9);
+SELECT id, v FROM t ORDER BY id;
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 5 FROM t;
+--source include/wait_condition.inc
+SELECT id, v FROM t ORDER BY id;
+
+--disconnect node_1b
+--connection node_1
+DROP TABLE t;
+
+--source include/galera_end.inc

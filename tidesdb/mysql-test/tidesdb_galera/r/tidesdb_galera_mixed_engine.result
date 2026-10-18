@@ -1,0 +1,88 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_1;
+CREATE TABLE ti (id INT PRIMARY KEY, v INT NOT NULL) ENGINE=InnoDB;
+CREATE TABLE tt (id INT PRIMARY KEY, v INT NOT NULL) ENGINE=TidesDB;
+CREATE TABLE tv (id INT PRIMARY KEY, v INT NOT NULL,
+s BIGINT UNSIGNED AS ROW START, e BIGINT UNSIGNED AS ROW END,
+PERIOD FOR SYSTEM_TIME (s, e)) ENGINE=InnoDB WITH SYSTEM VERSIONING;
+INSERT INTO ti VALUES (1, 0);
+INSERT INTO tt VALUES (1, 0);
+INSERT INTO tv (id, v) VALUES (1, 0);
+# TidesDB written first, then InnoDB
+BEGIN;
+UPDATE tt SET v = 1;
+UPDATE ti SET v = 1;
+COMMIT;
+# InnoDB written first, then TidesDB, with an insert and a delete
+BEGIN;
+UPDATE ti SET v = 2;
+UPDATE tt SET v = 2;
+INSERT INTO tt VALUES (2, 2);
+INSERT INTO ti VALUES (2, 2);
+DELETE FROM tt WHERE id = 2;
+COMMIT;
+# TidesDB touched first, then an InnoDB table versioned by transaction id
+BEGIN;
+SELECT v FROM tt;
+v
+2
+UPDATE tv SET v = 3;
+UPDATE tt SET v = 3;
+COMMIT;
+# one autocommit statement writing both engines, in either order
+CREATE TRIGGER tt_writes_ti AFTER UPDATE ON tt FOR EACH ROW UPDATE ti SET v = NEW.v;
+UPDATE tt SET v = 4;
+DROP TRIGGER tt_writes_ti;
+CREATE TRIGGER ti_writes_tt AFTER UPDATE ON ti FOR EACH ROW UPDATE tt SET v = NEW.v;
+UPDATE ti SET v = 5;
+DROP TRIGGER ti_writes_tt;
+# a savepoint rolled back across both engines keeps only what came before it
+BEGIN;
+UPDATE ti SET v = 6;
+SAVEPOINT sp;
+UPDATE tt SET v = 60;
+UPDATE ti SET v = 60;
+ROLLBACK TO SAVEPOINT sp;
+UPDATE tt SET v = 6;
+COMMIT;
+# a rolled back mixed transaction leaves nothing on either node
+BEGIN;
+UPDATE tt SET v = 70;
+UPDATE ti SET v = 70;
+ROLLBACK;
+SELECT id, v FROM ti ORDER BY id;
+id	v
+1	6
+2	6
+SELECT id, v FROM tt ORDER BY id;
+id	v
+1	6
+SELECT id, v FROM tv ORDER BY id;
+id	v
+1	3
+# node 2 holds the same rows and both nodes are synced
+connection node_2;
+SELECT id, v FROM ti ORDER BY id;
+id	v
+1	6
+2	6
+SELECT id, v FROM tt ORDER BY id;
+id	v
+1	6
+SELECT id, v FROM tv ORDER BY id;
+id	v
+1	3
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+Variable_name	Value
+wsrep_local_state_comment	Synced
+connection node_1;
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+Variable_name	Value
+wsrep_local_state_comment	Synced
+DROP TABLE ti, tt, tv;
+disconnect node_2;
+disconnect node_1;

@@ -74,6 +74,60 @@ static constexpr const char TIDESDB_UNIQ_SENTINEL_CF[] = "__tidesdb_uniq";
 
 /* How many foreign key cascades deep one statement may go, the same limit InnoDB enforces. */
 static constexpr uint TDB_FK_MAX_CASCADE_DEPTH = 15;
+
+/* The keys a galera write-intent shard remembers as recently committed before it drops the ones no
+   live snapshot can still conflict with. */
+static constexpr size_t TDB_WSREP_RECENT_PRUNE_AT = 4096;
+
+/* The meta family key prefixes of the per-commit cluster positions and of the pending markers a
+   local commit leaves until its position is recorded, and how many positions behind the newest
+   are kept, pruned every so many recorded positions. */
+static constexpr const char TDB_WSREP_POS_PREFIX[] = "pos/";
+static constexpr const char TDB_WSREP_PENDING_PREFIX[] = "pend/";
+static constexpr uint64_t TDB_WSREP_POS_KEEP = 1024;
+static constexpr uint64_t TDB_WSREP_POS_PRUNE_EVERY = 1024;
+
+/* How often an applier looks again at a local transaction it aborted while that one rolls back,
+   and how long in all it waits for one before the node stops, a victim it aborted ending as soon as
+   it notices and one ordered ahead of it committing first. */
+static constexpr unsigned TDB_WSREP_VICTIM_POLL_US = 100;
+static constexpr unsigned long TDB_WSREP_VICTIM_WAIT_MAX_US = 60UL * 1000000UL;
+
+/* The provider protocol version from which an update key type exists, before it an update is
+   certified as exclusive, the same threshold InnoDB uses. */
+static constexpr long TDB_WSREP_UPDATE_KEY_PROTOCOL = 4;
+
+/* How long in all a local transaction about to prepare waits for an applier in flight that wrote a
+   key it read, polling at the same rate, before it is refused instead.  An applier commits within
+   moments of writing its last row, so the bound is reached only when something else is wrong. */
+static constexpr unsigned long TDB_WSREP_APPLIER_WAIT_MAX_US = 60UL * 1000000UL;
+
+/* The internal column family the cluster position and the store identity live in, and the keys of
+   the single position record an earlier release kept and of the store identity. */
+static constexpr const char WSREP_META_CF[] = "__tidesdb_wsrep_meta";
+static constexpr const char WSREP_POSITION_KEY[] = "position";
+static constexpr const char WSREP_STORE_ID_KEY[] = "store_id";
+
+/* The directory inside the server's data directory a Galera donor writes a consistent copy of the
+   store into for a state transfer, which the rsync method then carries to the joiner like any other
+   directory there.  The store itself goes into its subdirectory, and the marker files say which
+   data directory produced it, that the copy finished, or that it failed. */
+static constexpr const char TDB_WSREP_SST_DIR[] = "#tidesdb_sst";
+static constexpr const char TDB_WSREP_SST_STORE[] = "store";
+static constexpr const char TDB_WSREP_SST_ORIGIN[] = "tidesql_sst.origin";
+static constexpr const char TDB_WSREP_SST_OK[] = "tidesql_sst.ok";
+static constexpr const char TDB_WSREP_SST_FAILED[] = "tidesql_sst.failed";
+/* the store's identity, kept in the mysql schema directory, where every transfer method that
+   replaces the data directory carries an .opt file */
+static constexpr const char TDB_WSREP_STORE_ID_FILE[] = "tidesdb_store_id.opt";
+
+/* The stripes of the reads and applier writes Galera tracks per column family, a power of two. */
+static constexpr size_t TDB_WSREP_READ_SHARDS = 64;
+
+/* The foreign key guard's stripes, a power of two so a hash masks to one, and how many committed
+   keys a stripe remembers before it drops the ones no live snapshot can still conflict with. */
+static constexpr size_t TDB_FK_GUARD_SHARDS = 256;
+static constexpr size_t TDB_FK_GUARD_PRUNE_AT = 4096;
 static constexpr uint TIDESDB_UNIQ_SENTINEL_BUF_LEN = FN_REFLEN + 2 + MAX_KEY_LENGTH;
 
 /* Size of the namespace prefix that every TidesDB key starts with. */

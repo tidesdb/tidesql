@@ -19,9 +19,10 @@
 
 #include <mysql/plugin.h>
 
-#include <map>
 #include <mutex>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "key.h"
@@ -32,33 +33,36 @@
 #include "src/handler/ha_tidesdb_internal.h"
 #include "src/handler/ha_tidesdb_txn.h"
 
-/* Prepared transactions awaiting their phase-two decision, keyed by the serialized XID.  An
-   external XA PREPARE hands its library transaction here and detaches it from the connection, and
-   crash recovery repopulates it from tidesdb_recover_prepared at startup, so commit_by_xid /
-   rollback_by_xid can resolve a transaction from any connection or after a restart.  The map owns
-   each transaction until it is resolved (then freed) -- guarded by tdb_prepared_mtx. */
-static std::mutex tdb_prepared_mtx;
-static std::map<std::string, tidesdb_txn_t *> tdb_prepared_txns;
-
-/* Recovery enumeration state, loaded once from the library on the first handlerton recover() call.
-   The server drains the in-doubt XIDs in batches, so we keep a cursor over the loaded set. */
-static std::vector<std::string> tdb_recovery_xids;
-static size_t tdb_recovery_pos = 0;
-static bool tdb_recovery_loaded = false;
-
-/* Serialize a server XID into the opaque byte string the library and the prepared-txn map key on.
-   XID::length() spans formatID plus the gtrid/bqual lengths and their data, the full identity the
-   server compares transactions by. */
-static std::string tdb_xid_key(const XID *xid)
+/* The statements the engine treats as DDL, which run at READ COMMITTED and, under Galera, in total
+   order on every node with no write set of their own. */
+static bool tdb_sql_command_is_ddl(int cmd)
 {
-    /* XID::length() reads the identity but was declared non-const before MariaDB made it const in a
-       later release, so calling it through a const pointer fails to compile on the older servers.
-       The call does not mutate the xid, so cast away const to bind to whichever declaration the
-       linked server provides. */
-    return std::string((const char *)xid, const_cast<XID *>(xid)->length());
+    return cmd == SQLCOM_ALTER_TABLE || cmd == SQLCOM_CREATE_INDEX || cmd == SQLCOM_DROP_INDEX ||
+           cmd == SQLCOM_TRUNCATE || cmd == SQLCOM_OPTIMIZE || cmd == SQLCOM_CREATE_TABLE ||
+           cmd == SQLCOM_DROP_TABLE;
 }
 
-/* Commit a transaction honoring its 2PC state: a prepared transaction takes the phase-two
+#ifdef WITH_WSREP
+/* Galera certified this transaction before the engine commit ran, and every other node commits its
+   write set, so a commit that fails here leaves this node behind the cluster with no way back.  The
+   server cannot recover it either, its one-phase path would keep the commit order and stop every
+   later commit on the node.  So the node stops, as Galera itself does on an inconsistency, and
+   rejoins through a state transfer.  Only a hard failure reaches this, since the conflicts are
+   refused before certification.  DDL replicates no write set and keeps its ordinary error. */
+void tdb_wsrep_commit_failed(THD *thd, int rc)
+{
+    /* the server's wsrep_on macro is not parenthesized, so it is wrapped before it is negated */
+    if (!thd || !(wsrep_on(thd)) || tdb_sql_command_is_ddl(thd_sql_command(thd))) return;
+    sql_print_error(
+        "[TIDESDB] A transaction Galera already certified failed to commit (err=%d). "
+        "This node can no longer match the cluster and is stopping so it can rejoin "
+        "through a state transfer.",
+        rc);
+    abort();
+}
+#endif
+
+/* Commit a transaction honoring its 2PC state, a prepared transaction takes the phase-two
    commit-prepared path, an active one the normal blocking commit. */
 static int tdb_txn_commit_stateful(THD *thd, tidesdb_txn_t *txn)
 {
@@ -80,17 +84,27 @@ static void tdb_txn_rollback_stateful(tidesdb_txn_t *txn)
         tidesdb_txn_rollback(txn);
 }
 
-/* Drop a connection's prepared-transaction registry entry when its own commit/rollback resolves the
-   XA transaction, so a later commit_by_xid cannot touch the same (reused or freed) transaction. */
-static void tdb_drop_prepared_entry(tidesdb_trx_t *trx)
+/* A failed prepare or commit ends the transaction here rather than leaving it for the rollback
+   hook, which returns early once the library transaction is gone, so the holds and the connection
+   state are settled in one place for every failure path. */
+int tdb_trx_abandon(tidesdb_trx_t *trx, int rc, const char *what)
 {
-    if (trx->prepared_xid.empty()) return;
-    {
-        std::lock_guard<std::mutex> lk(tdb_prepared_mtx);
-        tdb_prepared_txns.erase(trx->prepared_xid);
-    }
-    trx->prepared_xid.clear();
+    tdb_fk_guard_release(trx, false, 0);
+    tdb_txn_rollback_stateful(trx->txn);
+    tidesdb_txn_free(trx->txn);
+    trx->txn = NULL;
+#ifdef WITH_WSREP
+    /* the rollback hook returns early once txn is gone, so the holds are dropped here, once the
+       library has let go of the transaction's claims */
+    tidesdb_wsrep_intent_clear(trx);
+#endif
+    trx->txn_generation++;
+    trx->dirty = false;
+    trx->stmt_savepoint_active = false;
+    trx->pending_compacts.clear();
+    return tdb_rc_to_ha(rc, what);
 }
+
 /* Reserved name of the per-statement savepoint.  The SQL SAVEPOINT callbacks
    synthesize "sv_%p" names, so this never collides with a user savepoint. */
 static constexpr const char TIDESDB_STMT_SAVEPOINT[] = "stmt";
@@ -101,9 +115,9 @@ static constexpr const char TIDESDB_STMT_SAVEPOINT[] = "stmt";
    unarmed so a later statement rollback safely falls back to full rollback. */
 static void stmt_savepoint_arm(tidesdb_trx_t *trx)
 {
-    /* Defensive: a prior statement's savepoint should already be gone (released
-       on success, removed on rollback), but a user ROLLBACK TO SAVEPOINT can
-       collaterally drop it; releasing again is a cheap no-op if absent. */
+    /* A prior statement's savepoint should already be gone, released on success and
+       removed on rollback, but a user ROLLBACK TO SAVEPOINT can drop it along the way,
+       so it is released again here, which costs nothing when it is absent. */
     (void)tidesdb_txn_release_savepoint(trx->txn, TIDESDB_STMT_SAVEPOINT);
     if (tidesdb_txn_savepoint(trx->txn, TIDESDB_STMT_SAVEPOINT) != TDB_SUCCESS) return;
 
@@ -115,7 +129,7 @@ static void stmt_savepoint_arm(tidesdb_trx_t *trx)
 /* Statement completed successfully -- the statement's writes are now permanent
    within the (still uncommitted) txn.  Drop the savepoint and per-statement undo
    state so the next statement re-arms cleanly. */
-static void stmt_savepoint_disarm(tidesdb_trx_t *trx)
+void stmt_savepoint_disarm(tidesdb_trx_t *trx)
 {
     if (!trx->stmt_savepoint_active) return;
     (void)tidesdb_txn_release_savepoint(trx->txn, TIDESDB_STMT_SAVEPOINT);
@@ -249,6 +263,8 @@ static constexpr const char TIDESDB_SAVEPOINT_NAME_FMT[] = "sv_%p";
 struct tidesdb_savepoint_t
 {
     char name[TIDESDB_SAVEPOINT_NAME_MAX];
+    /* how many foreign key guard holds the transaction had when this savepoint was set */
+    size_t fk_guard_mark;
 #ifdef WITH_WSREP
     /* how many galera write-intent keys the transaction held when this savepoint was set, so a
        rollback to it can drop the intents the reverted statements registered past this point. */
@@ -267,6 +283,7 @@ static int tidesdb_savepoint_set(handlerton *, THD *thd, void *sv)
 
     tidesdb_savepoint_t *sp = (tidesdb_savepoint_t *)sv;
     snprintf(sp->name, sizeof(sp->name), TIDESDB_SAVEPOINT_NAME_FMT, sv);
+    sp->fk_guard_mark = trx->fk_guard_keys.size();
 #ifdef WITH_WSREP
     sp->wsrep_intent_mark = trx->wsrep_intent_keys.size();
 #endif
@@ -291,6 +308,8 @@ static int tidesdb_savepoint_rollback(handlerton *, THD *thd, void *sv)
     int rc = tidesdb_txn_rollback_to_savepoint(trx->txn, sp->name);
     if (rc == TDB_SUCCESS)
     {
+        /* the reverted statements' foreign key holds go with them */
+        tdb_fk_guard_release(trx, false, sp->fk_guard_mark);
 #ifdef WITH_WSREP
         /* drop the galera write intents the reverted statements registered past this savepoint. */
         tidesdb_wsrep_intent_truncate(trx, sp->wsrep_intent_mark);
@@ -377,6 +396,9 @@ static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
 
     /* The transactions a bulk statement stepped off are done with once the transaction ends. */
     tdb_trx_free_retired(trx);
+#ifdef WITH_WSREP
+    if (!tdb_wsrep_wait_for_victims(trx)) tdb_wsrep_commit_failed(thd, TDB_ERR_LOCKED);
+#endif
 
     /* Real commit -- flush to storage.
        After a successful commit, we keep the txn object alive and let
@@ -397,17 +419,19 @@ static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
             sql_print_error(
                 "[TIDESDB] hton_commit: flush_trx_fts_meta_pending returned %d (gen=%lu)", frc,
                 (unsigned long)trx->txn_generation);
-            tidesdb_txn_rollback(trx->txn);
-            tidesdb_txn_free(trx->txn);
-            trx->txn = NULL;
-            trx->txn_generation++;
-            trx->dirty = false;
-            trx->stmt_savepoint_active = false;
-            trx->pending_compacts.clear();
-            return tdb_rc_to_ha(frc, "hton_commit fts_meta_flush");
+#ifdef WITH_WSREP
+            tdb_wsrep_commit_failed(thd, frc);
+#endif
+            return tdb_trx_abandon(trx, frc, "hton_commit fts_meta_flush");
         }
 
+#ifdef WITH_WSREP
+        /* a transaction prepared earlier recorded its position before the prepare */
+        int rc = tdb_wsrep_before_engine_commit(thd, trx) ? TDB_ERR_IO : TDB_SUCCESS;
+        if (rc == TDB_SUCCESS) rc = tdb_txn_commit_stateful(thd, trx->txn);
+#else
         int rc = tdb_txn_commit_stateful(thd, trx->txn);
+#endif
         if (rc != TDB_SUCCESS)
         {
             /* Only log truly unexpected errors (not transient conflicts). */
@@ -416,14 +440,10 @@ static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
                     "[TIDESDB] hton_commit: tidesdb_txn_commit returned %d "
                     "(dirty=%d gen=%lu)",
                     rc, trx->dirty, (unsigned long)trx->txn_generation);
-            tdb_txn_rollback_stateful(trx->txn);
-            tidesdb_txn_free(trx->txn);
-            trx->txn = NULL;
-            trx->txn_generation++;
-            trx->dirty = false;
-            trx->stmt_savepoint_active = false;
-            trx->pending_compacts.clear();
-            return tdb_rc_to_ha(rc, "hton_commit");
+#ifdef WITH_WSREP
+            tdb_wsrep_commit_failed(thd, rc);
+#endif
+            return tdb_trx_abandon(trx, rc, "hton_commit");
         }
         /* We keep txn alive for reuse via txn_reset on next use. */
         trx->txn_generation++;
@@ -439,8 +459,12 @@ static int tdb_finalize_commit(THD *thd, tidesdb_trx_t *trx)
         trx->txn_generation++;
         trx->needs_reset = true;
     }
+    tdb_fk_guard_release(trx, true, 0);
 #ifdef WITH_WSREP
-    /* the transaction resolved, so drop its galera write-intent keys from the shared map. */
+    /* the transaction committed and its change-capture hooks already recorded when its keys
+       committed, so record its position, then drop its galera write-intent holds from the shared
+       map. */
+    tidesdb_wsrep_note_commit(thd, trx);
     tidesdb_wsrep_intent_clear(trx);
 #endif
     trx->dirty = false;
@@ -547,7 +571,15 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
         return rc;
     }
 
-    if (!trx->txn) return 0;
+    if (!trx->txn)
+    {
+        tdb_fk_guard_release(trx, false, 0);
+#ifdef WITH_WSREP
+        /* a failed commit or prepare freed the transaction; nothing it held may outlive it */
+        tidesdb_wsrep_intent_clear(trx);
+#endif
+        return 0;
+    }
 
     bool is_real_rollback = all || !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
 
@@ -590,6 +622,7 @@ static int tidesdb_rollback(handlerton *, THD *thd, bool all)
     tdb_trx_free_retired(trx);
     trx->pending_compacts.clear();
     trx->txn_generation++;
+    tdb_fk_guard_release(trx, false, 0);
 #ifdef WITH_WSREP
     /* the transaction resolved, so drop its galera write-intent keys from the shared map. */
     tidesdb_wsrep_intent_clear(trx);
@@ -621,10 +654,49 @@ static int tidesdb_close_connection(handlerton *, THD *thd)
             tidesdb_txn_free(trx->txn);
         }
         tdb_trx_free_retired(trx);
+        tdb_fk_guard_release(trx, false, 0);
+#ifdef WITH_WSREP
+        /* the map points at this context, so its holds go before it is freed */
+        tidesdb_wsrep_intent_clear(trx);
+#endif
         delete trx;
         thd_set_ha_data(thd, tidesdb_hton, NULL);
     }
     return 0;
+}
+
+/* The participant the server commits and rolls back the engine's transactions through.  Under
+   Galera the server certifies a transaction from its commit loop once for every participant that
+   carries the replication flag, so a transaction writing TidesDB and InnoDB, whose participant
+   carries it, was certified twice and Galera stopped the node.  The flag on the handlerton is
+   what makes a TidesDB row replicate, and the server reads it there for every write, so the
+   handlerton keeps it, and the engine commits through a copy of it without the flag.  The copy
+   has the same slot, so the engine's per-connection data and the server's record of what the
+   transaction wrote are unchanged.  A transaction that writes only TidesDB is certified when it
+   commits, and one that also writes InnoDB is certified once, through InnoDB, with the keys and
+   rows of both.  The copy is taken on first use, after the server has assigned the slot. */
+typedef std::remove_pointer<decltype(std::declval<Ha_trx_info &>().ht())>::type tdb_participant_t;
+
+static tdb_participant_t *tdb_participant()
+{
+#ifdef WITH_WSREP
+    static tdb_participant_t participant;
+    static std::once_flag once;
+    std::call_once(once,
+                   []
+                   {
+                       participant = *static_cast<tdb_participant_t *>(tidesdb_hton);
+                       participant.flags &= ~HTON_WSREP_REPLICATION;
+                   });
+    return &participant;
+#else
+    return tidesdb_hton;
+#endif
+}
+
+static void tdb_trans_register(THD *thd, bool all)
+{
+    trans_register_ha(thd, all, tdb_participant(), 0);
 }
 
 /*
@@ -657,8 +729,8 @@ static int tidesdb_start_consistent_snapshot(handlerton *, THD *thd)
 
     /* We register at both statement and transaction level so the server
        knows TidesDB is participating in this BEGIN block. */
-    trans_register_ha(thd, false, tidesdb_hton, 0);
-    trans_register_ha(thd, true, tidesdb_hton, 0);
+    tdb_trans_register(thd, false);
+    tdb_trans_register(thd, true);
     return 0;
 }
 
@@ -723,10 +795,7 @@ int ha_tidesdb::external_lock_acquire(THD *thd)
        reads the cache instead of re-calling thd_sql_command() and
        thd_test_options(). */
     int sql_cmd = thd_sql_command(thd);
-    bool is_ddl =
-        (sql_cmd == SQLCOM_ALTER_TABLE || sql_cmd == SQLCOM_CREATE_INDEX ||
-         sql_cmd == SQLCOM_DROP_INDEX || sql_cmd == SQLCOM_TRUNCATE || sql_cmd == SQLCOM_OPTIMIZE ||
-         sql_cmd == SQLCOM_CREATE_TABLE || sql_cmd == SQLCOM_DROP_TABLE);
+    bool is_ddl = tdb_sql_command_is_ddl(sql_cmd);
     bool is_autocommit = !thd_test_options(thd, OPTION_NOT_AUTOCOMMIT | OPTION_BEGIN);
 
     cached_sql_cmd_ = sql_cmd;
@@ -752,15 +821,19 @@ int ha_tidesdb::external_lock_acquire(THD *thd)
     cached_thd_ = thd;
     cached_trx_ = trx;
     trx->copy_row_expiry_set = false;
+#ifdef WITH_WSREP
+    /* every table locks before the statement reads anything, so this is at or below every read */
+    trx->wsrep_stmt_ceiling = trx->txn ? tidesdb_txn_read_snapshot(trx->txn) : UINT64_MAX;
+#endif
     /* The table's foreign keys as of this statement, rebuilt if a constraint was added or dropped
        since the last one.  A catalog that could not be read fails the statement rather than run it
        with constraints unenforced. */
     fk_stmt_ = fk_current();
     if (share && !fk_stmt_) return HA_ERR_INTERNAL_ERROR;
 
-    trans_register_ha(thd, false, ht, 0);
+    tdb_trans_register(thd, false);
 
-    if (!is_autocommit) trans_register_ha(thd, true, ht, 0);
+    if (!is_autocommit) tdb_trans_register(thd, true);
 
     /* Arm a statement savepoint so a statement error inside BEGIN...COMMIT
        rolls back only this statement, not the whole transaction.  Only for
@@ -839,176 +912,6 @@ THR_LOCK_DATA **ha_tidesdb::store_lock(THD *thd, THR_LOCK_DATA **to, enum thr_lo
     return to;
 }
 
-/* ******************** two-phase commit (XA) ******************** */
-
-/* two-phase-commit phase one.  fold the pending fts meta into the transaction, then durably prepare
-   its write batch under the connection's XID.  an external XA PREPARE additionally hands the
-   prepared transaction to the global registry and detaches it from the connection, so a later
-   XA COMMIT/ROLLBACK on any connection -- or after a restart -- can resolve it. */
-#if MYSQL_VERSION_ID >= 110800
-static int tidesdb_prepare(THD *thd, bool all)
-#else
-static int tidesdb_prepare(handlerton *, THD *thd, bool all)
-#endif
-{
-    tidesdb_trx_t *trx = (tidesdb_trx_t *)thd_get_ha_data(thd, tidesdb_hton);
-    if (!trx || !trx->txn) return 0;
-    if (!all) return 0; /* statement-level prepare defers, like statement-level commit */
-
-    stmt_savepoint_disarm(trx);
-
-    bool is_external = (thd_sql_command(thd) == SQLCOM_XA_PREPARE);
-
-    /* A read-only transaction driven by the internal 2PC coordinator has nothing durable to
-       prepare; leave it for commit() to roll back.  An external XA PREPARE still records it so the
-       later XA COMMIT/ROLLBACK can resolve the XID. */
-    if (!trx->dirty && !is_external) return 0;
-
-    if (trx->dirty)
-    {
-        int frc = flush_trx_fts_meta_pending(thd, trx);
-        if (frc != TDB_SUCCESS)
-        {
-            tdb_txn_rollback_stateful(trx->txn);
-            tidesdb_txn_free(trx->txn);
-            trx->txn = NULL;
-            trx->txn_generation++;
-            trx->dirty = false;
-            return tdb_rc_to_ha(frc, "hton_prepare fts_meta_flush");
-        }
-    }
-
-    XID xid;
-    thd_get_xid(thd, (MYSQL_XID *)&xid);
-    std::string key = tdb_xid_key(&xid);
-
-    int rc = tidesdb_txn_prepare(trx->txn, (const uint8_t *)key.data(), key.size());
-    if (rc != TDB_SUCCESS)
-    {
-        tdb_txn_rollback_stateful(trx->txn);
-        tidesdb_txn_free(trx->txn);
-        trx->txn = NULL;
-        trx->txn_generation++;
-        trx->dirty = false;
-        return tdb_rc_to_ha(rc, "hton_prepare");
-    }
-
-    if (is_external)
-    {
-        /* Publish the prepared transaction so it can also be resolved by XID -- from another
-           connection, or after a restart via recover().  The transaction stays attached to this
-           connection: a same-connection XA COMMIT/ROLLBACK runs through commit()/rollback(), which
-           drop this registry entry, while a disconnect leaves it in-doubt for the registry to own.
-         */
-        std::lock_guard<std::mutex> lk(tdb_prepared_mtx);
-        tdb_prepared_txns[key] = trx->txn;
-        trx->prepared_xid = std::move(key);
-    }
-    return 0;
-}
-
-#if MYSQL_VERSION_ID >= 110800
-static int tidesdb_commit_by_xid(XID *xid)
-#else
-static int tidesdb_commit_by_xid(handlerton *, XID *xid)
-#endif
-{
-    std::string key = tdb_xid_key(xid);
-    tidesdb_txn_t *txn = NULL;
-    {
-        std::lock_guard<std::mutex> lk(tdb_prepared_mtx);
-        auto it = tdb_prepared_txns.find(key);
-        if (it == tdb_prepared_txns.end()) return 0; /* not one of ours */
-        txn = it->second;
-        tdb_prepared_txns.erase(it);
-    }
-    int rc = tidesdb_txn_commit_prepared(txn);
-    if (rc != TDB_SUCCESS)
-    {
-        /* A transient failure leaves the transaction prepared; re-register so the coordinator can
-           retry the decision. */
-        std::lock_guard<std::mutex> lk(tdb_prepared_mtx);
-        tdb_prepared_txns[key] = txn;
-        return tdb_rc_to_ha(rc, "commit_by_xid");
-    }
-    tidesdb_txn_free(txn);
-    return 0;
-}
-
-#if MYSQL_VERSION_ID >= 110800
-static int tidesdb_rollback_by_xid(XID *xid)
-#else
-static int tidesdb_rollback_by_xid(handlerton *, XID *xid)
-#endif
-{
-    std::string key = tdb_xid_key(xid);
-    tidesdb_txn_t *txn = NULL;
-    {
-        std::lock_guard<std::mutex> lk(tdb_prepared_mtx);
-        auto it = tdb_prepared_txns.find(key);
-        if (it == tdb_prepared_txns.end()) return 0; /* not one of ours */
-        txn = it->second;
-        tdb_prepared_txns.erase(it);
-    }
-    int rc = tidesdb_txn_rollback_prepared(txn);
-    if (rc != TDB_SUCCESS)
-    {
-        std::lock_guard<std::mutex> lk(tdb_prepared_mtx);
-        tdb_prepared_txns[key] = txn;
-        return tdb_rc_to_ha(rc, "rollback_by_xid");
-    }
-    tidesdb_txn_free(txn);
-    return 0;
-}
-
-/* load the transactions the library recovered as in-doubt after the last shutdown into the prepared
-   registry and the recovery cursor, once.  caller holds tdb_prepared_mtx. */
-static void tdb_load_recovered_prepared()
-{
-    if (tdb_recovery_loaded) return;
-    tdb_recovery_loaded = true;
-    if (!tdb_global) return;
-
-    int count = 0;
-    if (tidesdb_recover_prepared(tdb_global, NULL, 0, &count) != TDB_SUCCESS || count <= 0) return;
-
-    std::vector<tidesdb_prepared_txn_t> buf((size_t)count);
-    int got = 0;
-    if (tidesdb_recover_prepared(tdb_global, buf.data(), count, &got) != TDB_SUCCESS) return;
-
-    for (int i = 0; i < got; i++)
-    {
-        std::string key((const char *)buf[i].xid, buf[i].xid_size);
-        tdb_prepared_txns[key] = buf[i].txn;
-        tdb_recovery_xids.push_back(std::move(key));
-    }
-}
-
-/* hand the server the in-doubt XIDs recovered from storage, in batches drained across calls, so it
-   can rebuild its transaction cache and let the operator resolve each with XA COMMIT/ROLLBACK. */
-#if MYSQL_VERSION_ID >= 110800
-static int tidesdb_recover(XID *xid_list, uint len)
-#else
-static int tidesdb_recover(handlerton *, XID *xid_list, uint len)
-#endif
-{
-    if (!xid_list || len == 0) return 0;
-
-    std::lock_guard<std::mutex> lk(tdb_prepared_mtx);
-    tdb_load_recovered_prepared();
-
-    uint n = 0;
-    while (tdb_recovery_pos < tdb_recovery_xids.size() && n < len)
-    {
-        const std::string &k = tdb_recovery_xids[tdb_recovery_pos++];
-        size_t clen = k.size() < sizeof(XID) ? k.size() : sizeof(XID);
-        memset(&xid_list[n], 0, sizeof(XID));
-        memcpy(&xid_list[n], k.data(), clen);
-        n++;
-    }
-    return (int)n;
-}
-
 /* ******************** handlerton registration ******************** */
 
 void tidesdb_txn_register(handlerton *hton)
@@ -1028,11 +931,5 @@ void tidesdb_txn_register(handlerton *hton)
     hton->savepoint_release = tidesdb_savepoint_release;
     hton->start_consistent_snapshot = tidesdb_start_consistent_snapshot;
 
-    /* two-phase commit (XA) -- prepare durably logs the write batch under the XID, the by-xid
-       resolvers finish a prepared transaction from any connection, and recover replays the ones the
-       library found in-doubt after a restart. */
-    hton->prepare = tidesdb_prepare;
-    hton->recover = tidesdb_recover;
-    hton->commit_by_xid = tidesdb_commit_by_xid;
-    hton->rollback_by_xid = tidesdb_rollback_by_xid;
+    tidesdb_xa_register(hton);
 }

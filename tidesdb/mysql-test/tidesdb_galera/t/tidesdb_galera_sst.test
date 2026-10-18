@@ -1,0 +1,59 @@
+# A node that rejoins through a full state transfer receives its TidesDB rows.  The store lives
+# outside the server's data directory, where the transfer methods do not look, so a joiner used
+# to receive every table definition and none of the rows behind them.  The donor now writes a
+# consistent copy of the store into its data directory while the transfer holds its tables
+# locked, the rsync method carries it with everything else, and the joiner puts it in place as
+# its store before the store opens.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connection node_1
+CREATE TABLE t1 (id INT PRIMARY KEY, v VARCHAR(16), KEY (v)) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 'one'), (2, 'two'), (3, 'three');
+
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 3 FROM t1;
+--source include/wait_condition.inc
+
+--echo # node 2 leaves and loses its saved position, so it must rejoin by a full transfer
+--source include/shutdown_mysqld.inc
+--remove_file $MYSQLTEST_VARDIR/mysqld.2/data/grastate.dat
+
+--connection node_1
+let $wait_condition= SELECT VARIABLE_VALUE = 1 FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME = 'wsrep_cluster_size';
+--source include/wait_condition.inc
+INSERT INTO t1 VALUES (4, 'four'), (5, 'five');
+UPDATE t1 SET v = 'TWO' WHERE id = 2;
+DELETE FROM t1 WHERE id = 1;
+CREATE TABLE t2 (id INT PRIMARY KEY, n INT) ENGINE=TidesDB;
+INSERT INTO t2 VALUES (10, 100), (20, 200);
+
+--connection node_2
+--source include/start_mysqld.inc
+--source include/galera_wait_ready.inc
+
+--echo # node 2 holds every row node 1 wrote while it was away
+SELECT id, v FROM t1 ORDER BY id;
+SELECT id, v FROM t1 FORCE INDEX (v) WHERE v >= 'f' ORDER BY v;
+SELECT id, n FROM t2 ORDER BY id;
+
+--echo # and keeps replicating
+--connection node_1
+INSERT INTO t2 VALUES (30, 300);
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 3 FROM t2;
+--source include/wait_condition.inc
+SELECT id, n FROM t2 ORDER BY id;
+
+--echo # the donor removed its transfer copy once the joiner had it
+--connection node_1
+--error 1
+--file_exists $MYSQLTEST_VARDIR/mysqld.1/data/#tidesdb_sst
+
+DROP TABLE t1, t2;
+
+--source include/galera_end.inc

@@ -1,0 +1,59 @@
+# A state transfer that replaces the data directory without carrying the store, as mariabackup
+# does, used to leave a node that reported itself synced while its TidesDB tables were missing
+# rows or held stale ones.  The store now carries an identity, recorded in the store and in a
+# file in the data directory, and TidesDB refuses to start when the two disagree.  Here node 2
+# receives a data directory identity from another node without that node's store, which is what
+# such a transfer leaves.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+# the refused node drops out of the group while a view is still forming
+call mtr.add_suppression("WSREP: evs::proto.*install timer expired");
+call mtr.add_suppression("WSREP: no nodes coming from prim view, prim not possible");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+call mtr.add_suppression("WSREP: evs::proto.*install timer expired");
+call mtr.add_suppression("WSREP: no nodes coming from prim view, prim not possible");
+call mtr.add_suppression("\\[TIDESDB\\] The data directory and the TidesDB store");
+call mtr.add_suppression("Plugin 'TidesDB' (registration as a STORAGE ENGINE|init function returned error)");
+call mtr.add_suppression("Unknown/unsupported storage engine");
+call mtr.add_suppression("CF '.*' not found for table");
+call mtr.add_suppression("Can't open table|Incorrect information in file|Unknown storage engine");
+
+--connection node_1
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 1), (2, 2);
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 2 FROM t;
+--source include/wait_condition.inc
+
+--echo # node 2 gets another node's data directory identity without that node's store
+--source include/shutdown_mysqld.inc
+--let $id2= $MYSQLTEST_VARDIR/mysqld.2/data/mysql/tidesdb_store_id.opt
+--copy_file $id2 $MYSQLTEST_VARDIR/tmp/own_store_id.opt
+--remove_file $id2
+--write_file $id2
+0123456789abcdef0123456789abcdef
+EOF
+--echo # TidesDB refuses to start and says why
+--let $refused_log= $MYSQLTEST_VARDIR/tmp/store_identity_refused.err
+--error 1,134
+--exec $MYSQLD --defaults-group-suffix=.2 --defaults-file=$MYSQLTEST_VARDIR/my.cnf --plugin-load-add=ha_tidesdb.so --plugin-maturity=unknown --log-error=$refused_log
+--let SEARCH_FILE= $refused_log
+--let SEARCH_PATTERN= The data directory and the TidesDB store at .* did not come from the same node
+--source include/search_pattern_in_file.inc
+--remove_file $refused_log
+
+--echo # with its own identity back, the store loads with its rows
+--remove_file $id2
+--copy_file $MYSQLTEST_VARDIR/tmp/own_store_id.opt $id2
+--remove_file $MYSQLTEST_VARDIR/tmp/own_store_id.opt
+--source include/start_mysqld.inc
+--source include/galera_wait_ready.inc
+SELECT id, v FROM t ORDER BY id;
+
+--connection node_1
+DROP TABLE t;
+
+--source include/galera_end.inc

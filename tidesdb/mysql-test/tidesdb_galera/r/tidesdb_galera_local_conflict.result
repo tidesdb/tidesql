@@ -1,0 +1,128 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_1;
+CREATE TABLE t (id INT PRIMARY KEY, v INT, u INT, UNIQUE KEY k_u (u)) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 0, 10), (2, 0, 20);
+connect  node_1b, 127.0.0.1, root, , test, $NODE_MYPORT_1;
+#
+# 1. Another transaction on the node holds an uncommitted write to the row.
+#
+connection node_1;
+START TRANSACTION;
+UPDATE t SET v = v + 1 WHERE id = 1;
+connection node_1b;
+START TRANSACTION;
+UPDATE t SET v = v + 10 WHERE id = 1;
+connection node_1;
+COMMIT;
+connection node_1b;
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+# the retried transaction now sees the committed row
+connection node_1b;
+START TRANSACTION;
+UPDATE t SET v = v + 10 WHERE id = 1;
+COMMIT;
+#
+# 2. The row was committed after the transaction's snapshot was taken.
+#
+connection node_1b;
+START TRANSACTION;
+SELECT v FROM t WHERE id = 2;
+v
+0
+connection node_1;
+UPDATE t SET v = v + 1 WHERE id = 2;
+connection node_1b;
+UPDATE t SET v = v + 10 WHERE id = 2;
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+START TRANSACTION;
+UPDATE t SET v = v + 10 WHERE id = 2;
+COMMIT;
+#
+# 3. The same unique value inserted by two transactions on the node.
+#
+connection node_1;
+START TRANSACTION;
+INSERT INTO t VALUES (3, 0, 99);
+connection node_1b;
+START TRANSACTION;
+INSERT INTO t VALUES (4, 0, 99);
+connection node_1;
+COMMIT;
+connection node_1b;
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+#
+# 4. A unique value committed after the transaction's snapshot was taken.
+#
+connection node_1b;
+START TRANSACTION;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+3
+connection node_1;
+INSERT INTO t VALUES (5, 0, 98);
+connection node_1b;
+INSERT INTO t VALUES (6, 0, 98);
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+#
+# 5. READ COMMITTED commits never check for conflicts, but Galera still needs two writers of
+#    one row on a node serialized, as a row lock would at any level.  A duplicate primary
+#    key and a delete racing an update are both refused before they replicate.
+#
+connection node_1;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+connection node_1b;
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+connection node_1;
+START TRANSACTION;
+INSERT INTO t VALUES (8, 0, 80);
+connection node_1b;
+START TRANSACTION;
+INSERT INTO t VALUES (8, 1, 81);
+ERROR 40001: Deadlock found when trying to get lock; try restarting transaction
+connection node_1;
+COMMIT;
+connection node_1;
+START TRANSACTION;
+DELETE FROM t WHERE id = 8;
+connection node_1b;
+START TRANSACTION;
+UPDATE t SET v = v + 10 WHERE id = 8;
+ERROR 40001: Deadlock found when trying to get lock; try restarting transaction
+connection node_1;
+COMMIT;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+connection node_1b;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+#
+# Both nodes hold the same rows, and the node still commits.
+#
+connection node_1;
+INSERT INTO t VALUES (7, 0, 70);
+SELECT id, v, u FROM t ORDER BY id;
+id	v	u
+1	11	10
+2	11	20
+3	0	99
+5	0	98
+7	0	70
+connection node_2;
+SELECT id, v, u FROM t ORDER BY id;
+id	v	u
+1	11	10
+2	11	20
+3	0	99
+5	0	98
+7	0	70
+disconnect node_1b;
+connection node_1;
+DROP TABLE t;
+disconnect node_2;
+disconnect node_1;

@@ -1,0 +1,81 @@
+# A node rejoining after TidesDB commits, after a clean shutdown and after a crash.  The server
+# records the cluster position only at certain events, and every other engine reports only its own
+# last commit, so a node whose last commits were TidesDB ones used to rejoin from an older point and
+# replay write sets it already held, which failed on the first duplicate row and left the node
+# inconsistent.  TidesDB now settles the node's real position before it rejoins and hands it to
+# every engine, so a clean shutdown rejoins by an incremental transfer, and a crash, after which
+# the position is not known, rejoins by a full state transfer that carries the store.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+# the survivor logs these while its crashed peer is gone and it has no quorum
+call mtr.add_suppression("WSREP: gcs_caused\\(\\) returned -(107|1) ");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connection node_1
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 1), (2, 2);
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 2 FROM t;
+--source include/wait_condition.inc
+
+--echo #
+--echo # 1. A clean shutdown after TidesDB commits
+--echo #
+--source include/shutdown_mysqld.inc
+--connection node_1
+let $wait_condition= SELECT VARIABLE_VALUE = 1 FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME = 'wsrep_cluster_size';
+--source include/wait_condition.inc
+INSERT INTO t VALUES (3, 3);
+UPDATE t SET v = 20 WHERE id = 2;
+--connection node_2
+--source include/start_mysqld.inc
+--source include/galera_wait_ready.inc
+SELECT id, v FROM t ORDER BY id;
+
+--echo #
+--echo # 2. A crash after TidesDB commits
+--echo #
+--connection node_2
+INSERT INTO t VALUES (4, 4);
+--connection node_1
+let $wait_condition= SELECT COUNT(*) = 4 FROM t;
+--source include/wait_condition.inc
+--connection node_2
+--source include/kill_galera.inc
+--echo # a crashed peer leaves the survivor of a two node cluster without quorum, so it is made
+--echo # primary again on its own
+--connection node_1
+# a node without quorum refuses a causal read, the status query included, so the wait reads
+# without one, and the peer is declared gone only after the suite's inactivity timeout
+SET SESSION wsrep_sync_wait = 0;
+--let $wait_timeout= 90
+let $wait_condition= SELECT VARIABLE_VALUE = 'non-Primary' FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME = 'wsrep_cluster_status';
+--source include/wait_condition.inc
+SET GLOBAL wsrep_provider_options = 'pc.bootstrap=YES';
+--source include/galera_wait_ready.inc
+SET SESSION wsrep_sync_wait = DEFAULT;
+INSERT INTO t VALUES (5, 5);
+DELETE FROM t WHERE id = 1;
+--connection node_2
+--source include/start_mysqld.inc
+--source include/galera_wait_ready.inc
+SELECT id, v FROM t ORDER BY id;
+
+--echo #
+--echo # Both nodes hold the same rows, and keep replicating
+--echo #
+--connection node_1
+INSERT INTO t VALUES (6, 6);
+SELECT id, v FROM t ORDER BY id;
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 5 FROM t;
+--source include/wait_condition.inc
+SELECT id, v FROM t ORDER BY id;
+
+--connection node_1
+DROP TABLE t;
+
+--source include/galera_end.inc

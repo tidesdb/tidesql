@@ -149,6 +149,11 @@ by seeking that CF's last key. When the auto-increment column is instead the lea
 another index, the engine seeds by seeking that index's last entry, so the counter is correct at
 open in both cases. Each insert increments it with a compare-and-swap, making assignment
 constant-time, and an explicit insert larger than the current value bumps the counter to match.
+Values are reserved on the grid `auto_increment_offset` and `auto_increment_increment` describe,
+offset plus a multiple of the increment, with a reserved run spaced by the increment, the same
+values the server assigns. So concurrent sessions never receive the same value with an increment
+above one, and under Galera, where `wsrep_auto_increment_control` sets both on every node, each node
+generates values no other node does.
 
 `TRUNCATE TABLE` resets the counter through the engine's `reset_auto_increment` hook, so the next
 generated id is `1`, for user-defined auto-increment columns and for the hidden row id alike.

@@ -18,8 +18,8 @@ statement costs a single stats pass.
 
 | Variable | Description |
 |----------|-------------|
-| `Tidesdb_version` | TideSQL plugin version string, for example `5.2.0` |
-| `Tidesdb_version_hex` | Plugin version as an integer, for example `328192` for `0x50200` |
+| `Tidesdb_version` | TideSQL plugin version string, for example `5.2.1` |
+| `Tidesdb_version_hex` | Plugin version as an integer, for example `328193` for `0x50201` |
 | `Tidesdb_library_version` | Version string of the TidesDB library the plugin was built against, for example `10.2.1` |
 
 ## Sequence and transactions

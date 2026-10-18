@@ -399,6 +399,26 @@ int ha_tidesdb::recover_auto_inc_secondary()
 
 /* ******************** open / close / create ******************** */
 
+/* An encrypted table takes the latest version of its key at open, so a table whose key the key
+   management plugin no longer serves is refused rather than opened over rows it cannot read. */
+static int tdb_share_init_encryption(TidesDB_share *share, TABLE *table)
+{
+    share->encrypted = false;
+    share->encryption_key_id = TIDESDB_DEFAULT_ENCRYPTION_KEY_ID;
+    share->encryption_key_version = 0;
+    if (!TDB_TABLE_OPTIONS(table) || !TDB_TABLE_OPTIONS(table)->encrypted) return 0;
+    share->encrypted = true;
+    share->encryption_key_id = (uint)TDB_TABLE_OPTIONS(table)->encryption_key_id;
+    uint ver = encryption_key_get_latest_version(share->encryption_key_id);
+    if (ver == ENCRYPTION_KEY_VERSION_INVALID)
+    {
+        sql_print_error("[TIDESDB] encryption key %u not available", share->encryption_key_id);
+        return HA_ERR_NO_SUCH_TABLE;
+    }
+    share->encryption_key_version = ver;
+    return 0;
+}
+
 int ha_tidesdb::open_init_share_columns(const char *name)
 {
     share->cf_name = path_to_cf_name(name);
@@ -416,6 +436,10 @@ int ha_tidesdb::open_init_share_columns(const char *name)
         sql_print_error("[TIDESDB] CF '%s' not found for table '%s'", share->cf_name.c_str(), name);
         return HA_ERR_NO_SUCH_TABLE;
     }
+#ifdef WITH_WSREP
+    tidesdb_wsrep_watch_cf(share->cf, false);
+    tidesdb_wsrep_watch_cf(share->uniq_cf, true);
+#endif
 
     if (table->s->primary_key != MAX_KEY)
     {
@@ -439,21 +463,7 @@ int ha_tidesdb::open_init_share_columns(const char *name)
 
     if (TDB_TABLE_OPTIONS(table)) share->default_ttl = TDB_TABLE_OPTIONS(table)->ttl;
 
-    share->encrypted = false;
-    share->encryption_key_id = TIDESDB_DEFAULT_ENCRYPTION_KEY_ID;
-    share->encryption_key_version = 0;
-    if (TDB_TABLE_OPTIONS(table) && TDB_TABLE_OPTIONS(table)->encrypted)
-    {
-        share->encrypted = true;
-        share->encryption_key_id = (uint)TDB_TABLE_OPTIONS(table)->encryption_key_id;
-        uint ver = encryption_key_get_latest_version(share->encryption_key_id);
-        if (ver == ENCRYPTION_KEY_VERSION_INVALID)
-        {
-            sql_print_error("[TIDESDB] encryption key %u not available", share->encryption_key_id);
-            return HA_ERR_NO_SUCH_TABLE;
-        }
-        share->encryption_key_version = ver;
-    }
+    if (int erc = tdb_share_init_encryption(share, table)) return erc;
 
     share->ttl_field_idx = TIDESDB_TTL_FIELD_NONE;
     for (uint i = 0; i < table->s->fields; i++)

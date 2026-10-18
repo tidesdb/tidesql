@@ -1,0 +1,160 @@
+# Write-write conflicts between two transactions on the same node.  Galera certifies a
+# transaction against what was committed when its commit starts, so a local loser that
+# commits after its local winner looks serial to the provider and certifies cleanly.
+# InnoDB never reaches that point, because the loser waits on the winner's row lock and
+# then updates the current row.  TidesDB finds the conflict by validating a transaction
+# as it commits, and that check used to run after certification, so the loser's write
+# set had already reached the other nodes when its commit failed on this one.
+#
+# The engine now prepares a transaction, which is that validation, before Galera
+# certifies it.  At SNAPSHOT the loser is refused at COMMIT, before anything replicates,
+# with the error the same conflict gives without Galera.  Below SNAPSHOT a commit checks
+# nothing, so two writers of one row would replay on the other nodes as a duplicate
+# insert or an update of a row that is gone, and the engine refuses the losing write
+# while its statement runs, as a row lock would.  Both shapes are covered, a writer that
+# meets another transaction's uncommitted write and a writer whose snapshot predates a
+# commit to the row, for a primary key and for a unique secondary key.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connection node_1
+CREATE TABLE t (id INT PRIMARY KEY, v INT, u INT, UNIQUE KEY k_u (u)) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 0, 10), (2, 0, 20);
+
+# a second connection to node 1 for the losing transaction
+--connect (node_1b, 127.0.0.1, root, , test, $NODE_MYPORT_1)
+
+--echo #
+--echo # 1. Another transaction on the node holds an uncommitted write to the row.
+--echo #
+--connection node_1
+START TRANSACTION;
+UPDATE t SET v = v + 1 WHERE id = 1;
+
+--connection node_1b
+START TRANSACTION;
+UPDATE t SET v = v + 10 WHERE id = 1;
+
+--connection node_1
+COMMIT;
+
+--connection node_1b
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+
+--echo # the retried transaction now sees the committed row
+--connection node_1b
+START TRANSACTION;
+UPDATE t SET v = v + 10 WHERE id = 1;
+COMMIT;
+
+--echo #
+--echo # 2. The row was committed after the transaction's snapshot was taken.
+--echo #
+--connection node_1b
+START TRANSACTION;
+SELECT v FROM t WHERE id = 2;
+
+--connection node_1
+UPDATE t SET v = v + 1 WHERE id = 2;
+
+--connection node_1b
+UPDATE t SET v = v + 10 WHERE id = 2;
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+
+START TRANSACTION;
+UPDATE t SET v = v + 10 WHERE id = 2;
+COMMIT;
+
+--echo #
+--echo # 3. The same unique value inserted by two transactions on the node.
+--echo #
+--connection node_1
+START TRANSACTION;
+INSERT INTO t VALUES (3, 0, 99);
+
+--connection node_1b
+START TRANSACTION;
+INSERT INTO t VALUES (4, 0, 99);
+
+--connection node_1
+COMMIT;
+
+--connection node_1b
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+
+--echo #
+--echo # 4. A unique value committed after the transaction's snapshot was taken.
+--echo #
+--connection node_1b
+START TRANSACTION;
+SELECT COUNT(*) FROM t;
+
+--connection node_1
+INSERT INTO t VALUES (5, 0, 98);
+
+--connection node_1b
+INSERT INTO t VALUES (6, 0, 98);
+--error ER_ERROR_DURING_COMMIT
+COMMIT;
+
+--echo #
+--echo # 5. READ COMMITTED commits never check for conflicts, but Galera still needs two writers of
+--echo #    one row on a node serialized, as a row lock would at any level.  A duplicate primary
+--echo #    key and a delete racing an update are both refused before they replicate.
+--echo #
+--connection node_1
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+--connection node_1b
+SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;
+
+--connection node_1
+START TRANSACTION;
+INSERT INTO t VALUES (8, 0, 80);
+
+--connection node_1b
+START TRANSACTION;
+--error ER_LOCK_DEADLOCK
+INSERT INTO t VALUES (8, 1, 81);
+
+--connection node_1
+COMMIT;
+
+--connection node_1
+START TRANSACTION;
+DELETE FROM t WHERE id = 8;
+
+--connection node_1b
+START TRANSACTION;
+--error ER_LOCK_DEADLOCK
+UPDATE t SET v = v + 10 WHERE id = 8;
+
+--connection node_1
+COMMIT;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+--connection node_1b
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+--echo #
+--echo # Both nodes hold the same rows, and the node still commits.
+--echo #
+--connection node_1
+INSERT INTO t VALUES (7, 0, 70);
+SELECT id, v, u FROM t ORDER BY id;
+
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 5 FROM t;
+--source include/wait_condition.inc
+SELECT id, v, u FROM t ORDER BY id;
+
+--disconnect node_1b
+--connection node_1
+DROP TABLE t;
+
+--source include/galera_end.inc

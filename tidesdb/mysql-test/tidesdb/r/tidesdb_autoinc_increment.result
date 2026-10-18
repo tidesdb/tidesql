@@ -1,0 +1,88 @@
+CREATE TABLE t (id INT AUTO_INCREMENT PRIMARY KEY, who VARCHAR(8)) ENGINE=TIDESDB;
+connect  con2, localhost, root,,;
+connection default;
+SET SESSION auto_increment_increment = 3, auto_increment_offset = 2;
+connection con2;
+SET SESSION auto_increment_increment = 3, auto_increment_offset = 2;
+connection default;
+INSERT INTO t (who) VALUES ('a1');
+connection con2;
+INSERT INTO t (who) VALUES ('b1');
+connection default;
+INSERT INTO t (who) VALUES ('a2'), ('a3');
+connection con2;
+INSERT INTO t (who) VALUES ('b2'), ('b3'), ('b4');
+# every row is kept, each on the grid, none sharing a value
+SELECT COUNT(*) AS rows_kept, COUNT(DISTINCT id) AS distinct_ids FROM t;
+rows_kept	distinct_ids
+7	7
+SELECT COUNT(*) AS off_grid FROM t WHERE (id - 2) % 3 <> 0;
+off_grid
+0
+SELECT id, who FROM t ORDER BY id;
+id	who
+2	a1
+5	b1
+8	a2
+11	a3
+14	b2
+17	b3
+20	b4
+# sessions reserving values at the same time never land on one value
+CREATE TABLE r (id INT AUTO_INCREMENT PRIMARY KEY, who INT) ENGINE=TIDESDB;
+connect  w$i, localhost, root,,;
+SET SESSION auto_increment_increment = 3, auto_increment_offset = 2;
+SET SESSION max_recursive_iterations = 10000;
+INSERT INTO r (who) WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2000) SELECT 1 FROM s;
+connect  w$i, localhost, root,,;
+SET SESSION auto_increment_increment = 3, auto_increment_offset = 2;
+SET SESSION max_recursive_iterations = 10000;
+INSERT INTO r (who) WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2000) SELECT 2 FROM s;
+connect  w$i, localhost, root,,;
+SET SESSION auto_increment_increment = 3, auto_increment_offset = 2;
+SET SESSION max_recursive_iterations = 10000;
+INSERT INTO r (who) WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2000) SELECT 3 FROM s;
+connect  w$i, localhost, root,,;
+SET SESSION auto_increment_increment = 3, auto_increment_offset = 2;
+SET SESSION max_recursive_iterations = 10000;
+INSERT INTO r (who) WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2000) SELECT 4 FROM s;
+connection w1;
+disconnect w1;
+connection w2;
+disconnect w2;
+connection w3;
+disconnect w3;
+connection w4;
+disconnect w4;
+connection default;
+SELECT COUNT(*) AS rows_kept, COUNT(DISTINCT id) AS distinct_ids FROM r;
+rows_kept	distinct_ids
+8000	8000
+SELECT who, COUNT(*) AS per_session FROM r GROUP BY who ORDER BY who;
+who	per_session
+1	2000
+2	2000
+3	2000
+4	2000
+SELECT COUNT(*) AS off_grid FROM r WHERE (id - 2) % 3 <> 0;
+off_grid
+0
+DROP TABLE r;
+# an offset larger than the increment still places values at the offset plus a multiple of it
+connection default;
+SET SESSION auto_increment_increment = 5, auto_increment_offset = 7;
+INSERT INTO t (who) VALUES ('c1'), ('c2');
+SELECT id, who FROM t WHERE who LIKE 'c%' ORDER BY id;
+id	who
+22	c1
+27	c2
+# the default spacing is unchanged
+SET SESSION auto_increment_increment = 1, auto_increment_offset = 1;
+INSERT INTO t (who) VALUES ('d1'), ('d2');
+SELECT id, who FROM t WHERE who LIKE 'd%' ORDER BY id;
+id	who
+28	d1
+29	d2
+disconnect con2;
+connection default;
+DROP TABLE t;

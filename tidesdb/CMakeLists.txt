@@ -205,7 +205,8 @@ SET(TIDESDB_CORE_SOURCES
         src/core/row_format.cc
         src/core/rir.cc
         src/core/cf_name.cc
-        src/core/fts_score.cc)
+        src/core/fts_score.cc
+        src/core/autoinc.cc)
 
 # Server-coupled handler modules split out of the ha_tidesdb.cc monolith.  Each is a thin
 # adapter over a src/core unit or a cohesive slice of the handler, kept under the 1000-line rule.
@@ -217,17 +218,24 @@ SET(TIDESDB_HANDLER_SOURCES
         src/handler/ha_tidesdb_keycodec.cc
         src/handler/ha_tidesdb_dml_update.cc
         src/handler/ha_tidesdb_dml.cc
+        src/handler/ha_tidesdb_dml_bulk.cc
         src/handler/ha_tidesdb_scan.cc
         src/handler/ha_tidesdb_index.cc
         src/handler/ha_tidesdb_optimizer.cc
         src/handler/ha_tidesdb_admin.cc
         src/handler/ha_tidesdb_ddl.cc
         src/handler/ha_tidesdb_fk.cc
+        src/handler/ha_tidesdb_fk_enforce.cc
+        src/handler/ha_tidesdb_fk_guard.cc
         src/handler/ha_tidesdb_lifecycle.cc
         src/handler/ha_tidesdb_open.cc
         src/handler/ha_tidesdb_read.cc
         src/handler/ha_tidesdb_txn.cc
+        src/handler/ha_tidesdb_txn_xa.cc
         src/handler/ha_tidesdb_wsrep.cc
+        src/handler/ha_tidesdb_wsrep_pos.cc
+        src/handler/ha_tidesdb_wsrep_sst.cc
+        src/handler/ha_tidesdb_wsrep_reads.cc
         src/engine/ha_tidesdb_config.cc
         src/engine/ha_tidesdb_status.cc)
 
@@ -240,7 +248,7 @@ SET(TIDESDB_HANDLER_SOURCES
 IF(COMMAND MARIADB_ADD_PLUGIN)
   MARIADB_ADD_PLUGIN(tidesdb ha_tidesdb.cc ${TIDESDB_CORE_SOURCES} ${TIDESDB_HANDLER_SOURCES}
           STORAGE_ENGINE MODULE_ONLY LINK_LIBRARIES ${TIDESDB_LIBS}
-          VERSION "5.2.0"
+          VERSION "5.2.1"
           AUTHOR "TidesDB Corp"
           DESCRIPTION "LSM B-tree engine with ACID transactions, MVCC concurrency, replication, and secondary, spatial, full-text and vector indexes")
 ELSE()

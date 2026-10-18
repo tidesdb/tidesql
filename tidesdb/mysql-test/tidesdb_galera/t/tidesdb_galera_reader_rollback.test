@@ -1,0 +1,74 @@
+# A reader that rolled back a statement is still the same transaction.  Its earlier reads are
+# still claimed when it prepares, so an applier writing what it read must still find it.  The
+# engine names a transaction to the applier by a counter that moves only when the transaction
+# ends, not when a statement inside it rolls back or a library handle is reused.  A statement
+# that fails and a rollback to a savepoint are both taken, then the other node writes the row the
+# transaction read before either.  The reader is aborted, the node stays up, and both nodes agree.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connect (node_1b, 127.0.0.1, root, , test, $NODE_MYPORT_1)
+
+--connection node_1
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 0), (2, 0);
+--connection node_2
+--let $wait_condition= SELECT COUNT(*) = 2 FROM t;
+--source include/wait_condition.inc
+
+--echo #
+--echo # 1. A statement that fails inside the transaction
+--echo #
+--connection node_1b
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+SELECT v FROM t WHERE id = 1;
+--error ER_DUP_ENTRY
+INSERT INTO t VALUES (2, 9);
+--connection node_2
+UPDATE t SET v = 1 WHERE id = 1;
+--connection node_1
+--let $wait_condition= SELECT v = 1 FROM t WHERE id = 1;
+--source include/wait_condition.inc
+--connection node_1b
+--error ER_LOCK_DEADLOCK,ER_ERROR_DURING_COMMIT
+COMMIT;
+
+--echo #
+--echo # 2. A rollback to a savepoint taken after the read
+--echo #
+--connection node_1b
+START TRANSACTION;
+SELECT v FROM t WHERE id = 2;
+SAVEPOINT s;
+UPDATE t SET v = 5 WHERE id = 1;
+ROLLBACK TO SAVEPOINT s;
+--connection node_2
+UPDATE t SET v = 2 WHERE id = 2;
+--connection node_1
+--let $wait_condition= SELECT v = 2 FROM t WHERE id = 2;
+--source include/wait_condition.inc
+--connection node_1b
+--error ER_LOCK_DEADLOCK,ER_ERROR_DURING_COMMIT
+COMMIT;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+--echo #
+--echo # Both nodes are up and agree
+--echo #
+--connection node_1
+SELECT id, v FROM t ORDER BY id;
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+--connection node_2
+SELECT id, v FROM t ORDER BY id;
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+
+--disconnect node_1b
+--connection node_1
+DROP TABLE t;
+
+--source include/galera_end.inc

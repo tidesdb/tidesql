@@ -1,0 +1,37 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_1;
+SET SESSION max_recursive_iterations = 10000;
+CREATE TABLE t (id INT PRIMARY KEY) ENGINE=TidesDB;
+INSERT INTO t VALUES (2000);
+# the last row collides, after well over one batch of rows
+INSERT INTO t WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2000)
+SELECT n FROM s;
+ERROR 23000: Duplicate entry '2000' for key 'PRIMARY'
+# nothing of the failed statement remains, on either node
+SELECT COUNT(*) FROM t;
+COUNT(*)
+1
+connection node_2;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+1
+# the same statement without the collision commits whole and replicates
+connection node_1;
+DELETE FROM t;
+INSERT INTO t WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM s WHERE n < 2000)
+SELECT n FROM s;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+2000
+connection node_2;
+SELECT COUNT(*) FROM t;
+COUNT(*)
+2000
+connection node_1;
+DROP TABLE t;
+disconnect node_2;
+disconnect node_1;

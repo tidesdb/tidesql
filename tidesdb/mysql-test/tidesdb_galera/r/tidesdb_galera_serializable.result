@@ -1,0 +1,80 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connect  node_1b, 127.0.0.1, root, , test, $NODE_MYPORT_1;
+connection node_1;
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 0), (2, 0), (3, 0);
+#
+# 1. A local write to a row a serializable transaction read commits, and the reader is refused
+#    at its own COMMIT
+#
+connection node_1b;
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+SELECT v FROM t WHERE id = 2;
+v
+0
+connection node_1;
+UPDATE t SET v = v + 1 WHERE id = 2;
+connection node_1b;
+UPDATE t SET v = v + 10 WHERE id = 1;
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+#
+# 2. A row inserted into a range a serializable transaction scanned refuses the reader the
+#    same way
+#
+connection node_1b;
+START TRANSACTION;
+SELECT COUNT(*) FROM t WHERE id BETWEEN 1 AND 10;
+COUNT(*)
+3
+connection node_1;
+INSERT INTO t VALUES (5, 0);
+connection node_1b;
+UPDATE t SET v = v + 10 WHERE id = 3;
+COMMIT;
+ERROR HY000: Got error 149 "Lock deadlock; Retry transaction" during COMMIT
+#
+# 3. A write from the other node aborts a local serializable reader instead of waiting
+#
+connection node_1b;
+START TRANSACTION;
+SELECT v FROM t WHERE id = 3;
+v
+0
+connection node_2;
+UPDATE t SET v = 100 WHERE id = 3;
+connection node_1;
+connection node_1b;
+COMMIT;
+Got one of the listed errors
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+#
+# Both nodes hold the same rows, and the node still commits
+#
+connection node_1;
+INSERT INTO t VALUES (9, 9);
+SELECT id, v FROM t ORDER BY id;
+id	v
+1	0
+2	1
+3	100
+5	0
+9	9
+connection node_2;
+SELECT id, v FROM t ORDER BY id;
+id	v
+1	0
+2	1
+3	100
+5	0
+9	9
+disconnect node_1b;
+connection node_1;
+DROP TABLE t;
+disconnect node_2;
+disconnect node_1;

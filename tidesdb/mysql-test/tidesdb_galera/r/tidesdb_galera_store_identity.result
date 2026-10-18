@@ -1,0 +1,31 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+call mtr.add_suppression("WSREP: evs::proto.*install timer expired");
+call mtr.add_suppression("WSREP: no nodes coming from prim view, prim not possible");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+call mtr.add_suppression("WSREP: evs::proto.*install timer expired");
+call mtr.add_suppression("WSREP: no nodes coming from prim view, prim not possible");
+call mtr.add_suppression("\\[TIDESDB\\] The data directory and the TidesDB store");
+call mtr.add_suppression("Plugin 'TidesDB' (registration as a STORAGE ENGINE|init function returned error)");
+call mtr.add_suppression("Unknown/unsupported storage engine");
+call mtr.add_suppression("CF '.*' not found for table");
+call mtr.add_suppression("Can't open table|Incorrect information in file|Unknown storage engine");
+connection node_1;
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 1), (2, 2);
+connection node_2;
+# node 2 gets another node's data directory identity without that node's store
+# TidesDB refuses to start and says why
+FOUND 1 /The data directory and the TidesDB store at .* did not come from the same node/ in store_identity_refused.err
+# with its own identity back, the store loads with its rows
+# restart
+SELECT id, v FROM t ORDER BY id;
+id	v
+1	1
+2	2
+connection node_1;
+DROP TABLE t;
+disconnect node_2;
+disconnect node_1;

@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 # Pinned build versions, the single place to move from one release to the next.
-# TideSQL plugin 5.2.0 targets TidesDB library v10.2.1 on MariaDB 13.  Bump these
+# TideSQL plugin 5.2.1 targets TidesDB library v10.2.1 on MariaDB 13.  Bump these
 # two constants together to retarget the whole matrix.  TIDESDB_VERSION is a tag
 # on tidesdb/tidesdb, or a pull request head such as pull/698/head to test an
 # unreleased library fix, and MARIADB_VERSION a tag on MariaDB/server.

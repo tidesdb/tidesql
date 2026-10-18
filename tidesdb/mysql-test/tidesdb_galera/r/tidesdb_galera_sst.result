@@ -1,0 +1,49 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_1;
+CREATE TABLE t1 (id INT PRIMARY KEY, v VARCHAR(16), KEY (v)) ENGINE=TidesDB;
+INSERT INTO t1 VALUES (1, 'one'), (2, 'two'), (3, 'three');
+connection node_2;
+# node 2 leaves and loses its saved position, so it must rejoin by a full transfer
+connection node_1;
+INSERT INTO t1 VALUES (4, 'four'), (5, 'five');
+UPDATE t1 SET v = 'TWO' WHERE id = 2;
+DELETE FROM t1 WHERE id = 1;
+CREATE TABLE t2 (id INT PRIMARY KEY, n INT) ENGINE=TidesDB;
+INSERT INTO t2 VALUES (10, 100), (20, 200);
+connection node_2;
+# restart
+# node 2 holds every row node 1 wrote while it was away
+SELECT id, v FROM t1 ORDER BY id;
+id	v
+2	TWO
+3	three
+4	four
+5	five
+SELECT id, v FROM t1 FORCE INDEX (v) WHERE v >= 'f' ORDER BY v;
+id	v
+5	five
+4	four
+3	three
+2	TWO
+SELECT id, n FROM t2 ORDER BY id;
+id	n
+10	100
+20	200
+# and keeps replicating
+connection node_1;
+INSERT INTO t2 VALUES (30, 300);
+connection node_2;
+SELECT id, n FROM t2 ORDER BY id;
+id	n
+10	100
+20	200
+30	300
+# the donor removed its transfer copy once the joiner had it
+connection node_1;
+DROP TABLE t1, t2;
+disconnect node_2;
+disconnect node_1;

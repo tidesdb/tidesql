@@ -1,0 +1,71 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connect  node_2b, 127.0.0.1, root, , test, $NODE_MYPORT_2;
+connect  node_1b, 127.0.0.1, root, , test, $NODE_MYPORT_1;
+connection node_1;
+CREATE TABLE p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid),
+FOREIGN KEY (pid) REFERENCES p (id) ON DELETE CASCADE) ENGINE=TidesDB;
+INSERT INTO p VALUES (1), (2), (3);
+INSERT INTO c VALUES (30, 3);
+connection node_2;
+#
+# 1. A child is being inserted on node 2 when node 1 deletes its parent
+#
+connection node_2;
+START TRANSACTION;
+INSERT INTO c VALUES (10, 1);
+connection node_1;
+DELETE FROM p WHERE id = 1;
+connection node_2b;
+connection node_2;
+COMMIT;
+Got one of the listed errors
+#
+# 2. The parent is being deleted on node 1 when node 2 inserts a child of it
+#
+connection node_1;
+START TRANSACTION;
+DELETE FROM p WHERE id = 2;
+connection node_2;
+INSERT INTO c VALUES (20, 2);
+connection node_1b;
+connection node_1;
+COMMIT;
+Got one of the listed errors
+#
+# 3. A cascade on node 1 reaches node 2 as the same rows
+#
+connection node_1;
+DELETE FROM p WHERE id = 3;
+connection node_2;
+#
+# Both nodes hold the same rows, and no child lacks its parent
+#
+connection node_1;
+SELECT id FROM p ORDER BY id;
+id
+2
+SELECT id, pid FROM c ORDER BY id;
+id	pid
+20	2
+SELECT c.id FROM c LEFT JOIN p ON p.id = c.pid WHERE p.id IS NULL;
+id
+connection node_2;
+SELECT id FROM p ORDER BY id;
+id
+2
+SELECT id, pid FROM c ORDER BY id;
+id	pid
+20	2
+SELECT c.id FROM c LEFT JOIN p ON p.id = c.pid WHERE p.id IS NULL;
+id
+disconnect node_2b;
+disconnect node_1b;
+connection node_1;
+DROP TABLE c, p;
+disconnect node_2;
+disconnect node_1;

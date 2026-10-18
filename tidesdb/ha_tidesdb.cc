@@ -47,6 +47,7 @@ extern "C"
 #include "sql_priv.h"
 
 /* server-free core modules, unit-tested standalone under test/ */
+#include "src/core/autoinc.h"
 #include "src/core/cf_name.h"
 #include "src/core/fts_score.h"
 #include "src/core/fts_text.h"
@@ -871,6 +872,25 @@ static bool tidesdb_hton_flush_logs(handlerton *);
 static int tidesdb_hton_panic(handlerton *, enum ha_panic_function flag);
 static void tidesdb_hton_pre_shutdown(void);
 
+/* The store lives where tidesdb_data_home_dir points, otherwise beside the server's data
+   directory.  The data home ends in the platform separator, a backslash on Windows, so both are
+   trimmed and searched for, or the store would land inside the data directory there. */
+static std::string tdb_resolve_store_path()
+{
+    if (srv_data_home_dir && srv_data_home_dir[0])
+    {
+        std::string path(srv_data_home_dir);
+        while (!path.empty() && (path.back() == '/' || path.back() == FN_LIBCHAR)) path.pop_back();
+        return path;
+    }
+    std::string data_home(mysql_real_data_home);
+    while (!data_home.empty() && (data_home.back() == '/' || data_home.back() == FN_LIBCHAR))
+        data_home.pop_back();
+    size_t slash_pos = data_home.find_last_of("/\\");
+    if (slash_pos != std::string::npos) return data_home.substr(0, slash_pos + 1) + "tidesdb_data";
+    return "tidesdb_data";
+}
+
 static int tidesdb_init_func(void *p)
 {
     DBUG_ENTER("tidesdb_init_func");
@@ -905,27 +925,7 @@ static int tidesdb_init_func(void *p)
     /* Arm the full-text locks, seed the default stop words, and build the blend map. */
     fts_init();
 
-    /* We use tidesdb_data_home_dir if set, otherwise compute
-       a sibling directory of the MariaDB data directory. */
-    if (srv_data_home_dir && srv_data_home_dir[0])
-    {
-        tdb_path = srv_data_home_dir;
-        while (!tdb_path.empty() && (tdb_path.back() == '/' || tdb_path.back() == FN_LIBCHAR))
-            tdb_path.pop_back();
-    }
-    else
-    {
-        /* The data home ends in the platform separator, a backslash on Windows, so both are
-           trimmed and searched for, or the store would land inside the data directory there. */
-        std::string data_home(mysql_real_data_home);
-        while (!data_home.empty() && (data_home.back() == '/' || data_home.back() == FN_LIBCHAR))
-            data_home.pop_back();
-        size_t slash_pos = data_home.find_last_of("/\\");
-        if (slash_pos != std::string::npos)
-            tdb_path = data_home.substr(0, slash_pos + 1) + "tidesdb_data";
-        else
-            tdb_path = "tidesdb_data";
-    }
+    tdb_path = tdb_resolve_store_path();
 
     static const int log_level_map[] = {TDB_LOG_TRACE, TDB_LOG_INFO, TDB_LOG_WARN, TDB_LOG_ERROR,
                                         TDB_LOG_NONE};
@@ -957,6 +957,11 @@ static int tidesdb_init_func(void *p)
         cfg.memtable_idle_flush_seconds = (int)srv_memtable_idle_flush_seconds;
     if (srv_txn_timeout_seconds >= 0) cfg.txn_timeout_seconds = (int64_t)srv_txn_timeout_seconds;
 
+#ifdef WITH_WSREP
+    /* a store a Galera state transfer delivered goes in place before the store opens */
+    if (tidesdb_wsrep_sst_install()) DBUG_RETURN(1);
+#endif
+
     int rc = tidesdb_open(&cfg, &tdb_global);
     if (rc != TDB_SUCCESS)
     {
@@ -965,6 +970,15 @@ static int tidesdb_init_func(void *p)
     }
 
     sql_print_information("[TIDESDB] TidesDB opened at %s", tdb_path.c_str());
+#ifdef WITH_WSREP
+    if (tidesdb_wsrep_store_identity())
+    {
+        tidesdb_close(tdb_global);
+        tdb_global = NULL;
+        DBUG_RETURN(1);
+    }
+    tidesdb_wsrep_position_init();
+#endif
 
     /* A stop word table named in the configuration is a TidesDB table, so it can only be read
        now that the store is open. */
@@ -1005,6 +1019,11 @@ static int tidesdb_hton_panic(handlerton *, enum ha_panic_function flag)
 
     if (tdb_global)
     {
+#ifdef WITH_WSREP
+        /* the server closes engines here before plugin deinit, so the clean shutdown position is
+           written on this path too */
+        tidesdb_wsrep_store_last_position();
+#endif
         tidesdb_close(tdb_global);
         tdb_global = NULL;
     }
@@ -1032,6 +1051,11 @@ static int tidesdb_deinit_func(void *p)
 
     if (tdb_global)
     {
+#ifdef WITH_WSREP
+        /* a clean shutdown leaves the position the last commit reached, so a restart can rejoin
+           the cluster by an incremental transfer */
+        tidesdb_wsrep_store_last_position();
+#endif
         /* tidesdb_close performs the orderly teardown, flushing pending commits
            and quiescing the background workers. */
         tidesdb_close(tdb_global);
@@ -1088,21 +1112,31 @@ void ha_tidesdb::get_auto_increment(ulonglong offset, ulonglong increment,
 {
     DBUG_ENTER("ha_tidesdb::get_auto_increment");
 
-    /* Atomic fetch-and-add -- each caller gets a unique range.
-       The counter stores the last value that was handed out. */
+    /* The server places each generated value on the grid offset plus a multiple of increment and
+       spaces a reserved run by the increment, so the reservation is made on that grid.  Reserving
+       consecutive numbers let two sessions round onto the same grid value, and the second row then
+       replaced the first.  The counter stores the last value handed out, and a compare-and-swap
+       gives each caller its own run. */
+    if (increment == 0) increment = 1;
     ulonglong cur = share->auto_inc_val.load(std::memory_order_relaxed);
-    ulonglong next;
+    ulonglong first, last, n;
     do
     {
-        next = cur + nb_desired_values;
-    } while (!share->auto_inc_val.compare_exchange_weak(cur, next, std::memory_order_relaxed));
+        first = tidesdb::autoinc::next_on_grid(cur, offset, increment);
+        if (first == ULONGLONG_MAX)
+        {
+            *first_value = ULONGLONG_MAX; /* the server reports the range as exhausted */
+            *nb_reserved_values = 0;
+            DBUG_VOID_RETURN;
+        }
+        /* a run that would pass the top is cut to one value, and the server asks again */
+        n = tidesdb::autoinc::run_length(first, nb_desired_values, increment);
+        last = first + (n - 1) * increment;
+    } while (!share->auto_inc_val.compare_exchange_weak(cur, last, std::memory_order_relaxed));
 
-    *first_value = cur + 1;
-    /*
-      We reserve exactly what was asked for.  MariaDB's update_auto_increment()
-      will call us again when the interval is exhausted.
-    */
-    *nb_reserved_values = nb_desired_values;
+    *first_value = first;
+    /* MariaDB's update_auto_increment() calls again when the run is used up. */
+    *nb_reserved_values = n;
 
     DBUG_VOID_RETURN;
 }

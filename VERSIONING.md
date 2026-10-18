@@ -15,7 +15,7 @@ only by editing plugin source carries no compatibility guarantee.
 
 Each TideSQL release links exactly one TidesDB release and stores data in that
 library's on-disk format. TideSQL 5.x links TidesDB v10.x.x and writes the v10
-format line; 5.2.0 is pinned to TidesDB v10.2.1. The plugin version and the library version keep their own
+format line; 5.2.1 is pinned to TidesDB v10.2.1. The plugin version and the library version keep their own
 cadence, so the pairing is recorded here and surfaced at runtime through the
 `tidesdb_version` status variable for the plugin and `tidesdb_library_version`
 for the linked library.
@@ -59,6 +59,7 @@ format line.
 | 5.1.0   | 10.1.0          | 10             | any TideSQL linking format 10 |
 | 5.1.1   | 10.1.1          | 10             | any TideSQL linking format 10 |
 | 5.2.0   | 10.2.1          | 10             | any TideSQL linking format 10 |
+| 5.2.1   | 10.2.1          | 10             | any TideSQL linking format 10 |
 
 - **TideSQL 5.0.0 opens the v10 format line** by linking TidesDB v10.x.x. It
   reads only the v10 format, so a database created by an earlier release line
@@ -85,6 +86,9 @@ format line.
   reads, which let a table copy and an inplace index build keep each row's
   expiry, and pins v10.2.1, which keeps the library mapped when a Windows
   server unloads the plugin at shutdown.
+- **TideSQL 5.2.1 keeps TidesDB v10.2.1 and format 10.** It fixes Galera
+  consistency under concurrent writes and the concurrency of foreign keys and
+  auto increment, with no change to the format, the options or the library.
 
 Add a row per release. A release that moves none of the columns still gets a
 row, because "unchanged" is the answer an operator is looking for.
