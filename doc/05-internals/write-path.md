@@ -145,7 +145,10 @@ transaction. It begins a fresh READ COMMITTED transaction for the rest of the st
 the committed one until the transaction ends, because the source table of an `INSERT ... SELECT`,
 the scan of a batched `DELETE`, or an `ALTER` copy can still be iterating under it, and a reset
 would end that scan early. Rows committed by a batch are durable, so a later failure in the same
-statement cannot roll them back.
+statement cannot roll them back. Under Galera a statement other than DDL commits as a whole instead,
+since a batch committed before the statement's write set was certified would stay on this node
+alone if the statement then failed. DDL runs on every node in total order and replicates no rows, so
+its copy still batches.
 
 Because only autocommit and DDL statements batch, and the engine already runs both at READ
 COMMITTED, the first batch commits at READ COMMITTED like every later one. A statement inside

@@ -1,0 +1,114 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connect  node_1b, 127.0.0.1, root, , test, $NODE_MYPORT_1;
+connection node_1;
+CREATE TABLE t (id INT PRIMARY KEY, v INT, k INT, KEY (k)) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 0, 1), (2, 0, 2), (3, 0, 3), (4, 0, 4);
+CREATE TABLE p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE c (id INT PRIMARY KEY, pid INT NOT NULL, KEY (pid),
+FOREIGN KEY (pid) REFERENCES p (id)) ENGINE=TidesDB;
+INSERT INTO p VALUES (1), (2);
+connection node_2;
+#
+# 1. A point read by primary key
+#
+connection node_1b;
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+SELECT v FROM t WHERE id = 1;
+v
+0
+connection node_2;
+UPDATE t SET v = 1 WHERE id = 1;
+connection node_1;
+connection node_1b;
+COMMIT;
+Got one of the listed errors
+#
+# 2. A bounded scan of a secondary index, with a row inserted inside the scanned range
+#
+connection node_1b;
+START TRANSACTION;
+SELECT COUNT(*) FROM t WHERE k BETWEEN 2 AND 3;
+COUNT(*)
+2
+connection node_2;
+INSERT INTO t VALUES (5, 0, 2);
+connection node_1;
+connection node_1b;
+COMMIT;
+Got one of the listed errors
+#
+# 3. A scan of the whole table, with a row inserted anywhere
+#
+connection node_1b;
+START TRANSACTION;
+SELECT SUM(v) FROM t;
+SUM(v)
+1
+connection node_2;
+INSERT INTO t VALUES (6, 0, 6);
+connection node_1;
+connection node_1b;
+COMMIT;
+Got one of the listed errors
+#
+# 4. The parent lookup of a foreign key check, with the parent then deleted on the other node
+#
+connection node_1b;
+START TRANSACTION;
+INSERT INTO c VALUES (1, 2);
+connection node_2;
+DELETE FROM p WHERE id = 2;
+connection node_1;
+connection node_1b;
+COMMIT;
+Got one of the listed errors
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+#
+# Both nodes are up and agree
+#
+connection node_1;
+SELECT id, v, k FROM t ORDER BY id;
+id	v	k
+1	1	1
+2	0	2
+3	0	3
+4	0	4
+5	0	2
+6	0	6
+SELECT id FROM p ORDER BY id;
+id
+1
+SELECT COUNT(*) FROM c;
+COUNT(*)
+0
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+Variable_name	Value
+wsrep_local_state_comment	Synced
+connection node_2;
+SELECT id, v, k FROM t ORDER BY id;
+id	v	k
+1	1	1
+2	0	2
+3	0	3
+4	0	4
+5	0	2
+6	0	6
+SELECT id FROM p ORDER BY id;
+id
+1
+SELECT COUNT(*) FROM c;
+COUNT(*)
+0
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+Variable_name	Value
+wsrep_local_state_comment	Synced
+disconnect node_1b;
+connection node_1;
+DROP TABLE c, p, t;
+disconnect node_2;
+disconnect node_1;

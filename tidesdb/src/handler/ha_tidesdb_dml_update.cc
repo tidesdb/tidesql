@@ -513,9 +513,7 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
         uchar odk[DATA_KEY_BUF_LEN];
         uint odk_len = build_data_key(old_pk, old_pk_len, odk);
         time_t expiry = -1;
-        int trc = tdb_retry_locked(
-            cached_thd_,
-            [&] { return tidesdb_txn_get_ttl(stmt_txn, share->cf, odk, odk_len, &expiry); });
+        int trc = tdb_txn_get_ttl_blocking(cached_thd_, stmt_txn, share->cf, odk, odk_len, &expiry);
         if (trc != TDB_SUCCESS)
         {
             tmp_restore_column_map(&table->read_set, old_map);
@@ -569,23 +567,28 @@ int ha_tidesdb::update_row(const uchar *old_data, const uchar *new_data)
 #ifdef WITH_WSREP
     /* Galera.  Certify both the before and after images so the row's old identity and any changed
        unique value stay covered, and record or, on an applier, abort the write intents for both
-       images so a cross-node conflict on either the old or the new key is caught. */
+       images so a cross-node conflict on either the old or the new key is caught.  An update whose
+       keys stay the same certifies as an update, as InnoDB does, which conflicts with another
+       node's write of the row but only orders itself after another node's reference to it, a
+       child row depending on this parent.  An exclusive key here would make that reference a
+       conflict, and since a child write referencing the row may be in flight on this node at the
+       same time, the provider's early certification of a transaction aborted during replication
+       could then decide differently from the ordered certification every node runs, and lose the
+       transaction on this node alone.  A changed unique key is still certified as exclusive. */
     if (wsrep_on(cached_thd_))
     {
         if (wsrep_thd_is_local(cached_thd_))
         {
-            if (int wrc =
-                    wsrep_certify_row(cached_thd_, old_data, new_data, WSREP_SERVICE_KEY_EXCLUSIVE))
+            int wrc =
+                wsrep_certify_row(cached_thd_, old_data, new_data, tdb_wsrep_update_key_type());
+            if (!wrc) wrc = wsrep_intent_register_all(new_pk, new_pk_len, new_data, trx);
+            if (!wrc)
+                wrc = wsrep_intent_register_all(pk_changed ? old_pk : nullptr,
+                                                pk_changed ? old_pk_len : 0, old_data, trx);
+            if (wrc)
             {
                 tmp_restore_column_map(&table->read_set, old_map);
                 DBUG_RETURN(wrc);
-            }
-            wsrep_intent_register_row(new_pk, new_pk_len, trx);
-            if (pk_changed) wsrep_intent_register_row(old_pk, old_pk_len, trx);
-            for (uint i = 0; i < table->s->keys; i++)
-            {
-                wsrep_intent_register(i, new_data, trx);
-                wsrep_intent_register(i, old_data, trx);
             }
         }
         else

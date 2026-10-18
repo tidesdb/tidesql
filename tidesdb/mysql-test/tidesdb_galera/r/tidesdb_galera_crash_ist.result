@@ -1,0 +1,48 @@
+connection node_2;
+connection node_1;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+call mtr.add_suppression("WSREP: gcs_caused\\(\\) returned -(107|1) ");
+connection node_2;
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+connection node_1;
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t VALUES (1, 1);
+# node 2 commits rows of its own, whose positions it records after each commit, and rows
+# from node 1, whose positions it records with them
+connection node_2;
+INSERT INTO t VALUES (2, 2);
+UPDATE t SET v = 20 WHERE id = 2;
+SET SESSION wsrep_sync_wait = 0;
+# node 2 crashes after committing TidesDB rows
+Killing server ...
+# node 1 alone has no quorum, so it is bootstrapped as the primary component again
+connection node_1;
+SET SESSION wsrep_sync_wait = 0;
+SET GLOBAL wsrep_provider_options = 'pc.bootstrap=YES';
+SET SESSION wsrep_sync_wait = DEFAULT;
+INSERT INTO t VALUES (3, 3), (4, 4);
+UPDATE t SET v = 10 WHERE id = 1;
+# recovery reads a real position from the store
+connection node_2;
+Performing --wsrep-recover ...
+connection node_1;
+recovered a known position: 1
+connection node_2;
+# and the node rejoins from it through an incremental transfer
+state transfer after the crash: incremental
+SELECT id, v FROM t ORDER BY id;
+id	v
+1	10
+2	20
+3	3
+4	4
+connection node_1;
+SELECT id, v FROM t ORDER BY id;
+id	v
+1	10
+2	20
+3	3
+4	4
+DROP TABLE t;
+disconnect node_2;
+disconnect node_1;

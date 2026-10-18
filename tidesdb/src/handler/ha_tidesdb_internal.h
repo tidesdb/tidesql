@@ -51,6 +51,15 @@ extern handlerton *tidesdb_hton;
  */
 int tdb_rc_to_ha(int rc, const char *ctx);
 
+/**
+ * tdb_fk_checks_off
+ * whether the session turned foreign key checks off, which skips the referential checks and the
+ * parent actions on its row operations and the parent lookup when a constraint is created
+ * @param thd the session, or NULL for an internal caller that always checks
+ * @return true when foreign_key_checks is off on thd
+ */
+bool tdb_fk_checks_off(THD *thd);
+
 /* a one-byte zero value stored for secondary-index entries, whose meaning is carried entirely by
    the key; its address and single-byte size are all that matter, so each translation unit having
    its own copy is fine. */
@@ -91,20 +100,39 @@ static inline int tidesdb_txn_delete_cf(tidesdb_txn_t *txn, tidesdb_column_famil
    killed.  Commit is deliberately not retried, a failed commit leaves the transaction aborted and
    the caller has to roll back. */
 static constexpr int TDB_LOCKED_RETRY_MAX = 16;
+/* about ten minutes at the capped backoff */
+static constexpr int TDB_LOCKED_RETRY_MAX_APPLIER = 100000;
 static constexpr unsigned TDB_LOCKED_BACKOFF_START_US = 50;
 /* Sleeps run 50, 100, ... 3200 microseconds and then stay at the cap, about 64 ms over the 16
    retries. */
 static constexpr unsigned TDB_LOCKED_BACKOFF_CAP_US = 6400;
 
+/* A Galera applier replays a write set every other node commits, so it may not fail on contention
+   that only delays it.  It keeps asking far longer than a client does, up to
+   TDB_LOCKED_RETRY_MAX_APPLIER, and it cannot be killed.  When even that runs out the error is
+   returned and the server treats the write set as failed to apply. */
+static inline bool tdb_must_not_give_up(THD *thd)
+{
+#ifdef WITH_WSREP
+    /* false for every thread Galera does not run as an applier, so no wsrep_on gate is needed */
+    return thd && wsrep_thd_is_BF(thd, false);
+#else
+    (void)thd;
+    return false;
+#endif
+}
+
 template <typename Op>
 static inline int tdb_retry_locked(THD *thd, Op &&op)
 {
     unsigned wait_us = TDB_LOCKED_BACKOFF_START_US;
+    const bool applier = tdb_must_not_give_up(thd);
     for (int attempt = 0;; attempt++)
     {
         int rc = op();
-        if (rc != TDB_ERR_LOCKED || attempt >= TDB_LOCKED_RETRY_MAX) return rc;
-        if (thd && thd_killed(thd)) return rc;
+        if (rc != TDB_ERR_LOCKED) return rc;
+        if (attempt >= (applier ? TDB_LOCKED_RETRY_MAX_APPLIER : TDB_LOCKED_RETRY_MAX)) return rc;
+        if (!applier && thd && thd_killed(thd)) return rc;
         my_sleep(wait_us); /* mysys, portable, microseconds */
         wait_us = wait_us * 2 < TDB_LOCKED_BACKOFF_CAP_US ? wait_us * 2 : TDB_LOCKED_BACKOFF_CAP_US;
     }
@@ -186,10 +214,17 @@ static inline void tdb_trx_free_retired(tidesdb_trx_t *trx)
     trx->retired_txns.clear();
 }
 
+/* Under Galera the reads a local transaction makes at REPEATABLE READ or SERIALIZABLE, and the
+   writes an applier makes, are recorded as they reach the library, see ha_tidesdb_wsrep_reads.cc.
+   The tracked reads are the point reads and the iterators opened over a family, the same ones the
+   library tracks; a read the library does not track is not recorded. */
 static inline int tdb_txn_get_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
                                        const uint8_t *key, size_t key_size, uint8_t **value,
                                        size_t *value_size)
 {
+#ifdef WITH_WSREP
+    tdb_wsrep_note_read(thd, txn, cf, key, key_size, key, key_size);
+#endif
     return tdb_retry_locked(
         thd, [&] { return tidesdb_txn_get(txn, cf, key, key_size, value, value_size); });
 }
@@ -198,6 +233,9 @@ static inline int tdb_txn_put_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_col
                                        const uint8_t *key, size_t key_size, const uint8_t *value,
                                        size_t value_size, time_t ttl)
 {
+#ifdef WITH_WSREP
+    tdb_wsrep_note_write(thd, txn, cf, key, key_size);
+#endif
     return tdb_retry_locked(
         thd, [&] { return tidesdb_txn_put(txn, cf, key, key_size, value, value_size, ttl); });
 }
@@ -206,7 +244,23 @@ static inline int tdb_txn_contains_blocking(THD *thd, tidesdb_txn_t *txn,
                                             tidesdb_column_family_t *cf, const uint8_t *key,
                                             size_t key_size)
 {
+#ifdef WITH_WSREP
+    tdb_wsrep_note_read(thd, txn, cf, key, key_size, key, key_size);
+#endif
     return tdb_retry_locked(thd, [&] { return tidesdb_txn_contains(txn, cf, key, key_size); });
+}
+
+/* The library tracks this read like tidesdb_txn_get, so it is recorded the same way.  Every caller
+   has read the row itself first, so the key is already recorded, and this keeps the rule that no
+   tracked read bypasses a recording wrapper rather than adding a claim. */
+static inline int tdb_txn_get_ttl_blocking(THD *thd, tidesdb_txn_t *txn,
+                                           tidesdb_column_family_t *cf, const uint8_t *key,
+                                           size_t key_size, time_t *ttl)
+{
+#ifdef WITH_WSREP
+    tdb_wsrep_note_read(thd, txn, cf, key, key_size, key, key_size);
+#endif
+    return tdb_retry_locked(thd, [&] { return tidesdb_txn_get_ttl(txn, cf, key, key_size, ttl); });
 }
 
 static inline int tdb_txn_get_notrack_blocking(THD *thd, tidesdb_txn_t *txn,
@@ -227,6 +281,9 @@ static inline int tdb_txn_delete_cf_blocking(THD *thd, tidesdb_txn_t *txn,
                                              tidesdb_column_family_t *cf, const uint8_t *key,
                                              size_t key_size, bool use_single_delete)
 {
+#ifdef WITH_WSREP
+    tdb_wsrep_note_write(thd, txn, cf, key, key_size);
+#endif
     return tdb_retry_locked(
         thd, [&] { return tidesdb_txn_delete_cf(txn, cf, key, key_size, use_single_delete); });
 }
@@ -270,6 +327,9 @@ static inline int tdb_iter_seek_to_last_blocking(THD *thd, tidesdb_iter_t *it)
 static inline int tdb_iter_new_blocking(THD *thd, tidesdb_txn_t *txn, tidesdb_column_family_t *cf,
                                         tidesdb_iter_t **out)
 {
+#ifdef WITH_WSREP
+    tdb_wsrep_note_read(thd, txn, cf, nullptr, 0, nullptr, 0);
+#endif
     return tdb_retry_locked(thd, [&] { return tidesdb_iter_new(txn, cf, out); });
 }
 
@@ -282,6 +342,9 @@ static inline int tdb_iter_new_range_blocking(THD *thd, tidesdb_txn_t *txn,
                                               size_t lower_size, const uint8_t *upper,
                                               size_t upper_size, tidesdb_iter_t **out)
 {
+#ifdef WITH_WSREP
+    tdb_wsrep_note_read(thd, txn, cf, lower, lower_size, upper, upper_size);
+#endif
     return tdb_retry_locked(
         thd,
         [&] { return tidesdb_iter_new_range(txn, cf, lower, lower_size, upper, upper_size, out); });

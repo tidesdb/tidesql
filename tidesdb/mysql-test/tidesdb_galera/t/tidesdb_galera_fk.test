@@ -1,0 +1,92 @@
+# Foreign keys across a Galera cluster.  A child row and its parent row are different rows, so a
+# parent deleted on one node and a child of it inserted on another touch no common certification
+# key unless the child certifies a reference to its parent.  The child write now certifies that
+# reference, the same key the parent's delete certifies as exclusive, and on each node a cluster
+# write that meets a local transaction holding the other end of the relationship aborts it, the
+# way an applier wins an InnoDB lock.  Either way one side gets a deadlock and no node is left
+# with a child whose parent is gone.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connect (node_2b, 127.0.0.1, root, , test, $NODE_MYPORT_2)
+--connect (node_1b, 127.0.0.1, root, , test, $NODE_MYPORT_1)
+
+--connection node_1
+CREATE TABLE p (id INT PRIMARY KEY) ENGINE=TidesDB;
+CREATE TABLE c (id INT PRIMARY KEY, pid INT, KEY (pid),
+                FOREIGN KEY (pid) REFERENCES p (id) ON DELETE CASCADE) ENGINE=TidesDB;
+INSERT INTO p VALUES (1), (2), (3);
+INSERT INTO c VALUES (30, 3);
+
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 1 FROM c;
+--source include/wait_condition.inc
+
+--echo #
+--echo # 1. A child is being inserted on node 2 when node 1 deletes its parent
+--echo #
+--connection node_2
+START TRANSACTION;
+INSERT INTO c VALUES (10, 1);
+
+--connection node_1
+DELETE FROM p WHERE id = 1;
+
+--connection node_2b
+let $wait_condition= SELECT COUNT(*) = 0 FROM p WHERE id = 1;
+--source include/wait_condition.inc
+
+--connection node_2
+--error ER_LOCK_DEADLOCK,ER_ERROR_DURING_COMMIT
+COMMIT;
+
+--echo #
+--echo # 2. The parent is being deleted on node 1 when node 2 inserts a child of it
+--echo #
+--connection node_1
+START TRANSACTION;
+DELETE FROM p WHERE id = 2;
+
+--connection node_2
+INSERT INTO c VALUES (20, 2);
+
+--connection node_1b
+let $wait_condition= SELECT COUNT(*) = 1 FROM c WHERE id = 20;
+--source include/wait_condition.inc
+
+--connection node_1
+--error ER_LOCK_DEADLOCK,ER_ERROR_DURING_COMMIT
+COMMIT;
+
+--echo #
+--echo # 3. A cascade on node 1 reaches node 2 as the same rows
+--echo #
+--connection node_1
+DELETE FROM p WHERE id = 3;
+
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 0 FROM c WHERE id = 30;
+--source include/wait_condition.inc
+
+--echo #
+--echo # Both nodes hold the same rows, and no child lacks its parent
+--echo #
+--connection node_1
+SELECT id FROM p ORDER BY id;
+SELECT id, pid FROM c ORDER BY id;
+SELECT c.id FROM c LEFT JOIN p ON p.id = c.pid WHERE p.id IS NULL;
+--connection node_2
+SELECT id FROM p ORDER BY id;
+SELECT id, pid FROM c ORDER BY id;
+SELECT c.id FROM c LEFT JOIN p ON p.id = c.pid WHERE p.id IS NULL;
+
+--disconnect node_2b
+--disconnect node_1b
+--connection node_1
+DROP TABLE c, p;
+
+--source include/galera_end.inc

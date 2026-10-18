@@ -1,0 +1,64 @@
+# A transaction at SERIALIZABLE claims what it read when it prepares, and under Galera it prepares
+# before it is certified.  A read of a row an applier has written but not yet committed must not
+# become such a claim, since the applier's commit would be refused by it and an applier must not
+# fail.  The local transaction waits for the applier before it prepares instead, and its prepare
+# then finds the row newer than what it read and refuses the transaction, the engine's own
+# conflict.  The applier's write set is large so it is in flight for long enough to be read under.
+# The node stays up and both nodes agree.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+--source include/have_sequence.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connect (node_1b, 127.0.0.1, root, , test, $NODE_MYPORT_1)
+
+--connection node_1
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+CREATE TABLE u (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t SELECT seq, 0 FROM seq_1_to_100000;
+INSERT INTO u VALUES (1, 0);
+--connection node_2
+--let $wait_condition= SELECT COUNT(*) = 100000 FROM t;
+--source include/wait_condition.inc
+
+--echo #
+--echo # The other node rewrites every row, and the applier here is read under while it writes them
+--echo #
+--connection node_2
+--send UPDATE t SET v = v + 1
+
+--connection node_1b
+SET SESSION wsrep_sync_wait = 0;
+--let $wait_condition= SELECT COUNT(*) = 1 FROM INFORMATION_SCHEMA.PROCESSLIST WHERE USER = 'system user' AND STATE LIKE 'Update_rows_log_event%';
+--source include/wait_condition.inc
+SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+START TRANSACTION;
+SELECT v FROM t WHERE id = 1;
+UPDATE u SET v = 1 WHERE id = 1;
+--error ER_LOCK_DEADLOCK, ER_ERROR_DURING_COMMIT
+COMMIT;
+SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+
+--connection node_2
+--reap
+
+--echo #
+--echo # Both nodes are up and agree
+--echo #
+--connection node_1
+SELECT COUNT(*) FROM t WHERE v = 1;
+SELECT v FROM u;
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+--connection node_2
+SELECT COUNT(*) FROM t WHERE v = 1;
+SELECT v FROM u;
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+
+--disconnect node_1b
+--connection node_1
+DROP TABLE t, u;
+
+--source include/galera_end.inc

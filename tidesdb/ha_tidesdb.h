@@ -79,8 +79,8 @@ static inline void tdb_memalloc_sysvar_set(void *var_ptr, const char *value)
 
 /* The TideSQL plugin's own version, reported through tidesdb_version / _version_hex and the
    maria_declare_plugin block.  Distinct from the vendored library version (TIDESDB_VERSION). */
-#define TIDESQL_VERSION_STR "5.2.0"
-#define TIDESQL_VERSION_HEX 0x50200
+#define TIDESQL_VERSION_STR "5.2.1"
+#define TIDESQL_VERSION_HEX 0x50201
 
 /* shared compile-time constants (key/row format, spatial, fts, cost model, library defaults) */
 #include "ha_tidesdb_constants.h"
@@ -118,6 +118,10 @@ struct tdb_fk_def
     int child_key_no{-1};
     int parent_key_no{-1};
     bool parent_is_pk{false}; /* referenced columns are the parent pk    */
+    /* On the child side, the referenced key's number in the parent table, which the parent's
+       galera certification keys carry, so a child write can certify a reference to the exact key
+       a parent delete certifies.  Resolved at load, held in memory only, -1 when unknown. */
+    int parent_cert_key_no{-1};
 };
 
 /* One table's foreign keys as of one version of the engine's constraint catalog.  It is never
@@ -347,11 +351,49 @@ struct tidesdb_trx_t
     tidesdb_isolation_level_t isolation_level{TDB_ISOLATION_REPEATABLE_READ};
     uint64_t txn_generation{0};
 
+    /* Foreign key guard keys this transaction holds, each with whether the hold is exclusive, so
+       it can drop them at its end and truncate them to a savepoint on a savepoint rollback. */
+    std::vector<std::pair<std::string, bool>> fk_guard_keys;
+
 #ifdef WITH_WSREP
     /* Galera write-intent keys this transaction registered in the shared intent map, so it can drop
        its own entries at commit or rollback and truncate them to a savepoint on a savepoint
        rollback. */
     std::vector<std::string> wsrep_intent_keys;
+    /* At READ COMMITTED, the commit sequence visible when the current statement began.  A row this
+       statement writes that committed after it may have been read before that commit, so the write
+       is refused, see ha_tidesdb_wsrep.cc.  UINT64_MAX when not captured. */
+    uint64_t wsrep_stmt_ceiling{UINT64_MAX};
+    /* What this transaction registered in the Galera read map, so it can leave it when it ends.  A
+       local transaction at a level that validates its reads records the keys it read and the
+       families it scanned ranges of; an applier records the keys it wrote. */
+    std::vector<std::pair<const void *, std::string>> wsrep_read_keys;
+    std::vector<const void *> wsrep_read_range_cfs;
+    std::vector<std::pair<const void *, std::string>> wsrep_applied_keys; /* an applier's writes */
+    /* On an applier, the local transactions it brute-force aborted, each as its thread id, its
+       transaction, the generation it was aborted at and the counter that generation is read from.
+       A prepared victim's reads still refuse the applier's writes until it rolls back, so the
+       applier waits for each to end before its own prepare or commit. */
+    struct tdb_wsrep_victim
+    {
+        my_thread_id thd_id;
+        tidesdb_trx_t *trx;
+        uint64_t gen;
+        std::shared_ptr<std::atomic<uint64_t>> life;
+    };
+    std::vector<tdb_wsrep_victim> wsrep_victims;
+    /* How many transactions this context has ended under Galera, bumped once the library has let go
+       of each one.  It names a transaction to another thread, which a statement rollback or a
+       reused library handle does not change, so a hold or a read recorded with it can be matched to
+       the same transaction and a victim known to have ended.  The counter lives in shared storage
+       that every record naming the transaction keeps alive, so it is read without finding the
+       thread, which a thread id cannot do for a cluster writer, since the server gives every
+       replaying thread the same id as an applier. */
+    std::shared_ptr<std::atomic<uint64_t>> wsrep_life{std::make_shared<std::atomic<uint64_t>>(0)};
+    /* The pending marker a local transaction wrote in place of its position, and whether a
+       transaction whose seqno was known wrote its position itself, see ha_tidesdb_wsrep.cc. */
+    std::string wsrep_pending_marker;
+    bool wsrep_pos_in_txn{false};
 #endif
 
     /* Per-statement FTS meta deltas, applied before tidesdb_commit hands
@@ -1081,6 +1123,10 @@ class ha_tidesdb : public handler
     /* Does one constraint have a referencing child row for the key in old_row?
        Returns 1 referenced, 0 none, or a negative handler error. */
     int fk_child_ref_exists(const tdb_fk_def &d, const uchar *old_row);
+    /* take the value constraint d references in old_row exclusive in the foreign key guard, before
+       a parent delete or key change checks or cascades its children; a deadlock when a concurrent
+       child write holds it, otherwise 0 */
+    int fk_guard_parent(const tdb_fk_def &d, const uchar *old_row);
     /* write every secondary index entry (regular, fts, spatial) for a freshly inserted row. returns
        TDB_SUCCESS or the first library error. */
     int write_maintain_indexes(const uchar *buf, tidesdb_txn_t *txn, tidesdb_trx_t *trx,
@@ -1095,7 +1141,9 @@ class ha_tidesdb : public handler
        a changed row, taking the before image too for an update.  The wsrep_intent_* pair records a
        local write in the shared write-intent map and, on the applier side, brute-force aborts a
        local holder of the same key so a cross-node conflict resolves the way InnoDB's row lock
-       would. */
+       would.  wsrep_intent_register and wsrep_intent_register_row return a deadlock when the write
+       would conflict at commit with another transaction on this node, so it is refused before it
+       replicates; otherwise 0. */
     int wsrep_certify_row(THD *thd, const uchar *rec0, const uchar *rec1,
                           enum Wsrep_service_key_type key_type);
     /* whether secondary index i constrains this row by a unique value, so its comparable value is a
@@ -1104,11 +1152,16 @@ class ha_tidesdb : public handler
     bool sec_idx_value_keyed(uint i, const uchar *record);
     std::string wsrep_intent_key_bytes(uint i, const uchar *record);
     std::string wsrep_intent_row_key_bytes(const uchar *pk, uint pk_len);
-    void wsrep_intent_add(std::string key, tidesdb_trx_t *trx);
-    void wsrep_intent_abort_holder(const std::string &key);
-    void wsrep_intent_register(uint i, const uchar *record, tidesdb_trx_t *trx);
+    void wsrep_intent_hold(struct tdb_wsrep_intent_shard &sh, std::string key, tidesdb_trx_t *trx);
+    int wsrep_intent_claim(std::string key, tidesdb_trx_t *trx);
+    void wsrep_intent_take(const std::string &key);
+    int wsrep_intent_register(uint i, const uchar *record, tidesdb_trx_t *trx);
     void wsrep_intent_check(uint i, const uchar *record);
-    void wsrep_intent_register_row(const uchar *pk, uint pk_len, tidesdb_trx_t *trx);
+    int wsrep_intent_register_row(const uchar *pk, uint pk_len, tidesdb_trx_t *trx);
+    int wsrep_intent_register_all(const uchar *pk, uint pk_len, const uchar *record,
+                                  tidesdb_trx_t *trx);
+    /* certify a reference to the parent row constraint d points at, holding value */
+    int wsrep_certify_parent_ref(const tdb_fk_def &d, const uchar *value, uint value_len);
     void wsrep_intent_check_row(const uchar *pk, uint pk_len);
 #endif
 
@@ -1269,12 +1322,72 @@ class ha_tidesdb : public handler
     bool check_if_incompatible_data(HA_CREATE_INFO *create_info, uint table_changes) override;
 };
 
+/* The foreign key concurrency guard, implemented in ha_tidesdb_fk_guard.cc.  tdb_fk_guard_key
+   builds the key a constraint's referenced value is guarded under, the same from the child and the
+   parent side.  tdb_fk_guard_claim takes it shared for a child write or exclusive for a parent
+   delete or key change, and returns a deadlock when another transaction's hold or commit conflicts,
+   otherwise 0; a galera applier is never refused, it brute-force aborts the local holders instead.
+   tdb_fk_guard_release drops the holds past keep, stamping them first when the transaction
+   committed. */
+std::string tdb_fk_guard_key(const tdb_fk_def &d, const uchar *value, uint value_len);
+int tdb_fk_guard_claim(THD *thd, tidesdb_trx_t *trx, std::string key, bool exclusive);
+void tdb_fk_guard_release(tidesdb_trx_t *trx, bool committed, size_t keep);
+
 #ifdef WITH_WSREP
 /* Galera free functions implemented in ha_tidesdb_wsrep.cc.  tidesdb_wsrep_register wires the
    handlerton's wsrep replication flag and its cluster-position and brute-force-abort hooks.  The
    intent helpers drop or truncate a transaction's write-intent entries from the shared map at
-   commit, rollback, or a savepoint rollback. */
+   commit, rollback, or a savepoint rollback.  tidesdb_wsrep_watch_cf installs the change-capture
+   hook that records when each row or unique value last committed, on a table's data family or, with
+   uniq_sentinel, on the shared uniqueness sentinel family; it does nothing when wsrep is off. */
 void tidesdb_wsrep_register(handlerton *hton);
+/* brute-force abort the local transaction victim_trx, still at generation victim_gen on thread
+   victim_id, on behalf of the cluster writer bf_thd; nothing when it has moved on or cannot be */
+void tdb_wsrep_bf_abort_trx(THD *bf_thd, my_thread_id victim_id, tidesdb_trx_t *victim_trx,
+                            uint64_t victim_gen);
+/* the key type an update whose keys stay the same certifies with, see update_row for why it is not
+   the exclusive key */
+enum Wsrep_service_key_type tdb_wsrep_update_key_type();
+/* on an applier, wait for every local transaction it aborted to end, before its prepare or commit;
+   false when one is still live after TDB_WSREP_VICTIM_WAIT_MAX_US, which the caller treats as a
+   commit that cannot proceed */
+bool tdb_wsrep_wait_for_victims(tidesdb_trx_t *trx);
 void tidesdb_wsrep_intent_clear(tidesdb_trx_t *trx);
+void tidesdb_wsrep_watch_cf(tidesdb_column_family_t *cf, bool uniq_sentinel);
+/* The stored cluster position, recorded with every commit.  tidesdb_wsrep_position_init carries a
+   position an earlier release left into the per-commit records at startup, and
+   tidesdb_wsrep_store_last_position writes the newest one into that release's single record at a
+   clean shutdown, so a downgraded node still finds it. */
+void tidesdb_wsrep_position_init();
+/* Reads that would refuse a Galera applier, implemented in ha_tidesdb_wsrep_reads.cc and called
+   from the library wrappers.  tdb_wsrep_note_read records a key or range a local transaction at
+   REPEATABLE READ or SERIALIZABLE reads through its own transaction, a point when lo and hi are
+   the same key, otherwise a range from lo, or from below every key when lo is null, open above
+   whatever hi is; tdb_wsrep_note_write records a key an applier writes, for as long as the applier
+   is in flight, and aborts the local readers covering it; tdb_wsrep_wait_for_appliers, on a local
+   transaction about to prepare, waits for every applier in flight that wrote a key its reads
+   cover, false when the transaction is to be refused instead; and tdb_wsrep_reads_release drops
+   what a transaction recorded when it ends. */
+void tdb_wsrep_note_read(THD *thd, const tidesdb_txn_t *txn, const tidesdb_column_family_t *cf,
+                         const uint8_t *lo, size_t lo_len, const uint8_t *hi, size_t hi_len);
+void tdb_wsrep_note_write(THD *thd, const tidesdb_txn_t *txn, const tidesdb_column_family_t *cf,
+                          const uint8_t *key, size_t key_len);
+bool tdb_wsrep_wait_for_appliers(THD *thd, tidesdb_trx_t *trx);
+void tdb_wsrep_reads_release(tidesdb_trx_t *trx);
+/* Put in place a store copy a Galera state transfer delivered into the data directory, before the
+   store opens.  Returns 1 when a transfer arrived without a complete copy, otherwise 0. */
+int tidesdb_wsrep_sst_install();
+/* Under Galera, refuse a store that did not arrive with the data directory beside it, which a state
+   transfer that does not carry the store leaves.  Returns non-zero to refuse. */
+int tidesdb_wsrep_store_identity();
+/* Prepare a local write transaction before Galera certifies it, so a conflict is refused before it
+   replicates.  Returns non-zero, with the error raised, when the transaction was refused. */
+int tdb_wsrep_prepare_before_certification(THD *thd);
+/* Before the engine prepares or commits a write transaction, record its cluster position in it, or
+   a pending marker when its seqno is not known yet.  Returns a handler error when it cannot. */
+int tdb_wsrep_before_engine_commit(THD *thd, tidesdb_trx_t *trx);
+/* After a commit, record the position of a transaction that left a pending marker. */
+void tidesdb_wsrep_note_commit(THD *thd, tidesdb_trx_t *trx);
+void tidesdb_wsrep_store_last_position();
 void tidesdb_wsrep_intent_truncate(tidesdb_trx_t *trx, size_t keep);
 #endif

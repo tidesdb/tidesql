@@ -1,0 +1,63 @@
+# A full state transfer taken while the donor keeps committing.  A copy of the store taken after a
+# commit used to carry no usable position, so the joiner reported its position as unknown and the
+# server refused the transfer.  Every commit now records its position, so a copy taken at any point
+# carries the position of the rows it holds, and the joiner starts at it.
+--source include/galera_cluster.inc
+--source include/have_innodb.inc
+--source include/have_sequence.inc
+
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+--connection node_2
+call mtr.add_suppression("Plugin 'TIDESDB' is of maturity level");
+
+--connection node_1
+CREATE TABLE t (id INT PRIMARY KEY, v INT) ENGINE=TidesDB;
+INSERT INTO t SELECT seq, seq FROM seq_1_to_100;
+DELIMITER |;
+CREATE PROCEDURE load_rows(n INT)
+BEGIN
+  DECLARE i INT DEFAULT 1000;
+  WHILE i < 1000 + n DO
+    INSERT INTO t VALUES (i, i);
+    SET i = i + 1;
+  END WHILE;
+END|
+DELIMITER ;|
+
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 100 FROM t;
+--source include/wait_condition.inc
+
+--echo # node 2 leaves and loses its saved position, so it must rejoin by a full transfer
+--source include/shutdown_mysqld.inc
+--remove_file $MYSQLTEST_VARDIR/mysqld.2/data/grastate.dat
+
+--connection node_1
+let $wait_condition= SELECT VARIABLE_VALUE = 1 FROM INFORMATION_SCHEMA.GLOBAL_STATUS WHERE VARIABLE_NAME = 'wsrep_cluster_size';
+--source include/wait_condition.inc
+
+--echo # node 1 commits row by row while node 2 rejoins
+--connect (loader, 127.0.0.1, root, , test, $NODE_MYPORT_1)
+--send CALL load_rows(20000)
+
+--connection node_2
+--source include/start_mysqld.inc
+--source include/galera_wait_ready.inc
+
+--connection loader
+--reap
+--disconnect loader
+
+--echo # node 2 is synced and holds every row
+--connection node_2
+let $wait_condition= SELECT COUNT(*) = 20100 FROM t;
+--source include/wait_condition.inc
+SELECT COUNT(*), SUM(v) FROM t;
+SHOW STATUS LIKE 'wsrep_local_state_comment';
+--connection node_1
+SELECT COUNT(*), SUM(v) FROM t;
+
+DROP PROCEDURE load_rows;
+DROP TABLE t;
+
+--source include/galera_end.inc

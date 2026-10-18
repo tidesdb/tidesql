@@ -325,6 +325,10 @@ int ha_tidesdb::truncate()
                             cf_name.c_str());
             DBUG_RETURN(HA_ERR_GENERIC);
         }
+#ifdef WITH_WSREP
+        /* the recreated family is a new handle with no change-capture hook yet */
+        tidesdb_wsrep_watch_cf(share->cf, false);
+#endif
     }
 
     for (uint i = 0; i < share->idx_cfs.size(); i++)
